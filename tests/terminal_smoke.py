@@ -32,7 +32,8 @@ ANSI_TOKENS = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b.|[^\x1b]")
 class PtyApp:
     """Own the child and PTY, retaining the slave to inspect restored modes."""
 
-    def __init__(self, binary, directory):
+    def __init__(self, binary, directory, args=()):
+        self.args = args
         self.binary = binary
         self.directory = directory
         self.output = bytearray()
@@ -49,12 +50,12 @@ class PtyApp:
                 fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
             self.process = subprocess.Popen(
-                [str(self.binary)],
+                [str(self.binary), *map(str, self.args)],
                 cwd=self.directory,
                 stdin=self.slave,
                 stdout=self.slave,
                 stderr=self.slave,
-                env=dict(os.environ, TERM="xterm-256color"),
+                env={**{k: v for k, v in os.environ.items() if k != "NO_COLOR"}, "TERM": "xterm-256color"},
                 preexec_fn=controlling_terminal,
             )
         except BaseException:
@@ -180,6 +181,70 @@ class TerminalSmoke(unittest.TestCase):
         if not cls.binary.is_file():
             raise RuntimeError("Build the TUI with cargo build --locked, or pass --binary PATH")
         (ROOT / "target").mkdir(exist_ok=True)
+
+    def test_startup_password(self):
+        for extension in ("jks", "jceks", "p12"):
+            with self.subTest(extension=extension):
+                path = ROOT / f"tests/fixtures/trusted-cert.{extension}"
+                with PtyApp(self.binary, ROOT, [path]) as app:
+                    app.expect("Keystore password:")
+                    self.assertNotIn(b"\x1b[?1049h", app.output)
+                    app.send(b"changeit\r")
+                    app.expect("root-cert")
+                    self.assertNotIn(b"changeit", app.output)
+                    app.send(b"q")
+                    self.assertEqual(app.process.wait(timeout=TIMEOUT), 0)
+                    self.assertEqual(termios.tcgetattr(app.slave), app.original_modes)
+
+    def test_startup_password_failure(self):
+        for keys in (b"wrong-secret\r", b"\x03", b"\x1b"):
+            with self.subTest(keys=keys):
+                with PtyApp(self.binary, ROOT, [ROOT / "tests/fixtures/trusted-cert.jks"]) as app:
+                    app.expect("Keystore password:")
+                    app.send(keys)
+                    self.assertEqual(app.process.wait(timeout=TIMEOUT), 1)
+                    app.read(0.1)
+                    self.assertNotIn(b"wrong-secret", app.output)
+                    self.assertNotIn(b"\x1b[?1049h", app.output)
+                    self.assertEqual(termios.tcgetattr(app.slave), app.original_modes)
+
+    def test_startup_invalid_path(self):
+        for path in ("missing.jks", "README.md", "tests", "tests/fixtures/keytool-request.csr"):
+            with self.subTest(path=path):
+                with PtyApp(self.binary, ROOT, [path]) as app:
+                    app.expect("No keystore selected", path, "Quit")
+                    self.assertNotIn(b"Keystore password:", app.output)
+                    self.assertIn(b"38;5;3;", app.output)
+                    app.send(b"q")
+                    self.assertEqual(app.process.wait(timeout=TIMEOUT), 0)
+
+    def test_startup_spaces_and_malformed(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "target") as directory:
+            path = Path(directory, "store with spaces.jks")
+            body = (ROOT / "tests/fixtures/trusted-cert.jks").read_bytes()[:-20]
+            path.write_bytes(body + hashlib.sha1(b"Mighty Aphrodite" + body).digest())
+            with PtyApp(self.binary, directory, [path.name]) as app:
+                app.expect("root-cert", "Quit")
+                app.send(b"q")
+                app.assert_restored(self)
+            path.write_bytes(body[:12])
+            with PtyApp(self.binary, directory, [path.name]) as app:
+                app.expect("No keystore selected", "not a valid", "Quit")
+                self.assertIn(b"38;5;3;", app.output)
+                app.send(b"q")
+                app.assert_restored(self)
+
+    def test_startup_extra_arguments(self):
+        result = subprocess.run([str(self.binary), "a", "b"], capture_output=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"Usage:", result.stderr)
+
+    def test_startup_empty_password(self):
+        with PtyApp(self.binary, ROOT, ["tests/fixtures/empty-password.p12"]) as app:
+            app.expect("root-cert")
+            self.assertNotIn(b"Keystore password:", app.output)
+            app.send(b"q")
+            self.assertEqual(app.process.wait(timeout=TIMEOUT), 0)
 
     def exercise(self, exit_key):
         # This fixture contains only a generated public certificate. Recompute

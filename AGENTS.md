@@ -19,6 +19,7 @@ This file covers how the code is organised and how to work on it.
 
 | Module | Responsibility |
 | --- | --- |
+| `src/startup.rs` | Command-line arguments, startup loading, and hidden terminal password input |
 | `src/main.rs` | App state, event loop, main view rendering, password prompt, file loading (size limit, format detection), terminal setup and restoration |
 | `src/certificate_file.rs` | PEM, DER, and PKCS#7 certificate files (including requests), and chain linking within a file |
 | `src/certificate_request.rs` | PKCS#10 certificate requests: fields, requested extensions, and attributes |
