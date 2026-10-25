@@ -191,3 +191,24 @@ The terminal is restored when the app exits.
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).
+
+## Command-line startup
+
+Run `keystore-tui [path]` (or `cargo run --locked -- "path/to/store.jks"`).
+One optional relative or absolute path is accepted; quote paths containing spaces.
+Extra arguments print usage and exit with code 2. Without a path, startup is unchanged.
+
+JKS, JCEKS, and PKCS12 files use the same format detection and size limit as the
+file browser. Empty-password stores open automatically. Otherwise, a hidden
+terminal password prompt appears before the TUI starts. There is one attempt:
+an incorrect password or failed integrity check exits with code 1. Escape,
+Ctrl+C, Ctrl+D, or an input error also exits non-zero. Password buffers are wiped
+and terminal settings restored after input.
+
+Missing paths, directories, unreadable files, malformed stores, and non-keystore
+files (including standalone certificates and requests) open the empty TUI with
+a yellow message in the bottom status area. Structural errors discovered after
+password verification behave the same way. Opening another file clears this
+message; interactive errors retain their existing red styling. A normal quit
+after a startup warning exits successfully. Successfully opened stores retain
+any existing incomplete-entry warnings.

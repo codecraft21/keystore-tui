@@ -8,6 +8,7 @@ mod file_picker;
 mod java_serialization;
 mod keystore;
 mod pkcs12;
+mod startup;
 
 #[cfg(test)]
 mod test_support;
@@ -98,6 +99,7 @@ struct App {
     sort: SortOrder,
     entry_details: Option<entry_details::EntryDetails>,
     error: Option<String>,
+    startup_warning: Option<String>,
     /// Shown in yellow while the loaded file is displayed.
     warning: Option<&'static str>,
 }
@@ -290,6 +292,7 @@ impl App {
     }
 
     fn open_file(&mut self, path: PathBuf) {
+        self.startup_warning = None;
         self.error = None;
         // Parse the entire structure once, before prompting. Empty-password
         // stores are verified immediately; others require their password.
@@ -500,7 +503,7 @@ impl App {
                     .wrap(Wrap { trim: false }),
                 status,
             );
-        } else if let Some(warning) = self.warning
+        } else if let Some(warning) = self.startup_warning.as_deref().or(self.warning)
             && self.file_picker.is_none()
         {
             frame.render_widget(
@@ -635,6 +638,20 @@ fn too_large(limit: u64) -> io::Error {
 }
 
 fn main() -> ExitCode {
+    let path = match startup::argument(std::env::args_os().skip(1)) {
+        Ok(path) => path,
+        Err(()) => {
+            eprintln!("Usage: keystore-tui [path]");
+            return ExitCode::from(2);
+        }
+    };
+    let app = match startup::prepare(path, startup::password) {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("keystore-tui: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let mut terminal = match ratatui::try_init() {
         Ok(terminal) => terminal,
         Err(err) => {
@@ -644,7 +661,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let result = run(&mut terminal);
+    let result = run(&mut terminal, app);
     ratatui::restore();
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -655,8 +672,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
-    let mut app = App::default();
+fn run(terminal: &mut DefaultTerminal, mut app: App) -> io::Result<()> {
     loop {
         terminal.draw(|frame| app.draw(frame))?;
 
