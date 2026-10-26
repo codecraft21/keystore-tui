@@ -53,8 +53,14 @@ an incorrect password or failed integrity check exits with code 1. Escape,
 Ctrl+C, Ctrl+D, or an input error also exits non-zero. Password buffers are wiped
 and terminal settings restored after input.
 
-Missing paths, directories, unreadable files, malformed stores, and non-keystore
-files (including standalone certificates and requests) open the empty TUI with
+Standalone certificate files (PEM, DER, and PKCS#7) and PKCS#10 requests use
+the same loader as the file browser and open without prompting for a password.
+Startup selects the first entry and opens its detail screen directly. Escape
+returns to the full entry list, including all entries in a bundle. Skipped-PEM
+block warnings are retained for display on the entry list.
+
+Missing paths, directories, unreadable files, malformed files, and unsupported
+files open the empty TUI with
 a yellow message in the bottom status area. Structural errors discovered after
 password verification behave the same way. Opening another file clears this
 message; interactive errors retain their existing red styling. A normal quit
@@ -426,3 +432,6 @@ any existing incomplete-entry warnings.
 - The terminal is restored on normal exit, on errors, and when initialization
   fails. Restoring means raw mode is turned off, the alternate screen is left,
   and the cursor is visible again.
+
+The event loop checks for terminal size changes at least every 250 ms while
+idle, so a missed resize notification does not require a key press to redraw.

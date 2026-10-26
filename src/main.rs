@@ -169,20 +169,7 @@ impl App {
             self.handle_filter(key);
         } else {
             match key.code {
-                KeyCode::Enter => {
-                    if let Some(index) = self.selected_entry() {
-                        let directory = self
-                            .keystore_path
-                            .as_deref()
-                            .and_then(Path::parent)
-                            .unwrap_or(Path::new("."))
-                            .to_path_buf();
-                        self.entry_details = Some(entry_details::EntryDetails::new(
-                            &self.entries[index],
-                            directory,
-                        ));
-                    }
-                }
+                KeyCode::Enter => self.show_selected_details(),
                 KeyCode::Char('o') => self.open_picker(),
                 KeyCode::Char('/') if !self.entries.is_empty() => self.editing_filter = true,
                 KeyCode::Char('s') if !self.entries.is_empty() => {
@@ -288,6 +275,21 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn show_selected_details(&mut self) {
+        if let Some(index) = self.selected_entry() {
+            let directory = self
+                .keystore_path
+                .as_deref()
+                .and_then(Path::parent)
+                .unwrap_or(Path::new("."))
+                .to_path_buf();
+            self.entry_details = Some(entry_details::EntryDetails::new(
+                &self.entries[index],
+                directory,
+            ));
         }
     }
 
@@ -676,7 +678,10 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> io::Result<()> {
     loop {
         terminal.draw(|frame| app.draw(frame))?;
 
-        if let Event::Key(key) = event::read()?
+        // Periodically redraw so a missed resize notification cannot leave
+        // the layout stale until the next key press.
+        if event::poll(std::time::Duration::from_millis(250))?
+            && let Event::Key(key) = event::read()?
             && app.handle_key(key)
         {
             return Ok(());

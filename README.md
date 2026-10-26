@@ -42,12 +42,13 @@ cargo run --locked
 
 ## Usage
 
-### Opening a keystore from the command line
+### Opening a file from the command line
 
-Pass a keystore path when starting the app:
+Pass a keystore or certificate file path when starting the app:
 
 ```sh
 keystore-tui "path/to/store.jks"
+keystore-tui "path/to/certificate.pem"
 # From the repository:
 cargo run --locked -- "path/to/store.jks"
 ```
@@ -58,7 +59,11 @@ immediately. Otherwise, enter the password at the hidden terminal prompt.
 There is one attempt: an incorrect password exits with code 1. `Esc`, `Ctrl+C`,
 or `Ctrl+D` cancels and exits non-zero.
 
-If the path is missing, unreadable, or not a valid keystore, the app opens
+Standalone certificates (PEM, DER, or PKCS#7) and certificate requests open
+directly in the detail screen without a password. For files with multiple
+entries, the first entry is shown. Press `Esc` to return to the entry list.
+
+If the path is missing, unreadable, or not a supported file, the app opens
 normally with a yellow message at the bottom. Use the file browser to open
 another file, including a standalone certificate or certificate request.
 Without a path, the app starts with no file selected. Extra arguments print
