@@ -209,7 +209,7 @@ class TerminalSmoke(unittest.TestCase):
                     self.assertEqual(termios.tcgetattr(app.slave), app.original_modes)
 
     def test_startup_invalid_path(self):
-        for path in ("missing.jks", "README.md", "tests", "tests/fixtures/keytool-request.csr"):
+        for path in ("missing.jks", "README.md", "tests"):
             with self.subTest(path=path):
                 with PtyApp(self.binary, ROOT, [path]) as app:
                     app.expect("No keystore selected", path, "Quit")
@@ -233,6 +233,23 @@ class TerminalSmoke(unittest.TestCase):
                 self.assertIn(b"38;5;3;", app.output)
                 app.send(b"q")
                 app.assert_restored(self)
+
+    def test_startup_certificate_details(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "target") as directory:
+            for name, data, heading in (
+                ("certificate with spaces.pem", certificate_pem(fixture_certificate()).encode(), "Certificate hierarchy"),
+                ("certificate.der", fixture_certificate(), "Certificate hierarchy"),
+                ("request.csr", (ROOT / "tests/fixtures/keytool-request.csr").read_bytes(), "Request details"),
+            ):
+                with self.subTest(name=name):
+                    Path(directory, name).write_bytes(data)
+                    with PtyApp(self.binary, directory, [name]) as app:
+                        app.expect(heading, "[verified]")
+                        self.assertNotIn(b"Keystore password:", app.output)
+                        app.send(b"\x1b")
+                        app.expect("1 entries | Sort: alias")
+                        app.send(b"q")
+                        app.assert_restored(self)
 
     def test_startup_extra_arguments(self):
         result = subprocess.run([str(self.binary), "a", "b"], capture_output=True)

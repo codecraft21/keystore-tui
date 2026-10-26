@@ -36,8 +36,10 @@ pub(crate) fn prepare(
     }
     let store = match load(&path) {
         Ok(Loaded::Store(store)) => store,
-        Ok(Loaded::Certificates(_)) => {
-            app.startup_warning = Some(format!("{} is not a keystore", path.display()));
+        Ok(Loaded::Certificates(file)) => {
+            app.show_entries(path, file.entries);
+            app.warning = file.skipped.then_some(crate::SKIPPED_WARNING);
+            app.show_selected_details();
             return Ok(app);
         }
         Err(error) => {
@@ -121,6 +123,64 @@ mod tests {
     }
 
     #[test]
+    fn certificates_open_directly_in_details() {
+        use crate::test_support::{TestDirectory, fixture_certificate_der};
+        use crown::asn1::pem;
+
+        let directory = TestDirectory::new();
+        let der = fixture_certificate_der();
+        let certificate = pem::encode("CERTIFICATE", der);
+        for (name, data, count, skipped) in [
+            (
+                "certificate with spaces.pem",
+                certificate.as_bytes(),
+                1,
+                false,
+            ),
+            ("certificate.der", der, 1, false),
+            (
+                "bundle.pem",
+                [
+                    certificate.as_str(),
+                    certificate.as_str(),
+                    &pem::encode("PRIVATE KEY", b"synthetic, not a key"),
+                ]
+                .concat()
+                .as_bytes(),
+                2,
+                true,
+            ),
+            (
+                "request.csr",
+                crate::test_support::KEYTOOL_REQUEST,
+                1,
+                false,
+            ),
+            (
+                "request.der",
+                crate::test_support::OPENSSL_REQUEST_DER,
+                1,
+                false,
+            ),
+        ] {
+            let path = directory.path().join(name);
+            std::fs::write(&path, data).unwrap();
+            let mut app = prepare(Some(path.clone()), || panic!("unexpected prompt")).unwrap();
+            assert_eq!(app.keystore_path, Some(path));
+            assert!(app.startup_warning.is_none());
+            assert_eq!(app.entries.len(), count);
+            assert_eq!(app.warning.is_some(), skipped);
+            assert!(app.entry_details.is_some());
+            assert!(!app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+                KeyCode::Esc,
+                KeyModifiers::NONE,
+            )));
+            assert!(app.entry_details.is_none());
+            assert_eq!(app.visible.len(), count);
+        }
+    }
+
+    #[test]
     fn startup_outcomes() {
         assert!(
             prepare(None, || panic!("unexpected prompt"))
@@ -128,12 +188,7 @@ mod tests {
                 .keystore_path
                 .is_none()
         );
-        for name in [
-            "missing.jks",
-            "README.md",
-            "tests",
-            "tests/fixtures/keytool-request.csr",
-        ] {
+        for name in ["missing.jks", "README.md", "tests"] {
             let app = prepare(Some(name.into()), || panic!("unexpected prompt")).unwrap();
             assert!(app.startup_warning.is_some());
             assert!(app.keystore_path.is_none());
