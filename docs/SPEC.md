@@ -1,8 +1,8 @@
 # keystore-tui behaviour specification
 
 This document is the reference for how keystore-tui behaves. The key bindings
-are listed in [`README.md`](../README.md). When behaviour changes, update this
-document, and also the README if users will notice.
+are listed in [`REFERENCE.md`](REFERENCE.md). When behaviour changes, update this
+document and the usage reference, and also the README if its overview changes.
 
 ## Contents
 
