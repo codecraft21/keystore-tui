@@ -1,4 +1,5 @@
 pub mod details;
+pub mod diagnostics;
 pub mod extensions;
 pub mod security;
 pub mod signature;

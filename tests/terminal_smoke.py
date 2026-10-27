@@ -251,6 +251,23 @@ class TerminalSmoke(unittest.TestCase):
                         app.send(b"q")
                         app.assert_restored(self)
 
+    def test_chain_diagnostics_navigation(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "target") as directory:
+            Path(directory, "certificate.der").write_bytes(fixture_certificate())
+            with PtyApp(self.binary, directory, ["certificate.der"]) as app:
+                app.expect("Certificate details", "[verified]")
+                app.send(b"d")
+                app.expect("Chain diagnostics", "Trust: not checked", "Revocation: not checked")
+                app.resize(60, 24)
+                app.send(b"\x1b[F")
+                app.expect("self-issued; trust not checked")
+                app.send(b"d")
+                app.expect("Certificate details", "Subject:")
+                app.send(b"\x1b")
+                app.expect("1 entries | Sort: alias")
+                app.send(b"q")
+                app.assert_restored(self)
+
     def test_startup_extra_arguments(self):
         result = subprocess.run([str(self.binary), "a", "b"], capture_output=True)
         self.assertEqual(result.returncode, 2)

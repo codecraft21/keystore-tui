@@ -32,6 +32,7 @@ This file covers how the code is organised and how to work on it.
 | `src/certificate/details.rs` | Full certificate fields for the detail view |
 | `src/certificate/extensions.rs` | Decoding X.509 extensions into display lines |
 | `src/certificate/security.rs` | Weak key-size and signature-hash checks |
+| `src/certificate/diagnostics.rs` | Offline stored-chain validity, issuer and CA constraint diagnostics; no trust decisions |
 | `src/certificate/signature.rs` | Checking a certificate's signature with its issuer's public key, and a request's with its own |
 | `src/entry_details.rs` | The full-screen detail view: layout, keys, export, and shared detail formatting |
 | `src/entry_details/chain.rs` | A stored chain's hierarchy and certificate details |
