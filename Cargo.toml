@@ -1,6 +1,6 @@
 [package]
 name = "keystore-tui"
-version = "1.0.0"
+version = "1.0.0-rc.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Read-only terminal UI for inspecting JKS, JCEKS, and PKCS12 keystores, certificates, and certificate requests"

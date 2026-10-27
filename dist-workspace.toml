@@ -12,7 +12,7 @@ installers = ["shell", "powershell", "homebrew"]
 # A GitHub repo to push Homebrew formulas to
 tap = "codecraft21/homebrew-tap"
 # Publish jobs to run in CI
-publish-jobs = ["homebrew"]
+publish-jobs = ["homebrew", "./publish-crates"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
@@ -23,3 +23,8 @@ install-updater = false
 github-attestations = true
 # Checksums to generate for each App
 checksum = "sha256"
+
+# Trusted Publishing to crates.io needs an OIDC token
+[dist.github-custom-job-permissions.publish-crates]
+contents = "read"
+id-token = "write"

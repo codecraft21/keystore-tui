@@ -43,6 +43,7 @@ This file covers how the code is organised and how to work on it.
 | `tests/terminal_smoke.py` | PTY smoke tests against the built binary |
 | `tests/fixtures/` | Generated keystore fixtures; see its `README.md` for how they were made |
 | `dist-workspace.toml`, `.github/workflows/release.yml` | Release configuration for [`dist`](https://github.com/axodotdev/cargo-dist) and the workflow it generates |
+| `.github/workflows/publish-crates.yml` | The crates.io publish job that `release.yml` calls |
 
 Dependencies are deliberately few:
 
@@ -154,18 +155,31 @@ Releases are built by `.github/workflows/release.yml`, which
 [`dist`](https://github.com/axodotdev/cargo-dist) generates from
 `dist-workspace.toml`. Pushing a version tag such as `v1.2.0` builds static
 Linux (x86_64 and ARM64, musl), macOS (x86_64 and ARM64), and Windows (x86_64)
-binaries. It then creates a GitHub release with the archives, SHA-256
-checksums, build provenance attestations, and shell and PowerShell installers,
-and pushes the Homebrew formula to `codecraft21/homebrew-tap`.
+binaries. It then pushes the Homebrew formula to `codecraft21/homebrew-tap`,
+publishes the crate to crates.io, and creates a GitHub release with the
+archives, SHA-256 checksums, build provenance attestations, and shell and
+PowerShell installers.
 
-1. In a pull request, bump `version` in `Cargo.toml` (run
-   `cargo build --locked` to update `Cargo.lock`), and move the changes into a
+1. In a pull request, bump `version` in `Cargo.toml` (run `cargo build`, not
+   `--locked`, to update `Cargo.lock`), and move the changes into a
    `## <version>` section of `CHANGELOG.md`.
 2. After it merges, tag the merge commit on `main` with `v<version>` and push
-   the tag. A tag with a pre-release suffix, such as `v1.2.0-rc.1`, publishes a
-   pre-release and leaves the Homebrew tap alone.
+   the tag. The tag must match the `Cargo.toml` version, or `dist` finds
+   nothing to release.
 3. Check that the release workflow passed and that the release lists every
    archive.
+
+To rehearse, release a pre-release version such as `1.2.0-rc.1` the same way:
+bump `Cargo.toml` to it and tag `v1.2.0-rc.1`. Pre-releases skip the Homebrew
+and crates.io jobs.
+
+`publish-crates.yml` publishes with crates.io
+[Trusted Publishing](https://crates.io/docs/trusted-publishing), so no
+crates.io token is stored. crates.io trusts `release.yml` in this repository
+(the calling workflow, not `publish-crates.yml`). The job skips a version that
+is already on crates.io. The first version, 1.0.0, is published by hand,
+because crates.io requires a crate's first version to be published with an API
+token.
 
 Don't edit `release.yml` by hand. Change `dist-workspace.toml` and run
 `dist generate`, using the `cargo-dist-version` it pins. `dist` is only needed
