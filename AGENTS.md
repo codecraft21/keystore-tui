@@ -122,8 +122,10 @@ runtime from synthetic bytes, so no private key is ever committed.
 
 ## Documentation
 
-- `README.md` is the user's view: what the app does, how to run it, key bindings,
-  and limitations. Update it when user-visible behaviour changes.
+- `README.md` is the user's overview: what the app does, installation, quick
+  start, and limitations. Update it when these change.
+- `docs/REFERENCE.md` covers detailed usage and key bindings. Update it when
+  user-visible behaviour changes.
 - `docs/SPEC.md` holds the detailed behaviour contracts, such as validation
   rules, compatibility details, colours, and edge cases. Update it with every
   behaviour change.

@@ -15,6 +15,7 @@ include = [
     "/tests/fixtures",
     "/tests/terminal_smoke.py",
     "/docs/SPEC.md",
+    "/docs/REFERENCE.md",
     "/Cargo.toml",
     "/Cargo.lock",
     "/README.md",
