@@ -67,13 +67,13 @@ and Windows (x86_64). Pick one of these ways to install:
   because it is not notarized; run `xattr -d com.apple.quarantine keystore-tui`
   once to allow it.
 
-- **From source** with Rust 1.88 or later:
+- **From crates.io** with Rust 1.88 or later, which builds from source:
 
   ```sh
-  cargo install --locked --git https://github.com/codecraft21/keystore-tui
+  cargo install --locked keystore-tui
   ```
 
-  Or, from a clone of the repository, `cargo run --locked`.
+- **From a clone** of the repository: `cargo run --locked`.
 
 Check the installed version with `keystore-tui --version`.
 
