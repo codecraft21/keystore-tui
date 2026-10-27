@@ -435,3 +435,36 @@ any existing incomplete-entry warnings.
 
 The event loop checks for terminal size changes at least every 250 ms while
 idle, so a missed resize notification does not require a key press to redraw.
+
+## Offline chain diagnostics
+
+- `d` toggles the certificate detail pane between its existing fields and a
+  report of the entire stored chain, leaf first. It does nothing for CSRs.
+- Toggling preserves the hierarchy selection and fingerprint preference, resets
+  scroll to zero, and focuses the details pane. Existing scrolling, resizing,
+  export, Back, and Quit keys retain their behaviour.
+- The report identifies each certificate by its 1-based stored index and subject.
+  PASS is green, PROBLEM red, UNKNOWN yellow; headings are uncoloured.
+- Validity is checked for every decoded certificate at the current UTC time,
+  inclusively at both endpoints. Reversed intervals, not-yet-valid certificates,
+  and expired certificates are problems. Signature results are shown separately
+  using the existing signature checks, without implying trust.
+- Each adjacent pair is checked for issuer/subject Name equality using the same
+  parsed Name equality as chain construction. AKI keyIdentifier and SKI are
+  compared when both exist; missing identifiers are unknown, conflicts problems.
+  Authority issuer/serial fields are not evaluated by this view.
+- Each certificate at index greater than zero acts as an issuer: missing or
+  false CA Basic Constraints is a problem. Key Usage, if present, must allow
+  keyCertSign; absence is unknown with no declared usage restriction.
+- A CA pathLenConstraint bounds the number of non-self-issued intermediates
+  below it, excluding index zero. An unreadable intermediate makes that count
+  unknown. Negative lengths and lengths with CA false are malformed.
+- Relevant duplicate or malformed extensions produce unknown results, never a
+  passing result. Unsupported critical extension semantics are reported unknown.
+  Chain-construction warnings, missing issuers, and unreadable certificates
+  remain visible. Empty chains report that no certificates are stored.
+- The report always states that trust and revocation are unchecked. It performs
+  no network access, path building, or system trust-store lookup, and is not full
+  RFC 5280 validation. Name constraints, policy processing, purpose/EKU, hostname,
+  and authority issuer/serial matching are outside these checks. Root certificates
+  are inspected as stored issuers, not treated as trusted anchors.

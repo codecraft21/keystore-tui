@@ -64,6 +64,33 @@ impl ChainView {
         }
     }
 
+    pub(super) fn diagnostics(&self, now: i64) -> Text<'static> {
+        use crate::certificate::diagnostics::{self, Status};
+        let mut lines = vec![
+            Line::from("Offline checks of the stored chain (leaf first)."),
+            Line::from("Trust: not checked. Revocation: not checked."),
+            Line::from(
+                "Not full path validation: name constraints, policies, purpose and hostname are not checked.",
+            ),
+            Line::from(
+                "Authority issuer/serial fields are not checked; key identifiers compare AKI/SKI only.",
+            ),
+            Line::from("No certificates are fetched; no system trust store is used."),
+            Line::from(""),
+        ];
+        for finding in diagnostics::check(&self.metadata, &self.signatures, self.chain_warning, now)
+        {
+            let (tag, color) = match finding.status {
+                Status::Info => ("CERTIFICATE", ratatui::style::Color::Reset),
+                Status::Pass => ("PASS", ratatui::style::Color::Green),
+                Status::Problem => ("PROBLEM", ratatui::style::Color::Red),
+                Status::Unknown => ("UNKNOWN", ratatui::style::Color::Yellow),
+            };
+            lines.push(Line::from(format!("[{tag}] {}", finding.message)).fg(color));
+        }
+        Text::from(lines)
+    }
+
     /// The hierarchy, root first, indented by depth.
     pub(super) fn hierarchy_rows(&self) -> Vec<Row<'static>> {
         self.metadata

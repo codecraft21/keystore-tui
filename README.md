@@ -20,6 +20,8 @@ opens standalone certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`,
 - Filters entries by alias or subject, and sorts them by alias or expiry date.
 - Shows each certificate's full details, including decoded extensions, and its
   certificate hierarchy, with each signature checked against the issuer's key.
+- Diagnoses stored certificate chains offline: validity, issuer names and key
+  identifiers, CA status, signing key usage, and path-length constraints.
 - Shows a certificate signing request's subject, public key, requested
   extensions, and attributes, and checks its signature with its own key.
 - Exports a certificate, a whole chain, or a request to a new PEM or DER file.
@@ -158,6 +160,7 @@ explain the result below the signature algorithm.
 | `Tab` / `Shift+Tab` | Switch focus between hierarchy and details |
 | `Up` / `Down` or `k` / `j` | Select a certificate or scroll the focused details |
 | `PageUp` / `PageDown`, `Home` / `End` | Scroll details by a page or to the start / end |
+| `d` | Toggle certificate details / whole-chain diagnostics |
 | `f` | Toggle SHA-256 / SHA-1 fingerprints; kept while switching certificates |
 | `x` | Export the selected certificate, or the certificate request |
 | `X` | Export the entry's whole chain, leaf first |
@@ -167,6 +170,27 @@ explain the result below the signature algorithm.
 The hierarchy only shows certificates stored in the keystore. It does not fetch
 missing issuers or check whether a certificate is trusted: a verified signature
 only means the stored issuer's key made it, not that the chain is valid.
+
+### Offline chain diagnostics
+
+Press `d` in a certificate detail view to show the whole stored chain, leaf
+first, in the bottom pane. Press `d` again to return to the selected certificate.
+The pane takes keyboard focus; use arrows, `PageUp` / `PageDown`, or `Home` /
+`End` to scroll. `Esc` returns to the entry list, as usual.
+
+Each certificate has separate green `PASS`, red `PROBLEM`, and yellow `UNKNOWN`
+results for its validity period and signature. Adjacent certificates are checked
+for issuer-name and AKI/SKI agreement. Certificates acting as issuers are checked
+for CA Basic Constraints, certificate-signing Key Usage when present, and path
+length limits (excluding the target and self-issued intermediates). Missing,
+malformed, duplicate, or unsupported data is reported explicitly. Existing chain
+construction warnings are included.
+
+These are diagnostics of the stored path, not full certificate validation.
+Trust and revocation remain unchecked. No issuers are downloaded and no system
+trust store is used. Name constraints, certificate policies, intended purpose,
+hostnames, and authority issuer/serial matching are not evaluated by this view.
+A passing check does not establish that a certificate is trusted or usable.
 
 ### Certificate requests
 

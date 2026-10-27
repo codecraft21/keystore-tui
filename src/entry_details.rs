@@ -115,6 +115,7 @@ pub struct EntryDetails {
     view: View,
     details_focused: bool,
     sha1: bool,
+    diagnostics: bool,
     scroll: u16,
     page: u16,
     max_scroll: u16,
@@ -145,6 +146,7 @@ impl EntryDetails {
             details_focused: matches!(view, View::Request(_)),
             view,
             sha1: false,
+            diagnostics: false,
             scroll: 0,
             page: 1,
             max_scroll: 0,
@@ -247,6 +249,11 @@ impl EntryDetails {
     pub fn handle_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::Tab | KeyCode::BackTab => self.details_focused = !self.details_focused,
+            KeyCode::Char('d') if matches!(self.view, View::Chain(_)) => {
+                self.diagnostics = !self.diagnostics;
+                self.details_focused = true;
+                self.scroll = 0;
+            }
             KeyCode::Char('f') => self.sha1 = !self.sha1,
             KeyCode::PageDown => {
                 self.scroll = self.scroll.saturating_add(self.page).min(self.max_scroll)
@@ -283,6 +290,7 @@ impl EntryDetails {
         let text = format!("Alias: {}\nType: {}\n\n", self.alias, self.kind);
         match &self.view {
             View::Request(view) => view.text(text, self.sha1),
+            View::Chain(chain) if self.diagnostics => chain.diagnostics(now),
             View::Chain(chain) => chain.text(text, self.selected(chain), now, self.sha1),
         }
     }
@@ -291,9 +299,13 @@ impl EntryDetails {
         let area = frame.area();
         let (shortcuts, tree_title, details_title) = match &self.view {
             View::Chain(_) => (
-                "Tab Focus | ↑/↓ j/k Navigate | PgUp/PgDn Home/End Scroll\nf SHA-256/SHA-1 | x Export certificate | X Export chain | Esc Back | q / Ctrl+C Quit",
+                "Tab Focus | ↑/↓ j/k Navigate | PgUp/PgDn Home/End Scroll\nd Diagnostics/details | f SHA-256/SHA-1 | x Export certificate | X Export chain | Esc Back | q / Ctrl+C Quit",
                 "Certificate hierarchy",
-                "Certificate details",
+                if self.diagnostics {
+                    "Chain diagnostics"
+                } else {
+                    "Certificate details"
+                },
             ),
             View::Request(_) => (
                 "Tab Focus | ↑/↓ j/k Scroll | PgUp/PgDn Home/End Scroll\nf SHA-256/SHA-1 | x Export request | Esc Back | q / Ctrl+C Quit",
@@ -445,6 +457,37 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn diagnostics_toggle_shows_whole_chain_and_preserves_selection() {
+        let data = entry(vec![
+            metadata_certificate("leaf", "root", &[1], &[]),
+            metadata_certificate("root", "root", &[2], &[]),
+        ]);
+        let mut view = EntryDetails::new(&data, PathBuf::new());
+        let selected = view.hierarchy.selected();
+        view.handle_key(KeyCode::Char('d'));
+        assert!(view.details_focused);
+        let text = view.text(0).to_string();
+        for expected in [
+            "Certificate 1: CN=leaf",
+            "Certificate 2: CN=root",
+            "Trust: not checked",
+            "Revocation: not checked",
+            "not yet valid",
+            "issuer lacks CA status",
+        ] {
+            assert!(text.contains(expected), "{expected}");
+        }
+        assert!(draw(&mut view, 100, 30).contains("Chain diagnostics [focused]"));
+        draw(&mut view, 40, 24);
+        view.handle_key(KeyCode::End);
+        assert!(view.scroll > 0);
+        view.handle_key(KeyCode::Char('d'));
+        assert_eq!(view.scroll, 0);
+        assert_eq!(view.hierarchy.selected(), selected);
+        assert!(view.text(0).to_string().contains("Subject: CN=leaf"));
     }
 
     #[test]
@@ -632,6 +675,8 @@ mod tests {
         let data = &file.entries[0];
         let directory = TestDirectory::new();
         let mut view = EntryDetails::new(data, directory.path().to_path_buf());
+        view.handle_key(KeyCode::Char('d'));
+        assert!(!view.diagnostics);
         assert!(view.details_focused);
         let screen = draw(&mut view, 120, 60);
         assert!(screen.contains(" Certificate request "));
