@@ -14,12 +14,13 @@ This file covers how the code is organised and how to work on it.
 - [Conventions and constraints](#conventions-and-constraints)
 - [Documentation](#documentation)
 - [Workflow](#workflow)
+  - [Releasing](#releasing)
 
 ## Architecture
 
 | Module | Responsibility |
 | --- | --- |
-| `src/startup.rs` | Command-line arguments, startup loading, and hidden terminal password input |
+| `src/startup.rs` | Command-line arguments (`--version`, `--help`), startup loading, and hidden terminal password input |
 | `src/main.rs` | App state, event loop, main view rendering, password prompt, file loading (size limit, format detection), terminal setup and restoration |
 | `src/certificate_file.rs` | PEM, DER, and PKCS#7 certificate files (including requests), and chain linking within a file |
 | `src/certificate_request.rs` | PKCS#10 certificate requests: fields, requested extensions, and attributes |
@@ -41,6 +42,7 @@ This file covers how the code is organised and how to work on it.
 | `src/test_support.rs`, `src/tests.rs` | Unit-test helpers, synthetic keystores, and tests |
 | `tests/terminal_smoke.py` | PTY smoke tests against the built binary |
 | `tests/fixtures/` | Generated keystore fixtures; see its `README.md` for how they were made |
+| `dist-workspace.toml`, `.github/workflows/release.yml` | Release configuration for [`dist`](https://github.com/axodotdev/cargo-dist) and the workflow it generates |
 
 Dependencies are deliberately few:
 
@@ -83,12 +85,14 @@ filtering (including `q` typed into the filter and `Esc` cancelling it) and
 sorting. They also open a PEM certificate file and export it, checking that `q`
 is typed into the export name and `Esc` cancels the prompt. They open the
 `keytool` certificate request fixture, check its signature is verified, and
-export it as PEM. They check that `q`,
+export it as PEM. They check that `--version` and `--help` print and exit
+without starting the app. They check that `q`,
 `Esc`, and `Ctrl+C` (including while typing a filter) restore terminal modes, leave the alternate screen, and show the cursor
 again.
 
 CI (`.github/workflows/rust.yml`) runs all of the above on Linux for every push
-to `main` and every pull request.
+to `main` and every pull request. The release workflow also runs `dist plan` on
+pull requests to check the release configuration.
 
 For TUI changes, also check rendering, input, and terminal restoration by hand
 in an interactive terminal.
@@ -122,6 +126,8 @@ runtime from synthetic bytes, so no private key is ever committed.
 - `docs/SPEC.md` holds the detailed behaviour contracts, such as validation
   rules, compatibility details, colours, and edge cases. Update it with every
   behaviour change.
+- `CHANGELOG.md` lists user-visible changes per version. Add them under the
+  next version's heading; its section becomes the GitHub release notes.
 - This file covers architecture, development, and conventions. Update it when
   modules, checks, or workflows change.
 
@@ -141,3 +147,29 @@ checkouts.
 
 When reporting back, give the pull request link, what changed, which checks ran
 and their results, and any unresolved failures.
+
+### Releasing
+
+Releases are built by `.github/workflows/release.yml`, which
+[`dist`](https://github.com/axodotdev/cargo-dist) generates from
+`dist-workspace.toml`. Pushing a version tag such as `v1.2.0` builds static
+Linux (x86_64 and ARM64, musl), macOS (x86_64 and ARM64), and Windows (x86_64)
+binaries. It then creates a GitHub release with the archives, SHA-256
+checksums, build provenance attestations, and shell and PowerShell installers,
+and pushes the Homebrew formula to `codecraft21/homebrew-tap`.
+
+1. In a pull request, bump `version` in `Cargo.toml` (run
+   `cargo build --locked` to update `Cargo.lock`), and move the changes into a
+   `## <version>` section of `CHANGELOG.md`.
+2. After it merges, tag the merge commit on `main` with `v<version>` and push
+   the tag. A tag with a pre-release suffix, such as `v1.2.0-rc.1`, publishes a
+   pre-release and leaves the Homebrew tap alone.
+3. Check that the release workflow passed and that the release lists every
+   archive.
+
+Don't edit `release.yml` by hand. Change `dist-workspace.toml` and run
+`dist generate`, using the `cargo-dist-version` it pins. `dist` is only needed
+for this; it is not a build or test dependency.
+
+The workflow needs a `HOMEBREW_TAP_TOKEN` repository secret: a token that can
+push to `codecraft21/homebrew-tap`.

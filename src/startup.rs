@@ -11,12 +11,39 @@ use ratatui::crossterm::{
 
 use crate::{App, Loaded, Password, load};
 
-pub(crate) fn argument(mut args: impl Iterator<Item = OsString>) -> Result<Option<PathBuf>, ()> {
-    let path = args.next().map(PathBuf::from);
+pub(crate) const USAGE: &str = "Usage: keystore-tui [path]";
+
+pub(crate) fn help() -> String {
+    format!(
+        "keystore-tui {}\n\
+         Inspect JKS, JCEKS, and PKCS12 keystores, certificate files, and certificate requests.\n\
+         \n\
+         {USAGE}\n\
+         \n\
+         Options:\n  \
+         -h, --help     Print this help and exit\n  \
+         -V, --version  Print the version and exit",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum Command {
+    Open(Option<PathBuf>),
+    Help,
+    Version,
+}
+
+pub(crate) fn argument(mut args: impl Iterator<Item = OsString>) -> Result<Command, ()> {
+    let first = args.next();
     if args.next().is_some() {
         return Err(());
     }
-    Ok(path)
+    Ok(match first {
+        Some(flag) if flag == "-h" || flag == "--help" => Command::Help,
+        Some(flag) if flag == "-V" || flag == "--version" => Command::Version,
+        path => Command::Open(path.map(PathBuf::from)),
+    })
 }
 
 pub(crate) fn prepare(
@@ -114,12 +141,27 @@ mod tests {
 
     #[test]
     fn arguments() {
-        assert_eq!(argument([].into_iter()), Ok(None));
+        assert_eq!(argument([].into_iter()), Ok(Command::Open(None)));
         assert_eq!(
             argument([OsString::from("a b.jks")].into_iter()),
-            Ok(Some("a b.jks".into()))
+            Ok(Command::Open(Some("a b.jks".into())))
         );
         assert!(argument(["a".into(), "b".into()].into_iter()).is_err());
+        for (flag, command) in [
+            ("-h", Command::Help),
+            ("--help", Command::Help),
+            ("-V", Command::Version),
+            ("--version", Command::Version),
+        ] {
+            assert_eq!(argument([OsString::from(flag)].into_iter()), Ok(command));
+            assert!(argument([flag.into(), "a.jks".into()].into_iter()).is_err());
+        }
+        assert_eq!(
+            argument([OsString::from("./--help")].into_iter()),
+            Ok(Command::Open(Some("./--help".into())))
+        );
+        assert!(help().starts_with(&format!("keystore-tui {}\n", env!("CARGO_PKG_VERSION"))));
+        assert!(help().contains(USAGE));
     }
 
     #[test]

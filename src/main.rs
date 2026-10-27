@@ -641,9 +641,17 @@ fn too_large(limit: u64) -> io::Error {
 
 fn main() -> ExitCode {
     let path = match startup::argument(std::env::args_os().skip(1)) {
-        Ok(path) => path,
+        Ok(startup::Command::Open(path)) => path,
+        Ok(startup::Command::Help) => {
+            println!("{}", startup::help());
+            return ExitCode::SUCCESS;
+        }
+        Ok(startup::Command::Version) => {
+            println!("keystore-tui {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
         Err(()) => {
-            eprintln!("Usage: keystore-tui [path]");
+            eprintln!("{}", startup::USAGE);
             return ExitCode::from(2);
         }
     };

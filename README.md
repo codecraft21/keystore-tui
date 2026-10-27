@@ -35,13 +35,56 @@ opens standalone certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`,
 - Read-only and self-contained: it never modifies existing files, never
   decrypts or displays private keys, and does not need Java or `keytool`.
 
-## Install and run
+## Install
 
-Install the current stable Rust toolchain, then run from the repository root in
-an interactive terminal:
+Prebuilt binaries are published on the
+[releases page](https://github.com/codecraft21/keystore-tui/releases) for
+Linux (x86_64 and ARM64, statically linked), macOS (Intel and Apple Silicon),
+and Windows (x86_64). Pick one of these ways to install:
+
+- **Homebrew** (macOS and Linux):
+
+  ```sh
+  brew install codecraft21/tap/keystore-tui
+  ```
+
+- **Install script** (macOS and Linux), which downloads the binary for your
+  platform into `~/.cargo/bin`:
+
+  ```sh
+  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/codecraft21/keystore-tui/releases/latest/download/keystore-tui-installer.sh | sh
+  ```
+
+  On Windows, in PowerShell:
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -c "irm https://github.com/codecraft21/keystore-tui/releases/latest/download/keystore-tui-installer.ps1 | iex"
+  ```
+
+- **Manual download:** download the archive for your platform from the
+  releases page, extract it, and put `keystore-tui` (or `keystore-tui.exe`) on
+  your `PATH`. On macOS, a binary downloaded in a browser is quarantined
+  because it is not notarized; run `xattr -d com.apple.quarantine keystore-tui`
+  once to allow it.
+
+- **From source** with Rust 1.88 or later:
+
+  ```sh
+  cargo install --locked --git https://github.com/codecraft21/keystore-tui
+  ```
+
+  Or, from a clone of the repository, `cargo run --locked`.
+
+Check the installed version with `keystore-tui --version`.
+
+### Verifying a download
+
+Each archive has a `.sha256` checksum file next to it on the releases page.
+Release artifacts also carry GitHub build provenance attestations, which the
+[GitHub CLI](https://cli.github.com/) can check:
 
 ```sh
-cargo run --locked
+gh attestation verify keystore-tui-x86_64-unknown-linux-musl.tar.xz --repo codecraft21/keystore-tui
 ```
 
 ## Usage
@@ -71,7 +114,9 @@ If the path is missing, unreadable, or not a supported file, the app opens
 normally with a yellow message at the bottom. Use the file browser to open
 another file, including a standalone certificate or certificate request.
 Without a path, the app starts with no file selected. Extra arguments print
-usage and exit with code 2.
+usage and exit with code 2. `keystore-tui --version` (`-V`) prints the version
+and `keystore-tui --help` (`-h`) prints usage; both exit without starting the
+app.
 
 ### Opening a file with the browser
 

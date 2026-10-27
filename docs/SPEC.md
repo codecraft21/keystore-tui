@@ -46,6 +46,14 @@ Run `keystore-tui [path]` (or `cargo run --locked -- "path/to/store.jks"`).
 One optional relative or absolute path is accepted; quote paths containing spaces.
 Extra arguments print usage and exit with code 2. Without a path, startup is unchanged.
 
+A single `--version` or `-V` argument prints `keystore-tui <version>` to
+standard output and exits with code 0. A single `--help` or `-h` argument prints
+the version, a one-line description, the usage line, and these options to
+standard output and exits with code 0. Neither touches the terminal modes or
+the alternate screen. A flag given together with another argument prints usage
+and exits with code 2. Any other single argument is a path, so a file named
+`--help` opens as `./--help`.
+
 JKS, JCEKS, and PKCS12 files use the same format detection and size limit as the
 file browser. Empty-password stores open automatically. Otherwise, a hidden
 terminal password prompt appears before the TUI starts. There is one attempt:
