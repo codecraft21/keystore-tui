@@ -6,6 +6,8 @@ A terminal app for inspecting Java keystores.
 
 ![Details of the selected api-production entry, showing certificate fields and its verified signature](docs/entry-details.png)
 
+![Offline chain diagnostics for the openssl-cert.p12 fixture, showing validity and signature checks with trust and revocation unchecked](docs/chain-diagnostics.png)
+
 Open a JKS, JCEKS, or PKCS12
 (`.jks`, `.jceks`, `.p12`, `.pfx`) file, enter its password, and browse its
 entries and certificates. It also
