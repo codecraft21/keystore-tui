@@ -273,6 +273,20 @@ class TerminalSmoke(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn(b"Usage:", result.stderr)
 
+    def test_version_and_help(self):
+        for flag, expected in [
+            ("--version", b"keystore-tui "),
+            ("-V", b"keystore-tui "),
+            ("--help", b"Usage: keystore-tui [path]"),
+            ("-h", b"Usage: keystore-tui [path]"),
+        ]:
+            result = subprocess.run(
+                [str(self.binary), flag], capture_output=True, timeout=TIMEOUT
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn(expected, result.stdout)
+            self.assertNotIn(b"\x1b[?1049h", result.stdout)
+
     def test_startup_empty_password(self):
         with PtyApp(self.binary, ROOT, ["tests/fixtures/empty-password.p12"]) as app:
             app.expect("root-cert")
