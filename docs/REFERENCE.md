@@ -93,7 +93,7 @@ entry count, any filter, and the sort order.
 
 | Key | Action in the entry list |
 | --- | --- |
-| `Up` / `Down` or `k` / `j` | Move the selection |
+| `Up` / `Down` or `k` / `j` | Move the selection, wrapping at either end |
 | `Enter` | Inspect the selected entry |
 | `/` | Type a filter, or edit the applied one |
 | `s` | Switch the sort order between alias and expiry date |

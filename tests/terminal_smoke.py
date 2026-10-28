@@ -342,6 +342,23 @@ class TerminalSmoke(unittest.TestCase):
     def test_ctrl_c_restores_terminal(self):
         self.exercise(b"\x03")
 
+    def test_entry_selection_wraps_with_arrow_keys(self):
+        with tempfile.TemporaryDirectory(prefix="terminal-check-", dir=ROOT / "target") as directory:
+            path = Path(directory, "triage.jks")
+            path.write_bytes(triage_keystore())
+            with PtyApp(self.binary, directory, args=(path,)) as app:
+                app.expect("3 entries | Sort: alias")
+                app.send(b"\x1b[A\r")  # Up from alpha wraps to zeta-soon.
+                app.expect("Certificate hierarchy", "zeta-soon")
+                app.send(b"\x1b")
+                app.expect("3 entries | Sort: alias")
+                app.send(b"\x1b[B\r")  # Down wraps back to alpha.
+                app.expect("Certificate hierarchy", "alpha")
+                app.send(b"\x1b")
+                app.expect("3 entries | Sort: alias")
+                app.send(b"q")
+                app.assert_restored(self)
+
     def triage(self, quit_while_typing, exit_key):
         with tempfile.TemporaryDirectory(prefix="terminal-check-", dir=ROOT / "target") as directory:
             Path(directory, "triage.jks").write_bytes(triage_keystore())

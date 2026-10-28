@@ -1,3 +1,27 @@
+`example.jks` contains 20 distinct, self-signed P-256 public certificate entries
+and uses an **empty password**, so it opens directly in the entry list:
+
+```sh
+cargo run -- tests/fixtures/example.jks
+```
+
+Aliases `example-01-expired` and `example-02-expired` expired on 2024-01-01 UTC.
+Aliases `example-03` through `example-20` expire on 2040-01-01 UTC. All are valid
+from 2020-01-01 UTC. No private keys are stored. This fixture is useful for
+testing scrolling, selection wrapping, expiry highlighting, filtering, and
+sorting.
+
+Regenerate it from the repository root with Python 3 and the `cryptography`
+package installed (neither is needed to open the committed fixture):
+
+```sh
+python3 tests/fixtures/generate_example.py
+```
+
+Regeneration creates new keys and signatures in memory and writes only public
+certificates, so the resulting bytes differ while the aliases and dates stay
+the same.
+
 `trusted-cert.jks` is a Java-generated test fixture containing only a trusted
 certificate (`root-cert`), with the test store password `changeit`. No private key
 is included. Tests construct private-key entries at runtime using synthetic bytes,

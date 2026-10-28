@@ -252,6 +252,35 @@ fn pkcs12_renamed_as_jks_opens_after_password_verification() {
 }
 
 #[test]
+fn example_fixture_has_twenty_certificates_and_two_expired_entries() {
+    let mut app = App::default();
+    app.open_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/example.jks"));
+    assert!(app.password_prompt.is_none());
+    assert!(app.error.is_none());
+    assert_eq!(app.entries.len(), 20);
+    let now = Asn1Time::new(2026, 10, 28, 0, 0, 0, true)
+        .unwrap()
+        .to_unix();
+    let mut expired = Vec::new();
+    for entry in &app.entries {
+        assert!(matches!(
+            entry.content,
+            Content::Certificates {
+                kind: Kind::TrustedCertificate,
+                ..
+            }
+        ));
+        let summary = entry.certificate.as_ref().unwrap();
+        assert_eq!(summary.algorithm, "EC");
+        assert_eq!(summary.key_size, Some(256));
+        if entry_list::expiry_status(summary, now) == ExpiryStatus::Expired {
+            expired.push(entry.alias.as_str());
+        }
+    }
+    assert_eq!(expired, ["example-01-expired", "example-02-expired"]);
+}
+
+#[test]
 fn entry_list_shows_certificate_algorithm_key_size_and_expiry() {
     let mut app = App::default();
     let expired = Summary {
@@ -751,6 +780,12 @@ fn entry_list_scrolls_to_entries_below_the_viewport() {
         screen(&mut app, 100, 20);
     }
     assert!(screen(&mut app, 100, 20).contains("entry-39"));
+    press(&mut app, KeyCode::Down);
+    assert_eq!(selected_alias(&app), "entry-00");
+    assert!(screen(&mut app, 100, 20).contains("entry-00"));
+    press(&mut app, KeyCode::Up);
+    assert_eq!(selected_alias(&app), "entry-39");
+    assert!(screen(&mut app, 100, 20).contains("entry-39"));
 }
 
 #[test]
@@ -974,6 +1009,79 @@ fn shown_aliases(app: &App) -> Vec<&str> {
 }
 
 #[test]
+fn entry_selection_cycles_in_display_order_with_and_without_a_filter() {
+    for (up, down) in [
+        (KeyCode::Up, KeyCode::Down),
+        (KeyCode::Char('k'), KeyCode::Char('j')),
+    ] {
+        let mut app = triage_app();
+        for sort in [SortOrder::Alias, SortOrder::Expiry] {
+            app.sort = sort;
+            app.refresh_visible();
+            let expected = shown_aliases(&app)
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            app.entries_state.select(Some(0));
+            press(&mut app, up);
+            assert_eq!(selected_alias(&app), expected.last().unwrap());
+            for alias in &expected {
+                press(&mut app, down);
+                assert_eq!(selected_alias(&app), alias);
+            }
+        }
+    }
+
+    let mut app = triage_app();
+    // This filter leaves zeta and beta-quit, in expiry order.
+    app.sort = SortOrder::Expiry;
+    press(&mut app, KeyCode::Char('/'));
+    type_password(&mut app, "ta");
+    assert_eq!(shown_aliases(&app), ["zeta", "beta-quit"]);
+    assert_eq!(selected_alias(&app), "zeta");
+    press(&mut app, KeyCode::Up);
+    assert_eq!(selected_alias(&app), "beta-quit");
+    press(&mut app, KeyCode::Down);
+    assert_eq!(selected_alias(&app), "zeta");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Up);
+    assert_eq!(selected_alias(&app), "beta-quit");
+    press(&mut app, KeyCode::Down);
+    assert_eq!(selected_alias(&app), "zeta");
+}
+
+#[test]
+fn entry_selection_handles_single_and_empty_lists() {
+    let mut app = triage_app();
+    press(&mut app, KeyCode::Char('/'));
+    type_password(&mut app, "quit");
+    for key in [KeyCode::Up, KeyCode::Down] {
+        press(&mut app, key);
+        assert_eq!(selected_alias(&app), "beta-quit");
+    }
+    type_password(&mut app, "no-match");
+    for key in [KeyCode::Up, KeyCode::Down] {
+        press(&mut app, key);
+        assert_eq!(app.entries_state.selected(), None);
+    }
+    press(&mut app, KeyCode::Enter);
+    for key in [
+        KeyCode::Up,
+        KeyCode::Down,
+        KeyCode::Char('j'),
+        KeyCode::Char('k'),
+    ] {
+        press(&mut app, key);
+        assert_eq!(app.entries_state.selected(), None);
+    }
+    app.show_entries(PathBuf::from("/empty.jks"), vec![]);
+    for key in [KeyCode::Up, KeyCode::Down] {
+        press(&mut app, key);
+        assert_eq!(app.entries_state.selected(), None);
+    }
+}
+
+#[test]
 fn filter_updates_live_and_types_shortcut_letters() {
     let mut app = triage_app();
     assert!(screen(&mut app, 100, 20).contains("4 entries | Sort: alias"));
@@ -1046,6 +1154,8 @@ fn enter_opens_the_selected_filtered_entry() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Down);
     screen(&mut app, 100, 20);
+    assert_eq!(selected_alias(&app), "beta-quit");
+    press(&mut app, KeyCode::Up);
     assert_eq!(selected_alias(&app), "zeta");
     press(&mut app, KeyCode::Enter);
     assert!(app.entry_details.is_some());
