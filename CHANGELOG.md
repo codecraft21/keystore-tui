@@ -3,7 +3,7 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.0.1
 
 - Adds `example.jks`, an empty-password test fixture with 20 certificate entries,
   including two expired certificates.
