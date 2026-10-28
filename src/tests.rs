@@ -133,8 +133,12 @@ fn browser_shows_directories_then_supported_keystore_files() {
     fs::write(directory.path().join("c-keystore.p12"), "").unwrap();
     fs::write(directory.path().join("d-keystore.PFX"), "").unwrap();
     fs::write(directory.path().join("e-keystore.jceks"), "").unwrap();
+    fs::write(directory.path().join("cacerts"), "").unwrap();
+    fs::write(directory.path().join("jssecacerts"), "").unwrap();
+    fs::write(directory.path().join("CACERTS"), "").unwrap();
     fs::write(directory.path().join("ignored.txt"), "").unwrap();
     fs::write(directory.path().join("ignored.jks.bak"), "").unwrap();
+    fs::write(directory.path().join("cacerts.bak"), "").unwrap();
 
     let mut app = browsing(directory.path());
     let rendered = screen(&mut app, 100, 24);
@@ -145,6 +149,34 @@ fn browser_shows_directories_then_supported_keystore_files() {
     assert!(rendered.find("c-keystore.p12").unwrap() < rendered.find("d-keystore.PFX").unwrap());
     assert!(rendered.find("d-keystore.PFX").unwrap() < rendered.find("e-keystore.jceks").unwrap());
     assert!(!rendered.contains("ignored"));
+    for name in ["cacerts", "jssecacerts", "CACERTS"] {
+        assert!(rendered.contains(name));
+    }
+    assert!(!rendered.contains("cacerts.bak"));
+}
+
+#[test]
+fn browser_opens_cacerts_and_prompts_for_its_encrypted_contents() {
+    let directory = TestDirectory::new();
+    let path = directory.path().join("cacerts");
+    fs::write(
+        &path,
+        include_bytes!("../tests/fixtures/encrypted-no-mac.p12"),
+    )
+    .unwrap();
+    let mut app = browsing(directory.path());
+    assert!(screen(&mut app, 100, 24).contains("cacerts"));
+    press(&mut app, KeyCode::End);
+    press(&mut app, KeyCode::Enter);
+    assert!(app.file_picker.is_none());
+    assert!(app.password_prompt.is_some());
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.password_prompt.is_none());
+    assert!(app.error.is_none());
+    assert_eq!(app.keystore_path, Some(path));
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.entries[0].certificate, Some(fixture_summary()));
 }
 
 #[test]
@@ -535,7 +567,8 @@ fn empty_directories_and_small_terminals_are_handled() {
     let directory = TestDirectory::new();
     let mut app = browsing(directory.path());
     assert!(
-        screen(&mut app, 100, 24).contains("No keystore (.jks, .jceks, .p12, .pfx) or certificate")
+        screen(&mut app, 100, 24)
+            .contains("No keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts)")
     );
     press(&mut app, KeyCode::Up);
     press(&mut app, KeyCode::Down);

@@ -81,7 +81,8 @@ any existing incomplete-entry warnings.
   in that keystore's directory.
 - It lists directories, then files whose extension is `.jks`, `.jceks`, `.p12`,
   `.pfx`, `.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`, `.csr`, or `.p10`
-  (case-insensitive). Directories come first.
+  (case-insensitive). It also lists the Java truststore names `cacerts` and
+  `jssecacerts`, case-insensitively. Directories come first.
 - A `../` entry leads to the parent directory. Selection wraps at both ends, and
   `../` takes part in the wrap.
 - Cancelling the browser keeps the keystore that was already loaded.

@@ -5,6 +5,7 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- Show Java truststores named `cacerts` or `jssecacerts` in the file browser.
 - Fix opening PKCS12 stores without an integrity MAC, including stores with
   password-encrypted certificates.
 

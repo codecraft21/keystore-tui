@@ -51,7 +51,8 @@ Press `o` (or `Ctrl+O`) to open the file browser. It starts in the working
 directory, or in the current file's directory when you open another file. It
 shows directories first, then keystores (`.jks`, `.jceks`, `.p12`, `.pfx`),
 certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`), and
-certificate requests (`.csr`, `.p10`).
+certificate requests (`.csr`, `.p10`). Java truststores named `cacerts` or
+`jssecacerts` also appear without a file extension.
 
 | Key | Action in the file browser |
 | --- | --- |
