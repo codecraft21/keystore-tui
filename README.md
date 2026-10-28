@@ -112,7 +112,8 @@ certificate details, chain diagnostics, and exports.
   can be exported.
 - Private keys are never decrypted, shown, or exported.
 - Raw ASN.1 views and clipboard actions are not available yet.
-- PKCS12 files must have an integrity MAC; PBMAC1 MACs are not supported.
+- PKCS12 stores without an integrity MAC are supported. Encrypted contents still
+  require a password. When present, the MAC is verified; PBMAC1 MACs are not supported.
 - Files larger than 64 MiB are refused.
 
 ## More documentation

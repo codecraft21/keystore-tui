@@ -223,6 +223,39 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_cacerts_without_mac_requires_the_startup_password() {
+        let directory = crate::test_support::TestDirectory::new();
+        let path = directory.path().join("cacerts");
+        std::fs::write(
+            &path,
+            include_bytes!("../tests/fixtures/encrypted-no-mac.p12"),
+        )
+        .unwrap();
+        for (password, success) in [("changeit", true), ("wrong", false)] {
+            let mut prompted = false;
+            let result = prepare(Some(path.clone()), || {
+                prompted = true;
+                let mut value = Password::default();
+                for ch in password.chars() {
+                    value.push(ch);
+                }
+                Ok(value)
+            });
+            assert!(prompted);
+            assert_eq!(result.is_ok(), success);
+            if let Ok(app) = result {
+                assert!(app.startup_warning.is_none());
+                assert!(app.warning.is_none());
+                assert_eq!(app.entries.len(), 1);
+                assert_eq!(
+                    app.entries[0].certificate,
+                    Some(crate::test_support::fixture_summary())
+                );
+            }
+        }
+    }
+
+    #[test]
     fn startup_outcomes() {
         assert!(
             prepare(None, || panic!("unexpected prompt"))

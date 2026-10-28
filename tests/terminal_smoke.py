@@ -183,9 +183,9 @@ class TerminalSmoke(unittest.TestCase):
         (ROOT / "target").mkdir(exist_ok=True)
 
     def test_startup_password(self):
-        for extension in ("jks", "jceks", "p12"):
-            with self.subTest(extension=extension):
-                path = ROOT / f"tests/fixtures/trusted-cert.{extension}"
+        for fixture in ("trusted-cert.jks", "trusted-cert.jceks", "trusted-cert.p12", "encrypted-no-mac.p12"):
+            with self.subTest(fixture=fixture):
+                path = ROOT / "tests/fixtures" / fixture
                 with PtyApp(self.binary, ROOT, [path]) as app:
                     app.expect("Keystore password:")
                     self.assertNotIn(b"\x1b[?1049h", app.output)
@@ -288,11 +288,13 @@ class TerminalSmoke(unittest.TestCase):
             self.assertNotIn(b"\x1b[?1049h", result.stdout)
 
     def test_startup_empty_password(self):
-        with PtyApp(self.binary, ROOT, ["tests/fixtures/empty-password.p12"]) as app:
-            app.expect("root-cert")
-            self.assertNotIn(b"Keystore password:", app.output)
-            app.send(b"q")
-            self.assertEqual(app.process.wait(timeout=TIMEOUT), 0)
+        for fixture in ["empty-password.p12", "passwordless.p12"]:
+            with self.subTest(fixture=fixture):
+                with PtyApp(self.binary, ROOT, [ROOT / "tests/fixtures" / fixture]) as app:
+                    app.expect("root-cert")
+                    self.assertNotIn(b"Keystore password:", app.output)
+                    app.send(b"q")
+                    self.assertEqual(app.process.wait(timeout=TIMEOUT), 0)
 
     def exercise(self, exit_key):
         # This fixture contains only a generated public certificate. Recompute

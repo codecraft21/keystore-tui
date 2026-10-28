@@ -38,8 +38,11 @@ pub fn parse(data: &[u8]) -> Result<Store, &'static str> {
     if pfx.version != 3 {
         return Err("unsupported PKCS12 version");
     }
-    let mac = pfx.mac.as_ref().ok_or("PKCS12 integrity MAC is missing")?;
-    if mac.iterations == 0 || mac.iterations > MAX_ITERATIONS || mac.salt.len() > MAX_SALT_SIZE {
+    if let Some(mac) = &pfx.mac
+        && (mac.iterations == 0
+            || mac.iterations > MAX_ITERATIONS
+            || mac.salt.len() > MAX_SALT_SIZE)
+    {
         return Err("PKCS12 MAC iteration count is unsupported");
     }
     Ok(Store(pfx))
@@ -48,21 +51,25 @@ pub fn parse(data: &[u8]) -> Result<Store, &'static str> {
 impl Store {
     pub fn verify(&self, password: &str) -> Result<Verified, VerifyError> {
         let mut password_bytes = password.as_bytes();
-        let mut mac_result = self.0.verify_mac(password_bytes);
-        // Java also accepts a NUL character as the encoding of an empty password.
-        if password.is_empty() && mac_result == Err(CryptoError::AuthenticationFailed) {
-            mac_result = self.0.verify_mac(b"\0");
-            if mac_result.is_ok() {
-                password_bytes = b"\0";
+        // PKCS12 stores can omit MacData even when their contents are encrypted.
+        // When a MAC is present, it must still verify before reading any entries.
+        if self.0.mac.is_some() {
+            let mut mac_result = self.0.verify_mac(password_bytes);
+            // Java also accepts a NUL character as the encoding of an empty password.
+            if password.is_empty() && mac_result == Err(CryptoError::AuthenticationFailed) {
+                mac_result = self.0.verify_mac(b"\0");
+                if mac_result.is_ok() {
+                    password_bytes = b"\0";
+                }
             }
+            mac_result.map_err(|error| {
+                if error == CryptoError::AuthenticationFailed {
+                    VerifyError::Password
+                } else {
+                    VerifyError::Invalid("unsupported or invalid PKCS12 integrity MAC")
+                }
+            })?;
         }
-        mac_result.map_err(|error| {
-            if error == CryptoError::AuthenticationFailed {
-                VerifyError::Password
-            } else {
-                VerifyError::Invalid("unsupported or invalid PKCS12 integrity MAC")
-            }
-        })?;
 
         let safe = self
             .0
@@ -88,9 +95,17 @@ impl Store {
                     .map(Zeroizing::new)
                     .ok()
             } else if info.content_type.matches(oid::OID_PKCS7_ENCRYPTED_DATA) {
-                decrypt_safe(&info.content, password_bytes)
-                    .ok()
-                    .map(Zeroizing::new)
+                match decrypt_safe(&info.content, password_bytes) {
+                    Ok(content) => Some(Zeroizing::new(content)),
+                    Err(
+                        CryptoError::UnpadError
+                        | CryptoError::AuthenticationFailed
+                        | CryptoError::StrError("pkcs: invalid padding"),
+                    ) if self.0.mac.is_none() => {
+                        return Err(VerifyError::Password);
+                    }
+                    Err(_) => None,
+                }
             } else {
                 None
             };
@@ -539,10 +554,44 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_or_failed_mac() {
-        let mut pfx = Pfx::parse(MODERN).unwrap();
-        pfx.mac = None;
-        assert!(parse(&pfx.encode()).is_err());
+    fn reads_passwordless_java_truststores_without_a_mac() {
+        let data = include_bytes!("../tests/fixtures/passwordless.p12");
+        assert!(Pfx::parse(data).unwrap().mac.is_none());
+        for password in ["", "changeit"] {
+            let verified = parse(data).unwrap().verify(password).unwrap();
+            assert!(!verified.incomplete);
+            assert_eq!(verified.entries.len(), 1);
+            assert_eq!(verified.entries[0].alias, "root-cert");
+            assert_eq!(verified.entries[0].kind(), "Trusted certificate");
+            assert_eq!(verified.entries[0].certificate, Some(fixture_summary()));
+            assert_eq!(
+                verified.entries[0].certificates(),
+                [fixture_certificate_der().to_vec()]
+            );
+        }
+    }
+
+    #[test]
+    fn encrypted_store_without_mac_still_requires_a_password() {
+        let data = include_bytes!("../tests/fixtures/encrypted-no-mac.p12");
+        assert!(Pfx::parse(data).unwrap().mac.is_none());
+        let store = parse(data).unwrap();
+        for password in ["", "wrong"] {
+            assert!(matches!(store.verify(password), Err(VerifyError::Password)));
+        }
+        let verified = store.verify("changeit").unwrap();
+        assert!(!verified.incomplete);
+        assert_eq!(verified.entries.len(), 1);
+        assert_eq!(verified.entries[0].alias, "root-cert");
+        assert_eq!(verified.entries[0].certificate, Some(fixture_summary()));
+        assert_eq!(
+            verified.entries[0].certificates(),
+            [fixture_certificate_der().to_vec()]
+        );
+    }
+
+    #[test]
+    fn rejects_failed_mac() {
         let mut pfx = Pfx::parse(MODERN).unwrap();
         pfx.mac.as_mut().unwrap().digest[0] ^= 1;
         assert!(matches!(

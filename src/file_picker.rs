@@ -34,6 +34,10 @@ impl FilePicker {
                 ["jks", "jceks", "p12", "pfx"]
                     .iter()
                     .any(|ext| extension.eq_ignore_ascii_case(ext))
+            }) || path.file_name().is_some_and(|name| {
+                ["cacerts", "jssecacerts"]
+                    .iter()
+                    .any(|supported| name.eq_ignore_ascii_case(supported))
             }) || crate::certificate_file::has_extension(&path);
             if is_directory || (is_supported && path.is_file()) {
                 entries.push(Entry { path, is_directory });
@@ -183,7 +187,7 @@ impl FilePicker {
             (error.as_str(), Color::Red)
         } else if !self.entries.iter().any(|entry| !entry.is_directory) {
             (
-                "No keystore (.jks, .jceks, .p12, .pfx) or certificate (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10) files in this directory.",
+                "No keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts) or certificate (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10) files in this directory.",
                 Color::Gray,
             )
         } else {
