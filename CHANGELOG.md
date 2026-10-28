@@ -5,6 +5,10 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- Adds `example.jks`, an empty-password test fixture with 20 certificate entries,
+  including two expired certificates.
+- Arrow keys and `j` / `k` cycle the entry-list selection, wrapping at either
+  end, including arrow navigation while editing a filter.
 - Show Java truststores named `cacerts` or `jssecacerts` in the file browser.
 - Fix opening PKCS12 stores without an integrity MAC, including stores with
   password-encrypted certificates.

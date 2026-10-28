@@ -177,8 +177,8 @@ impl App {
                     self.refresh_visible();
                 }
                 KeyCode::Esc => return true,
-                KeyCode::Down | KeyCode::Char('j') => self.entries_state.select_next(),
-                KeyCode::Up | KeyCode::Char('k') => self.entries_state.select_previous(),
+                KeyCode::Down | KeyCode::Char('j') => self.move_entry_selection(1),
+                KeyCode::Up | KeyCode::Char('k') => self.move_entry_selection(-1),
                 _ => {}
             }
         }
@@ -210,11 +210,25 @@ impl App {
                 self.filter.pop();
             }
             KeyCode::Char(ch) if is_text_input(key.modifiers) => self.filter.push(ch),
-            KeyCode::Down => return self.entries_state.select_next(),
-            KeyCode::Up => return self.entries_state.select_previous(),
+            KeyCode::Down => return self.move_entry_selection(1),
+            KeyCode::Up => return self.move_entry_selection(-1),
             _ => return,
         }
         self.refresh_visible();
+    }
+
+    fn move_entry_selection(&mut self, offset: isize) {
+        let Some(last) = self.visible.len().checked_sub(1) else {
+            self.entries_state.select(None);
+            return;
+        };
+        let next = match self.entries_state.selected() {
+            Some(0) if offset < 0 => last,
+            Some(index) if offset < 0 => index - 1,
+            Some(index) if index < last => index + 1,
+            _ => 0,
+        };
+        self.entries_state.select(Some(next));
     }
 
     /// The `entries` index of the selected row, if any row is shown.

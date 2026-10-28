@@ -215,6 +215,9 @@ any existing incomplete-entry warnings.
   expiry`; while the filter is being typed it is shown with a trailing `_`
   instead of quotes.
 - `/` and `s` do nothing when no keystore is loaded or it has no entries.
+- `Up` / `Down` or `k` / `j` move the selection through the visible entries
+  in the current sort order, wrapping at either end. A single visible entry
+  stays selected; an empty list keeps no selection.
 
 ### Filtering
 
@@ -224,9 +227,9 @@ any existing incomplete-entry warnings.
   whose subject cannot be decoded matches on its alias only.
 - The list updates as the filter is typed. While typing, every character
   without `Ctrl` or `Alt` goes into the filter, including `q`, `s`, `o`, `j`,
-  and `k`. `Up` / `Down` still move the selection, `Backspace` deletes a
-  character, `Enter` keeps the filter, and `Esc` clears it. `Ctrl+C` still
-  quits.
+  and `k`. `Up` / `Down` still move the selection and wrap at either end.
+  `Backspace` deletes a character, `Enter` keeps the filter, and `Esc` clears it.
+  `Ctrl+C` still quits.
 - With the filter applied and not being typed, all list keys, including the
   quit keys, work as usual.
 - When nothing matches, the list shows "No matching entries." with a hint on how
