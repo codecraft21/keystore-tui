@@ -99,8 +99,10 @@ any existing incomplete-entry warnings.
 - **JKS and JCEKS:** the header, lengths, counts, and structure are checked
   before the password prompt appears.
 - **PKCS12:** the outer structure is checked before the password prompt appears.
-  The file must have an integrity MAC.
-- Entries are shown only after the password-based integrity check succeeds.
+  The integrity MAC is optional, independently of content encryption.
+- When an integrity MAC is present, entries are shown only after the
+  password-based integrity check succeeds. An absent MAC provides no integrity
+  verification.
 - A keystore with an empty password opens without a prompt.
 - An invalid file, an unreadable file, or a failed integrity check produces a red
   error message in the TUI.
@@ -132,8 +134,11 @@ any existing incomplete-entry warnings.
 ### PKCS12 compatibility
 
 - PKCS12 stores from Java, OpenSSL, and other tools are supported with either
-  current AES encryption or older legacy encryption. A store must have an
-  integrity MAC; PBMAC1 (RFC 9579) is not supported.
+  current AES encryption or older legacy encryption. Stores without an integrity
+  MAC open without a prompt when their contents are unencrypted. Encrypted
+  contents still require the decryption password; failed decryption due to
+  invalid padding prompts for a password or allows a retry. A present MAC must
+  verify; PBMAC1 (RFC 9579) is not supported.
 - Unicode aliases are supported.
 - A key without a friendly name, as OpenSSL writes when not given `-name`, is
   listed under the subject name (common name, else the full subject) of the

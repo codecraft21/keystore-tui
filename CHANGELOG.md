@@ -3,6 +3,11 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Fix opening PKCS12 stores without an integrity MAC, including stores with
+  password-encrypted certificates.
+
 ## 1.0.0
 
 First stable release, with prebuilt binaries for Linux, macOS, and Windows.

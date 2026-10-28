@@ -38,6 +38,31 @@ keytool -importkeystore -noprompt -srckeystore trusted-cert.jks \
   -deststorepass changeit -destalias 'certificate-😀'
 ```
 
+`passwordless.p12` contains the same public certificate in an unencrypted Java
+truststore without MacData. Generate it with:
+
+```sh
+keytool -J-Dkeystore.pkcs12.certProtectionAlgorithm=NONE \
+  -J-Dkeystore.pkcs12.macAlgorithm=NONE -importkeystore -noprompt \
+  -srckeystore trusted-cert.jks -srcstoretype JKS -srcstorepass changeit \
+  -destkeystore passwordless.p12 -deststoretype PKCS12 -deststorepass changeit
+```
+
+The destination password is required by `keytool` but does not protect this
+fixture. Tests read the committed fixture without Java.
+
+`encrypted-no-mac.p12` contains the same public certificate with password-encrypted
+safe contents and no MacData. It requires `changeit` to decrypt the certificate.
+Generate it with:
+
+```sh
+keytool -J-Dkeystore.pkcs12.macAlgorithm=NONE -importkeystore -noprompt \
+  -srckeystore trusted-cert.jks -srcstoretype JKS -srcstorepass changeit \
+  -destkeystore encrypted-no-mac.p12 -deststoretype PKCS12 -deststorepass changeit
+```
+
+Both no-MAC fixtures are generated with Java `keytool`; neither contains private keys.
+
 `empty-password.p12` and `nul-password.p12` contain the same certificate under
 the alias `root-cert`, stored by Java with an empty password and with a single
 NUL character as the password. Java opens both with an empty password. `keytool`

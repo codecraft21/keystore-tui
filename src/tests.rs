@@ -327,6 +327,47 @@ fn jks_renamed_as_p12_still_uses_jks_content() {
 }
 
 #[test]
+fn passwordless_cacerts_opens_without_a_prompt() {
+    let directory = TestDirectory::new();
+    let path = directory.path().join("cacerts");
+    fs::write(&path, include_bytes!("../tests/fixtures/passwordless.p12")).unwrap();
+    let mut app = App::default();
+    app.open_file(path.clone());
+    assert_eq!(app.keystore_path, Some(path));
+    assert!(app.password_prompt.is_none());
+    assert!(app.error.is_none());
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.entries[0].alias, "root-cert");
+    assert_eq!(app.entries[0].certificate, Some(fixture_summary()));
+}
+
+#[test]
+fn encrypted_cacerts_without_mac_prompts_and_allows_password_retry() {
+    let directory = TestDirectory::new();
+    let path = directory.path().join("cacerts");
+    fs::write(
+        &path,
+        include_bytes!("../tests/fixtures/encrypted-no-mac.p12"),
+    )
+    .unwrap();
+    let mut app = App::default();
+    app.open_file(path.clone());
+    assert!(app.password_prompt.is_some());
+    assert!(app.entries.is_empty());
+    type_password(&mut app, "wrong");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.password_prompt.is_some());
+    assert!(app.entries.is_empty());
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.password_prompt.is_none());
+    assert!(app.error.is_none());
+    assert_eq!(app.keystore_path, Some(path));
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.entries[0].certificate, Some(fixture_summary()));
+}
+
+#[test]
 fn truncated_pkcs12_is_rejected_before_password_prompt() {
     let directory = TestDirectory::new();
     let path = directory.path().join("truncated.p12");

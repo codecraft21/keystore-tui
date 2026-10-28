@@ -25,8 +25,11 @@ cargo run --locked -- "path/to/store.jks"
 ```
 
 The path can be relative or absolute; quote it if it contains spaces. JKS,
-JCEKS, and PKCS12 keystores are supported. Empty-password stores open
-immediately. Otherwise, enter the password at the hidden terminal prompt.
+JCEKS, and PKCS12 keystores are supported. Empty-password stores and unencrypted
+PKCS12 stores without an integrity MAC open immediately. PKCS12 stores with
+no MAC can still require a password to decrypt their contents; no integrity
+verification is available for these stores. Otherwise, enter the password at
+the hidden terminal prompt.
 There is one attempt: an incorrect password exits with code 1. `Esc`, `Ctrl+C`,
 or `Ctrl+D` cancels and exits non-zero.
 
