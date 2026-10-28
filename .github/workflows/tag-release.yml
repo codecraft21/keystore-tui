@@ -1,0 +1,39 @@
+# Tags a release when a version bump reaches main. When the version in
+# Cargo.toml has no v<version> tag yet, this creates it on the pushed commit,
+# which starts release.yml. Tags created with GITHUB_TOKEN don't trigger other
+# workflows, so this uses RELEASE_TAG_TOKEN: a fine-grained token for this
+# repository with Contents read and write access.
+name: Tag release
+
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ "Cargo.toml" ]
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Tag the version if it is new
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          tag="v$version"
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The RELEASE_TAG_TOKEN secret is not set, so $tag cannot be created."
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>/dev/null; then
+            echo "$tag already exists; nothing to release."
+            exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" --silent \
+            -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA"
+          echo "Created $tag on $GITHUB_SHA."
