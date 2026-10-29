@@ -294,16 +294,8 @@ impl App {
 
     fn show_selected_details(&mut self) {
         if let Some(index) = self.selected_entry() {
-            let directory = self
-                .keystore_path
-                .as_deref()
-                .and_then(Path::parent)
-                .unwrap_or(Path::new("."))
-                .to_path_buf();
-            self.entry_details = Some(entry_details::EntryDetails::new(
-                &self.entries[index],
-                directory,
-            ));
+            let path = self.keystore_path.as_deref().unwrap_or(Path::new(""));
+            self.entry_details = Some(entry_details::EntryDetails::new(&self.entries[index], path));
         }
     }
 
@@ -529,11 +521,13 @@ impl App {
                 status,
             );
         }
-        if let Some(path) = &self.keystore_path {
-            frame.render_widget(
-                Paragraph::new(format!("Path: '{}'", path.display())),
-                path_bar,
-            );
+        // The password prompt shows the file being opened, not the one already open.
+        let path = match &self.password_prompt {
+            Some(prompt) => Some(&prompt.path),
+            None => self.keystore_path.as_ref(),
+        };
+        if let Some(path) = path {
+            frame.render_widget(path_line(path), path_bar);
         }
         if let Some(picker) = &mut self.file_picker {
             picker.draw(frame);
@@ -645,6 +639,15 @@ fn read_bounded(reader: impl Read, size_hint: u64, limit: u64) -> io::Result<Vec
         return Err(too_large(limit));
     }
     Ok(data)
+}
+
+/// The status bar's `Path: '<path>'`, with the path itself in blue.
+fn path_line(path: &Path) -> Line<'static> {
+    Line::from(vec![
+        "Path: '".into(),
+        path.display().to_string().blue(),
+        "'".into(),
+    ])
 }
 
 fn too_large(limit: u64) -> io::Error {

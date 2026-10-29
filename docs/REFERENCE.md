@@ -67,7 +67,9 @@ After you select a file, type the keystore password and press `Enter`. Input is
 masked, `Backspace` deletes a character, and `Esc` cancels. A keystore with an
 empty password opens without asking. If the file is invalid, unreadable, or the
 password is wrong, an error appears in red. Cancelling the browser or the
-password prompt keeps the keystore that was already open.
+password prompt keeps the keystore that was already open. The path of the file
+being opened is shown below the prompt, and the path of the open file stays
+visible below the entry list and the detail view.
 
 A certificate file opens without a password. Each certificate in it, in PEM,
 DER, or PKCS#7 form, is listed as a `Certificate` entry in file order, named by

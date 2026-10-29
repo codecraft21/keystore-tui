@@ -485,6 +485,17 @@ fn selecting_a_valid_empty_keystore_displays_its_absolute_path() {
         rendered.lines().nth(22).unwrap().trim_end(),
         format!("Path: '{}'", expected.display())
     );
+    // Only the path itself is blue, not the label or the quotes.
+    let path_bar = buffer(&mut app, 200, 24);
+    let path_end = 7 + expected.display().to_string().chars().count() as u16;
+    for x in 0..=path_end {
+        let color = if (7..path_end).contains(&x) {
+            Color::Blue
+        } else {
+            Color::Reset
+        };
+        assert_eq!(path_bar[(x, 22)].fg, color, "column {x}");
+    }
     let title = rendered.lines().next().unwrap();
     assert!(title.contains(" keystore-tui "));
     assert!(!title.contains(expected.to_str().unwrap()));
@@ -708,6 +719,8 @@ fn cancelling_a_password_prompt_preserves_the_loaded_entries() {
     press(&mut app, KeyCode::End);
     press(&mut app, KeyCode::Enter);
     type_password(&mut app, "partial");
+    let other = directory.path().join("b-other.jks").canonicalize().unwrap();
+    assert!(screen(&mut app, 200, 24).contains(&format!("Path: '{}'", other.display())));
     assert!(!press(&mut app, KeyCode::Esc));
     assert!(app.password_prompt.is_none());
     assert_eq!(app.keystore_path, Some(original.canonicalize().unwrap()));
@@ -717,6 +730,13 @@ fn cancelling_a_password_prompt_preserves_the_loaded_entries() {
     )));
     assert_eq!(app.entries.len(), 2);
     assert!(screen(&mut app, 100, 24).contains("server-key"));
+    press(&mut app, KeyCode::Enter);
+    assert!(app.entry_details.is_some());
+    assert!(screen(&mut app, 200, 30).contains(&format!(
+        "Path: '{}'",
+        original.canonicalize().unwrap().display()
+    )));
+    press(&mut app, KeyCode::Esc);
 
     press(&mut app, KeyCode::Char('o'));
     press(&mut app, KeyCode::End);
@@ -915,7 +935,7 @@ fn enter_opens_full_screen_details_and_escape_preserves_list_state() {
     ] {
         assert!(details.contains(label), "missing {label}");
     }
-    assert!(!details.contains("Path:"));
+    assert!(details.contains("Path: '/keystore.jks'"));
     assert!(!press(&mut app, KeyCode::Esc));
     assert!(app.entry_details.is_none());
     assert_eq!(app.entries_state, previous);

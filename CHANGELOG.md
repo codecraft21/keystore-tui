@@ -3,6 +3,13 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Show the opened file's path in the detail view, including chain diagnostics,
+  as well as in the entry list. The path itself is now shown in blue.
+- The password prompt shows the path of the file being opened, instead of the
+  file that was already open.
+
 ## 1.0.1
 
 - Adds `example.jks`, an empty-password test fixture with 20 certificate entries,

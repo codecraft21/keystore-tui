@@ -186,6 +186,8 @@ any existing incomplete-entry warnings.
 - The password buffer is wiped after each attempt and whenever a character is
   deleted.
 - Cancelling the prompt keeps the keystore that was already loaded.
+- The status bar shows the path of the file being opened, not the one already
+  loaded.
 
 ## Entry list
 
@@ -208,7 +210,8 @@ any existing incomplete-entry warnings.
   weakness (see [Weak cryptography](#weak-cryptography)), and is empty
   otherwise. It checks the entry's own certificate, not the rest of its chain.
 - A status bar above the keyboard shortcuts shows the keystore's absolute path as
-  `Path: '<path>'`. Paths too long for the terminal width are clipped.
+  `Path: '<path>'`, with the path in blue and the label and quotes in the
+  default colour. Paths too long for the terminal width are clipped.
 - The table's bottom border shows, right-aligned, the entry count and sort order,
   for example `3 entries | Sort: alias`. With a filter it shows the filter and
   how many entries match, for example `Filter: 'web' | 2 of 9 entries | Sort:
@@ -250,6 +253,9 @@ any existing incomplete-entry warnings.
 
 - The view is full-screen and read-only, and it does not change the entry list's
   state. Returning to the list keeps the list's selection and scroll position.
+- As in the entry list, a status bar above the keyboard shortcuts shows the
+  opened file's path as `Path: '<path>'`, in both certificate details and chain
+  diagnostics.
 - The top pane is a selectable certificate hierarchy, starting with the leaf
   certificate selected. The bottom pane shows the fields of the selected
   certificate:

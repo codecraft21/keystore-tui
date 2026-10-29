@@ -81,7 +81,7 @@ To test a build in another location, pass
 
 The smoke tests use a generated public-certificate fixture with an empty
 password. They exercise opening a keystore, detail navigation, scrolling,
-signature checks, fingerprints, extensions, resizing, and returning to the list. They also build a
+signature checks, fingerprints, extensions, the file path, resizing, and returning to the list. They also build a
 three-entry store at runtime from copies of that certificate to exercise
 filtering (including `q` typed into the filter and `Esc` cancelling it) and
 sorting. They also open a PEM certificate file and export it, checking that `q`
