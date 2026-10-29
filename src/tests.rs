@@ -708,6 +708,8 @@ fn cancelling_a_password_prompt_preserves_the_loaded_entries() {
     press(&mut app, KeyCode::End);
     press(&mut app, KeyCode::Enter);
     type_password(&mut app, "partial");
+    let other = directory.path().join("b-other.jks").canonicalize().unwrap();
+    assert!(screen(&mut app, 200, 24).contains(&format!("Path: '{}'", other.display())));
     assert!(!press(&mut app, KeyCode::Esc));
     assert!(app.password_prompt.is_none());
     assert_eq!(app.keystore_path, Some(original.canonicalize().unwrap()));
@@ -717,6 +719,13 @@ fn cancelling_a_password_prompt_preserves_the_loaded_entries() {
     )));
     assert_eq!(app.entries.len(), 2);
     assert!(screen(&mut app, 100, 24).contains("server-key"));
+    press(&mut app, KeyCode::Enter);
+    assert!(app.entry_details.is_some());
+    assert!(screen(&mut app, 200, 30).contains(&format!(
+        "Path: '{}'",
+        original.canonicalize().unwrap().display()
+    )));
+    press(&mut app, KeyCode::Esc);
 
     press(&mut app, KeyCode::Char('o'));
     press(&mut app, KeyCode::End);
@@ -915,7 +924,7 @@ fn enter_opens_full_screen_details_and_escape_preserves_list_state() {
     ] {
         assert!(details.contains(label), "missing {label}");
     }
-    assert!(!details.contains("Path:"));
+    assert!(details.contains("Path: '/keystore.jks'"));
     assert!(!press(&mut app, KeyCode::Esc));
     assert!(app.entry_details.is_none());
     assert_eq!(app.entries_state, previous);

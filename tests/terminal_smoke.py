@@ -244,7 +244,7 @@ class TerminalSmoke(unittest.TestCase):
                 with self.subTest(name=name):
                     Path(directory, name).write_bytes(data)
                     with PtyApp(self.binary, directory, [name]) as app:
-                        app.expect(heading, "[verified]")
+                        app.expect(heading, "[verified]", f"{name}'")
                         self.assertNotIn(b"Keystore password:", app.output)
                         app.send(b"\x1b")
                         app.expect("1 entries | Sort: alias")
@@ -257,7 +257,7 @@ class TerminalSmoke(unittest.TestCase):
             with PtyApp(self.binary, directory, ["certificate.der"]) as app:
                 app.expect("Certificate details", "[verified]")
                 app.send(b"d")
-                app.expect("Chain diagnostics", "Trust: not checked", "Revocation: not checked")
+                app.expect("Chain diagnostics", "Trust: not checked", "Revocation: not checked", "certificate.der'")
                 app.resize(60, 24)
                 app.send(b"\x1b[F")
                 app.expect("self-issued; trust not checked")

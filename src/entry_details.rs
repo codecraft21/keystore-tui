@@ -4,7 +4,7 @@ mod chain;
 mod request;
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -119,6 +119,8 @@ pub struct EntryDetails {
     scroll: u16,
     page: u16,
     max_scroll: u16,
+    /// The opened file, shown below the panes.
+    path: PathBuf,
     /// Where exports are suggested and relative export names are resolved.
     directory: PathBuf,
     export: Option<ExportPrompt>,
@@ -128,8 +130,9 @@ pub struct EntryDetails {
 
 impl EntryDetails {
     /// Decodes the entry once. The view keeps what it shows, so it does not
-    /// depend on the entry table afterwards.
-    pub fn new(entry: &KeystoreEntry, directory: PathBuf) -> Self {
+    /// depend on the entry table afterwards. Exports default to the directory
+    /// of `path`, the opened file.
+    pub fn new(entry: &KeystoreEntry, path: &Path) -> Self {
         let view = match &entry.content {
             Content::Certificates { certificates, .. } => {
                 View::Chain(ChainView::new(certificates, entry.chain_warning))
@@ -150,7 +153,8 @@ impl EntryDetails {
             scroll: 0,
             page: 1,
             max_scroll: 0,
-            directory,
+            path: path.to_path_buf(),
+            directory: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
             export: None,
             message: None,
         };
@@ -316,7 +320,7 @@ impl EntryDetails {
         let minimum = Paragraph::new(shortcuts)
             .wrap(Wrap { trim: false })
             .line_count(area.width);
-        if area.width < 20 || usize::from(area.height) < minimum.saturating_add(10) {
+        if area.width < 20 || usize::from(area.height) < minimum.saturating_add(11) {
             frame.render_widget(
                 Paragraph::new("Resize terminal for entry details. Esc Back | q / Ctrl+C Quit")
                     .wrap(Wrap { trim: false }),
@@ -328,9 +332,10 @@ impl EntryDetails {
         let footer_height = u16::try_from(footer.line_count(area.width))
             .unwrap_or(u16::MAX)
             .min(area.height / 2);
-        let [header, content, footer_area] = Layout::vertical([
+        let [header, content, path_bar, footer_area] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(0),
+            Constraint::Length(1),
             Constraint::Length(footer_height),
         ])
         .areas(area);
@@ -399,6 +404,10 @@ impl EntryDetails {
         .unwrap_or(u16::MAX);
         self.scroll = self.scroll.min(self.max_scroll);
         frame.render_widget(paragraph.scroll((self.scroll, 0)).block(block), details);
+        frame.render_widget(
+            Paragraph::new(format!("Path: '{}'", self.path.display())),
+            path_bar,
+        );
         frame.render_widget(footer, footer_area);
     }
 
@@ -432,7 +441,6 @@ mod tests {
     };
     use crown::asn1::{der, oid::ObjectIdentifier};
     use ratatui::{Terminal, backend::TestBackend};
-    use std::path::Path;
 
     fn entry(certificates: Vec<Vec<u8>>) -> KeystoreEntry {
         KeystoreEntry {
@@ -465,7 +473,7 @@ mod tests {
             metadata_certificate("leaf", "root", &[1], &[]),
             metadata_certificate("root", "root", &[2], &[]),
         ]);
-        let mut view = EntryDetails::new(&data, PathBuf::new());
+        let mut view = EntryDetails::new(&data, Path::new(""));
         let selected = view.hierarchy.selected();
         view.handle_key(KeyCode::Char('d'));
         assert!(view.details_focused);
@@ -493,7 +501,7 @@ mod tests {
     #[test]
     fn only_expired_valid_until_timestamps_render_red() {
         let data = entry(vec![metadata_certificate("leaf", "root", &[1], &[])]);
-        let view = EntryDetails::new(&data, PathBuf::new());
+        let view = EntryDetails::new(&data, Path::new(""));
         let View::Chain(chain) = &view.view else {
             panic!("a certificate entry shows its chain");
         };
@@ -528,7 +536,7 @@ mod tests {
             metadata_certificate("leaf", "root", &[1], &[]),
             metadata_certificate("root", "root", &[2], &[]),
         ]);
-        let mut view = EntryDetails::new(&data, PathBuf::new());
+        let mut view = EntryDetails::new(&data, Path::new(""));
         let screen = draw(&mut view, 100, 50);
         assert!(screen.find("CN=root").unwrap() < screen.find("CN=leaf").unwrap());
         assert!(view.text(0).to_string().contains("Subject: CN=leaf"));
@@ -547,7 +555,7 @@ mod tests {
     fn wrapped_values_remain_accessible_with_scrolling_and_resizing() {
         let long_name = format!("{}THE-END", "long-name-界".repeat(30));
         let data = entry(vec![metadata_certificate(&long_name, "root", &[1], &[])]);
-        let mut view = EntryDetails::new(&data, PathBuf::new());
+        let mut view = EntryDetails::new(&data, Path::new(""));
         assert!(!draw(&mut view, 40, 24).contains("THE-END"));
         view.handle_key(KeyCode::Tab);
         assert!(view.details_focused);
@@ -587,7 +595,7 @@ mod tests {
             metadata_certificate("leaf", "root", &[1], &[critical_ca]),
             metadata_certificate("root", "root", &[2], &[]),
         ]);
-        let mut view = EntryDetails::new(&data, PathBuf::new());
+        let mut view = EntryDetails::new(&data, Path::new(""));
         let text = view.text(0).to_string();
         let fingerprint = text.find("Fingerprint (SHA-256)").unwrap();
         let section = text.find("Extensions:\n  Basic Constraints (2.5.29.19) [critical]\n    CA: true, path length: unlimited\n").unwrap();
@@ -603,7 +611,7 @@ mod tests {
             b"unreadable".to_vec(),
             metadata_certificate("root", "root", &[2], &[]),
         ]);
-        let mut view = EntryDetails::new(&data, PathBuf::new());
+        let mut view = EntryDetails::new(&data, Path::new(""));
         let screen = draw(&mut view, 100, 30);
         assert!(screen.contains("Certificate 1"));
         assert!(screen.contains("Certificate could not be decoded"));
@@ -620,7 +628,7 @@ mod tests {
             ed25519_certificate("intermediate", "root", 2, 9),
             ed25519_certificate("root", "root", 1, 1),
         ]);
-        let mut view = EntryDetails::new(&data, PathBuf::new());
+        let mut view = EntryDetails::new(&data, Path::new(""));
         let screen = draw(&mut view, 100, 50);
         assert!(screen.contains("CN=root [verified]"));
         assert!(screen.contains("CN=intermediate [bad signature]"));
@@ -648,7 +656,7 @@ mod tests {
         );
 
         let lone = entry(vec![ed25519_certificate("leaf", "missing", 3, 2)]);
-        let mut view = EntryDetails::new(&lone, PathBuf::new());
+        let mut view = EntryDetails::new(&lone, Path::new(""));
         assert!(draw(&mut view, 100, 50).contains("CN=leaf [unchecked]"));
         assert!(
             view.text(0)
@@ -656,7 +664,7 @@ mod tests {
                 .contains("Signature: not checked (the issuer certificate is not stored).")
         );
         let unreadable = entry(vec![b"unreadable".to_vec(), data.certificates()[2].clone()]);
-        let view = EntryDetails::new(&unreadable, PathBuf::new());
+        let view = EntryDetails::new(&unreadable, Path::new(""));
         let View::Chain(chain) = &view.view else {
             panic!("a certificate entry shows its chain");
         };
@@ -674,7 +682,7 @@ mod tests {
         let file = crate::certificate_file::parse(KEYTOOL_REQUEST).unwrap();
         let data = &file.entries[0];
         let directory = TestDirectory::new();
-        let mut view = EntryDetails::new(data, directory.path().to_path_buf());
+        let mut view = EntryDetails::new(data, &directory.path().join("request.csr"));
         view.handle_key(KeyCode::Char('d'));
         assert!(!view.diagnostics);
         assert!(view.details_focused);
@@ -725,7 +733,7 @@ mod tests {
             content: Content::Request(altered),
             ..entry(vec![])
         };
-        let mut view = EntryDetails::new(&altered_entry, PathBuf::new());
+        let mut view = EntryDetails::new(&altered_entry, Path::new(""));
         assert!(draw(&mut view, 100, 50).contains("CN=Device [bad signature]"));
         let text = view.text(0).to_string();
         assert!(text.contains(
@@ -746,7 +754,7 @@ mod tests {
                 content: Content::Request(request),
                 ..entry(vec![])
             };
-            let mut view = EntryDetails::new(&junk, PathBuf::new());
+            let mut view = EntryDetails::new(&junk, Path::new(""));
             let screen = draw(&mut view, 100, 30);
             assert!(screen.contains("Certificate request (unreadable or unnamed) [unchecked]"));
             assert!(screen.contains("Certificate request could not be decoded."));
@@ -759,7 +767,7 @@ mod tests {
             .map(|i| metadata_certificate(&format!("certificate-{i}"), "issuer", &[1], &[]))
             .collect();
         let data = entry(certificates);
-        let mut view = EntryDetails::new(&data, PathBuf::new());
+        let mut view = EntryDetails::new(&data, Path::new(""));
         assert!(draw(&mut view, 80, 24).contains("CN=certificate-0"));
         for _ in 0..29 {
             view.handle_key(KeyCode::Up);
