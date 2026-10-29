@@ -44,6 +44,7 @@ This file covers how the code is organised and how to work on it.
 | `tests/fixtures/` | Generated keystore fixtures; see its `README.md` for how they were made |
 | `dist-workspace.toml`, `.github/workflows/release.yml` | Release configuration for [`dist`](https://github.com/axodotdev/cargo-dist) and the workflow it generates |
 | `.github/workflows/publish-crates.yml` | The crates.io publish job that `release.yml` calls |
+| `.github/workflows/tag-release.yml` | Tags a new `Cargo.toml` version on `main`, which starts `release.yml` |
 
 Dependencies are deliberately few:
 
@@ -166,15 +167,16 @@ PowerShell installers.
 1. In a pull request, bump `version` in `Cargo.toml` (run `cargo build`, not
    `--locked`, to update `Cargo.lock`), and move the changes into a
    `## <version>` section of `CHANGELOG.md`.
-2. After it merges, tag the merge commit on `main` with `v<version>` and push
-   the tag. The tag must match the `Cargo.toml` version, or `dist` finds
-   nothing to release.
+2. When it merges, `tag-release.yml` tags the merge commit with
+   `v<version>`, which starts the release. It does nothing when that tag
+   already exists. To tag by hand instead, push `v<version>`; the tag must
+   match the `Cargo.toml` version, or `dist` finds nothing to release.
 3. Check that the release workflow passed and that the release lists every
    archive.
 
 To rehearse, release a pre-release version such as `1.2.0-rc.1` the same way:
-bump `Cargo.toml` to it and tag `v1.2.0-rc.1`. Pre-releases skip the Homebrew
-and crates.io jobs.
+bump `Cargo.toml` to it, and `v1.2.0-rc.1` is tagged on merge. Pre-releases
+skip the Homebrew and crates.io jobs.
 
 `publish-crates.yml` publishes with crates.io
 [Trusted Publishing](https://crates.io/docs/trusted-publishing), so no
@@ -188,5 +190,10 @@ Don't edit `release.yml` by hand. Change `dist-workspace.toml` and run
 `dist generate`, using the `cargo-dist-version` it pins. `dist` is only needed
 for this; it is not a build or test dependency.
 
-The workflow needs a `HOMEBREW_TAP_TOKEN` repository secret: a token that can
-push to `codecraft21/homebrew-tap`.
+The workflows need two repository secrets:
+
+- `HOMEBREW_TAP_TOKEN`: a token that can push to `codecraft21/homebrew-tap`.
+- `RELEASE_TAG_TOKEN`: a fine-grained token for this repository with Contents
+  read and write access, used by `tag-release.yml`. Tags created with the
+  built-in `GITHUB_TOKEN` don't start other workflows, so `release.yml` would
+  not run.
