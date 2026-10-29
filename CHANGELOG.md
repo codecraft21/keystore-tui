@@ -6,7 +6,7 @@ All notable changes to keystore-tui are listed here. Versions follow
 ## Unreleased
 
 - Show the opened file's path in the detail view, including chain diagnostics,
-  as well as in the entry list.
+  as well as in the entry list. The path itself is now shown in blue.
 - The password prompt shows the path of the file being opened, instead of the
   file that was already open.
 

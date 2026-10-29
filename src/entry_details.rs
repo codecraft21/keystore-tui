@@ -404,10 +404,7 @@ impl EntryDetails {
         .unwrap_or(u16::MAX);
         self.scroll = self.scroll.min(self.max_scroll);
         frame.render_widget(paragraph.scroll((self.scroll, 0)).block(block), details);
-        frame.render_widget(
-            Paragraph::new(format!("Path: '{}'", self.path.display())),
-            path_bar,
-        );
+        frame.render_widget(crate::path_line(&self.path), path_bar);
         frame.render_widget(footer, footer_area);
     }
 

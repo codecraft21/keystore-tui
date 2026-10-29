@@ -527,10 +527,7 @@ impl App {
             None => self.keystore_path.as_ref(),
         };
         if let Some(path) = path {
-            frame.render_widget(
-                Paragraph::new(format!("Path: '{}'", path.display())),
-                path_bar,
-            );
+            frame.render_widget(path_line(path), path_bar);
         }
         if let Some(picker) = &mut self.file_picker {
             picker.draw(frame);
@@ -642,6 +639,15 @@ fn read_bounded(reader: impl Read, size_hint: u64, limit: u64) -> io::Result<Vec
         return Err(too_large(limit));
     }
     Ok(data)
+}
+
+/// The status bar's `Path: '<path>'`, with the path itself in blue.
+fn path_line(path: &Path) -> Line<'static> {
+    Line::from(vec![
+        "Path: '".into(),
+        path.display().to_string().blue(),
+        "'".into(),
+    ])
 }
 
 fn too_large(limit: u64) -> io::Error {

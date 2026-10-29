@@ -210,7 +210,8 @@ any existing incomplete-entry warnings.
   weakness (see [Weak cryptography](#weak-cryptography)), and is empty
   otherwise. It checks the entry's own certificate, not the rest of its chain.
 - A status bar above the keyboard shortcuts shows the keystore's absolute path as
-  `Path: '<path>'`. Paths too long for the terminal width are clipped.
+  `Path: '<path>'`, with the path in blue and the label and quotes in the
+  default colour. Paths too long for the terminal width are clipped.
 - The table's bottom border shows, right-aligned, the entry count and sort order,
   for example `3 entries | Sort: alias`. With a filter it shows the filter and
   how many entries match, for example `Filter: 'web' | 2 of 9 entries | Sort:

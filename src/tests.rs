@@ -485,6 +485,17 @@ fn selecting_a_valid_empty_keystore_displays_its_absolute_path() {
         rendered.lines().nth(22).unwrap().trim_end(),
         format!("Path: '{}'", expected.display())
     );
+    // Only the path itself is blue, not the label or the quotes.
+    let path_bar = buffer(&mut app, 200, 24);
+    let path_end = 7 + expected.display().to_string().chars().count() as u16;
+    for x in 0..=path_end {
+        let color = if (7..path_end).contains(&x) {
+            Color::Blue
+        } else {
+            Color::Reset
+        };
+        assert_eq!(path_bar[(x, 22)].fg, color, "column {x}");
+    }
     let title = rendered.lines().next().unwrap();
     assert!(title.contains(" keystore-tui "));
     assert!(!title.contains(expected.to_str().unwrap()));
