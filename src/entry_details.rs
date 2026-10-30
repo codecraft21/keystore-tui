@@ -119,10 +119,9 @@ pub struct EntryDetails {
     scroll: u16,
     page: u16,
     max_scroll: u16,
-    /// The opened file, shown below the panes.
+    /// The opened file, shown below the panes. Exports are suggested, and
+    /// relative export names resolved, in its directory.
     path: PathBuf,
-    /// Where exports are suggested and relative export names are resolved.
-    directory: PathBuf,
     export: Option<ExportPrompt>,
     /// The last export result, and whether it failed.
     message: Option<(String, bool)>,
@@ -154,7 +153,6 @@ impl EntryDetails {
             page: 1,
             max_scroll: 0,
             path: path.to_path_buf(),
-            directory: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
             export: None,
             message: None,
         };
@@ -198,7 +196,8 @@ impl EntryDetails {
             KeyCode::Esc => return true,
             KeyCode::Char(letter @ ('x' | 'X')) => {
                 if let Some(scope) = self.export_scope(letter == 'X') {
-                    self.export = Some(ExportPrompt::new(scope, &self.directory, &self.alias));
+                    let directory = self.path.parent().unwrap_or(Path::new("."));
+                    self.export = Some(ExportPrompt::new(scope, directory, &self.alias));
                 }
             }
             code => self.handle_key(code),
