@@ -20,6 +20,8 @@ All notable changes to keystore-tui are listed here. Versions follow
 - Open PKCS12 stores without an integrity MAC whose contents Java encrypted
   with an empty password using legacy encryption. These asked for a password
   that could not be typed.
+- The "No keystore selected" hint now mentions Java truststores named
+  `cacerts` or `jssecacerts`, matching the file browser.
 
 ## 1.0.1
 

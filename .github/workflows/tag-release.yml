@@ -30,10 +30,19 @@ jobs:
             echo "::error::The RELEASE_TAG_TOKEN secret is not set, so $tag cannot be created."
             exit 1
           fi
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>/dev/null; then
+          # Only a 404 means the tag is missing. Any other lookup failure (such
+          # as a bad token, a rate limit, or a server error) stops the job.
+          if lookup=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>&1); then
             echo "$tag already exists; nothing to release."
             exit 0
           fi
+          case "$lookup" in
+            *"HTTP 404"*) ;;
+            *)
+              echo "::error::Could not check whether $tag exists: $lookup"
+              exit 1
+              ;;
+          esac
           gh api "repos/$GITHUB_REPOSITORY/git/refs" --silent \
             -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA"
           echo "Created $tag on $GITHUB_SHA."
