@@ -104,7 +104,10 @@ any existing incomplete-entry warnings.
 - When an integrity MAC is present, entries are shown only after the
   password-based integrity check succeeds. An absent MAC provides no integrity
   verification.
-- A keystore with an empty password opens without a prompt.
+- A keystore with an empty password opens without a prompt. For PKCS12, an
+  empty password is also tried in Java's encoding as a single NUL character,
+  both for the integrity MAC and, in a store without a MAC, for decrypting its
+  contents. One encoding must work for the whole store.
 - An invalid file, an unreadable file, or a failed integrity check produces a red
   error message in the TUI.
 

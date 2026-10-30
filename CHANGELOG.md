@@ -17,6 +17,9 @@ All notable changes to keystore-tui are listed here. Versions follow
   an invalid length.
 - Fix reading PKCS12 contents encrypted with legacy RC4, which were shown as an
   empty, incomplete store even with the right password.
+- Open PKCS12 stores without an integrity MAC whose contents Java encrypted
+  with an empty password using legacy encryption. These asked for a password
+  that could not be typed.
 
 ## 1.0.1
 

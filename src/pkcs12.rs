@@ -74,68 +74,12 @@ impl Store {
             })?;
         }
 
-        let safe = self
-            .0
-            .authenticated_safe()
-            .map_err(|_| VerifyError::Invalid("invalid PKCS12 content"))?;
-        let mut reader = Reader::new(&safe);
-        let mut sequence = reader
-            .read_sequence()
-            .map_err(|_| VerifyError::Invalid("invalid PKCS12 content"))?;
-        let mut bags = Vec::new();
-        let mut incomplete = false;
-        while !sequence.is_empty() {
-            let info = match ContentInfo::parse_reader(&mut sequence) {
-                Ok(info) => info,
-                Err(_) => {
-                    incomplete = true;
-                    break;
-                }
-            };
-            let content = if info.content_type.matches(oid::OID_PKCS7_DATA) {
-                Reader::new(&info.content)
-                    .read_octet_string_owned()
-                    .map(Zeroizing::new)
-                    .ok()
-            } else if info.content_type.matches(oid::OID_PKCS7_ENCRYPTED_DATA) {
-                // Without a MAC, only decryption shows whether the password
-                // is right. Most wrong keys fail CBC padding, but about 1 in
-                // 256 pass it and RC4 has no padding, so plaintext that is
-                // not SafeContents also means a wrong password.
-                match decrypt_safe(&info.content, password_bytes).map(Zeroizing::new) {
-                    Ok(content) if self.0.mac.is_some() || is_safe_contents(&content) => {
-                        Some(content)
-                    }
-                    Ok(_) | Err(SafeError::Decryption) if self.0.mac.is_none() => {
-                        return Err(VerifyError::Password);
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            if let Some(content) = content {
-                let mut reader = Reader::new(&content);
-                if let Ok(mut sequence) = reader.read_sequence() {
-                    while !sequence.is_empty() {
-                        match sequence.read_raw_tlv() {
-                            Ok(raw) => match parse_metadata_bag(raw) {
-                                Ok(Some(bag)) => bags.push(bag),
-                                Ok(None) | Err(_) => incomplete = true,
-                            },
-                            Err(_) => {
-                                incomplete = true;
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    incomplete = true;
-                }
-            } else {
-                incomplete = true;
-            }
-        }
+        let (bags, mut incomplete) = match self.read_bags(password_bytes) {
+            // Without a MAC, only decryption can tell whether an empty password
+            // was stored in Java's NUL encoding.
+            Err(VerifyError::Password) if password.is_empty() => self.read_bags(b"\0")?,
+            result => result?,
+        };
 
         let pool: Vec<_> = bags
             .iter()
@@ -267,6 +211,74 @@ impl Store {
             entries,
             incomplete,
         })
+    }
+
+    /// Reads every safe's bags, decrypting with `password`, and whether any
+    /// part could not be read.
+    fn read_bags(&self, password: &[u8]) -> Result<(Vec<MetadataBag>, bool), VerifyError> {
+        let safe = self
+            .0
+            .authenticated_safe()
+            .map_err(|_| VerifyError::Invalid("invalid PKCS12 content"))?;
+        let mut reader = Reader::new(&safe);
+        let mut sequence = reader
+            .read_sequence()
+            .map_err(|_| VerifyError::Invalid("invalid PKCS12 content"))?;
+        let mut bags = Vec::new();
+        let mut incomplete = false;
+        while !sequence.is_empty() {
+            let info = match ContentInfo::parse_reader(&mut sequence) {
+                Ok(info) => info,
+                Err(_) => {
+                    incomplete = true;
+                    break;
+                }
+            };
+            let content = if info.content_type.matches(oid::OID_PKCS7_DATA) {
+                Reader::new(&info.content)
+                    .read_octet_string_owned()
+                    .map(Zeroizing::new)
+                    .ok()
+            } else if info.content_type.matches(oid::OID_PKCS7_ENCRYPTED_DATA) {
+                // Without a MAC, only decryption shows whether the password
+                // is right. Most wrong keys fail CBC padding, but about 1 in
+                // 256 pass it and RC4 has no padding, so plaintext that is
+                // not SafeContents also means a wrong password.
+                match decrypt_safe(&info.content, password).map(Zeroizing::new) {
+                    Ok(content) if self.0.mac.is_some() || is_safe_contents(&content) => {
+                        Some(content)
+                    }
+                    Ok(_) | Err(SafeError::Decryption) if self.0.mac.is_none() => {
+                        return Err(VerifyError::Password);
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(content) = content {
+                let mut reader = Reader::new(&content);
+                if let Ok(mut sequence) = reader.read_sequence() {
+                    while !sequence.is_empty() {
+                        match sequence.read_raw_tlv() {
+                            Ok(raw) => match parse_metadata_bag(raw) {
+                                Ok(Some(bag)) => bags.push(bag),
+                                Ok(None) | Err(_) => incomplete = true,
+                            },
+                            Err(_) => {
+                                incomplete = true;
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    incomplete = true;
+                }
+            } else {
+                incomplete = true;
+            }
+        }
+        Ok((bags, incomplete))
     }
 }
 
@@ -425,6 +437,8 @@ mod tests {
     const UNICODE_ALIAS: &[u8] = include_bytes!("../tests/fixtures/unicode-alias.p12");
     const EMPTY_PASSWORD: &[u8] = include_bytes!("../tests/fixtures/empty-password.p12");
     const NUL_PASSWORD: &[u8] = include_bytes!("../tests/fixtures/nul-password.p12");
+    const EMPTY_PASSWORD_NO_MAC: &[u8] =
+        include_bytes!("../tests/fixtures/empty-password-no-mac.p12");
     const OPENSSL: &[u8] = include_bytes!("../tests/fixtures/openssl-cert.p12");
     const OPENSSL_LEGACY: &[u8] = include_bytes!("../tests/fixtures/openssl-cert-legacy.p12");
     const OPENSSL_NO_MAC_AES: &[u8] = include_bytes!("../tests/fixtures/openssl-no-mac-aes.p12");
@@ -861,6 +875,35 @@ mod tests {
     }
 
     #[test]
+    fn opens_empty_and_nul_password_stores_without_a_mac_with_an_empty_password() {
+        let plaintext = encode_safe_contents(&[secret_bag()]);
+        for password in [b"".as_slice(), b"\0".as_slice()] {
+            let aes = pbes2(Pbes2Cipher::Aes256Cbc { iv: vec![1; 16] });
+            let triple_des = legacy(LegacyPbeKind::DesEde3);
+            for data in [
+                encrypted_without_mac(
+                    aes.to_algorithm(),
+                    &aes.encrypt(&plaintext, password).unwrap(),
+                ),
+                encrypted_without_mac(
+                    triple_des.to_algorithm(),
+                    &triple_des.encrypt(&plaintext, password).unwrap(),
+                ),
+            ] {
+                let store = parse(&data).unwrap();
+                assert!(matches!(
+                    store.verify("changeit"),
+                    Err(VerifyError::Password)
+                ));
+                let verified = store.verify("").unwrap();
+                assert!(!verified.incomplete);
+                assert_eq!(verified.entries.len(), 1);
+                assert_eq!(verified.entries[0].alias, "secret");
+            }
+        }
+    }
+
+    #[test]
     fn rejects_failed_mac() {
         let mut pfx = Pfx::parse(MODERN).unwrap();
         pfx.mac.as_mut().unwrap().digest[0] ^= 1;
@@ -893,7 +936,8 @@ mod tests {
     fn opens_java_empty_and_nul_password_stores_with_an_empty_password() {
         // Java's empty-password store only opens through the NUL fallback.
         assert!(parse(EMPTY_PASSWORD).unwrap().0.verify_mac(b"").is_err());
-        for data in [EMPTY_PASSWORD, NUL_PASSWORD] {
+        assert!(parse(EMPTY_PASSWORD_NO_MAC).unwrap().0.mac.is_none());
+        for data in [EMPTY_PASSWORD, NUL_PASSWORD, EMPTY_PASSWORD_NO_MAC] {
             let store = parse(data).unwrap();
             assert!(matches!(
                 store.verify("changeit"),
