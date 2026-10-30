@@ -81,16 +81,24 @@ To test a build in another location, pass
 
 The smoke tests use a generated public-certificate fixture with an empty
 password. They exercise opening a keystore, detail navigation, scrolling,
-signature checks, fingerprints, extensions, the file path, resizing, and returning to the list. They also build a
-three-entry store at runtime from copies of that certificate to exercise
-filtering (including `q` typed into the filter and `Esc` cancelling it) and
-sorting. They also open a PEM certificate file and export it, checking that `q`
-is typed into the export name and `Esc` cancels the prompt. They open the
-`keytool` certificate request fixture, check its signature is verified, and
-export it as PEM. They check that `--version` and `--help` print and exit
-without starting the app. They check that `q`,
-`Esc`, and `Ctrl+C` (including while typing a filter) restore terminal modes, leave the alternate screen, and show the cursor
-again.
+signature checks, fingerprints, extensions, the file path, resizing, and
+returning to the list. At startup, they check the hidden password prompt for
+JKS, JCEKS, and PKCS12 fixtures, including the no-MAC `encrypted-no-mac.p12`,
+and that a wrong password, `Ctrl+C`, or `Esc` there exits without starting the
+app. They check that `empty-password.p12` and the no-MAC `passwordless.p12`
+open without a prompt, and that a missing, invalid, or malformed path shows a
+warning, a path with spaces opens, and extra arguments print usage. They open
+PEM, DER, and request files given at startup straight into their details, and
+open and leave the chain diagnostics view. They also build a three-entry store
+at runtime from copies of that certificate to exercise entry selection
+wrapping with the arrow keys, filtering (including `q` typed into the filter
+and `Esc` cancelling it), and sorting. They also open a PEM certificate file
+and export it, checking that `q` is typed into the export name and `Esc`
+cancels the prompt. They open the `keytool` certificate request fixture, check
+its signature is verified, and export it as PEM. They check that `--version`
+and `--help` print and exit without starting the app. They check that `q`,
+`Esc`, and `Ctrl+C` (including while typing a filter) restore terminal modes,
+leave the alternate screen, and show the cursor again.
 
 CI (`.github/workflows/rust.yml`) runs all of the above on Linux for every push
 to `main` and every pull request. The release workflow also runs `dist plan` on
