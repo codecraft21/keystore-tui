@@ -9,6 +9,12 @@ All notable changes to keystore-tui are listed here. Versions follow
   as well as in the entry list. The path itself is now shown in blue.
 - The password prompt shows the path of the file being opened, instead of the
   file that was already open.
+- Fix PKCS12 stores without an integrity MAC sometimes accepting a wrong or
+  empty password and opening as an empty, incomplete store. This always
+  happened with RC4 encryption and about 1 time in 256 otherwise. Any failure
+  to decrypt the contents now asks for the password again.
+- Fix a crash when a PKCS12 store's legacy 3DES or RC2 encrypted contents have
+  an invalid length.
 
 ## 1.0.1
 

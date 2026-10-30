@@ -137,9 +137,14 @@ any existing incomplete-entry warnings.
 - PKCS12 stores from Java, OpenSSL, and other tools are supported with either
   current AES encryption or older legacy encryption. Stores without an integrity
   MAC open without a prompt when their contents are unencrypted. Encrypted
-  contents still require the decryption password; failed decryption due to
-  invalid padding prompts for a password or allows a retry. A present MAC must
-  verify; PBMAC1 (RFC 9579) is not supported.
+  contents still require the decryption password. Without a MAC, a password is
+  accepted only if every encrypted safe decrypts to a well-formed SafeContents
+  sequence. Any other decryption failure, or decrypted contents that do not
+  parse (a wrong key can pass the CBC padding check, and RC4 has no padding),
+  prompts for a password or allows a retry. An encrypted safe that is
+  malformed, uses an unsupported algorithm, or exceeds the iteration or salt
+  limits is not a password error; it is skipped and the list is marked
+  incomplete. A present MAC must verify; PBMAC1 (RFC 9579) is not supported.
 - Unicode aliases are supported.
 - A key without a friendly name, as OpenSSL writes when not given `-name`, is
   listed under the subject name (common name, else the full subject) of the
