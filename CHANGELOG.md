@@ -15,6 +15,8 @@ All notable changes to keystore-tui are listed here. Versions follow
   to decrypt the contents now asks for the password again.
 - Fix a crash when a PKCS12 store's legacy 3DES or RC2 encrypted contents have
   an invalid length.
+- Fix reading PKCS12 contents encrypted with legacy RC4, which were shown as an
+  empty, incomplete store even with the right password.
 
 ## 1.0.1
 

@@ -144,7 +144,9 @@ any existing incomplete-entry warnings.
   prompts for a password or allows a retry. An encrypted safe that is
   malformed, uses an unsupported algorithm, or exceeds the iteration or salt
   limits is not a password error; it is skipped and the list is marked
-  incomplete. A present MAC must verify; PBMAC1 (RFC 9579) is not supported.
+  incomplete. The RC4 schemes are identified by their RFC 7292 OIDs
+  (`1.2.840.113549.1.12.1.1` is 128-bit, `.2` is 40-bit), as OpenSSL
+  writes them. A present MAC must verify; PBMAC1 (RFC 9579) is not supported.
 - Unicode aliases are supported.
 - A key without a friendly name, as OpenSSL writes when not given `-name`, is
   listed under the subject name (common name, else the full subject) of the

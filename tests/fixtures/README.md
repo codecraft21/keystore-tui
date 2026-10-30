@@ -85,7 +85,63 @@ keytool -J-Dkeystore.pkcs12.macAlgorithm=NONE -importkeystore -noprompt \
   -destkeystore encrypted-no-mac.p12 -deststoretype PKCS12 -deststorepass changeit
 ```
 
-Both no-MAC fixtures are generated with Java `keytool`; neither contains private keys.
+Both of these no-MAC fixtures are generated with Java `keytool`; neither
+contains private keys.
+
+`openssl-no-mac-aes.p12`, `openssl-no-mac-3des.p12`, `openssl-no-mac-rc2.p12`,
+`openssl-no-mac-rc4.p12`, and `openssl-no-mac-rc4-40.p12` are OpenSSL stores
+without MacData. Each holds the same certificate in a safe encrypted with
+`changeit`, using AES-256-CBC (PBES2), 3-key 3DES, 40-bit RC2, 128-bit RC4, and
+40-bit RC4. Without a MAC, only decryption can reject a wrong password. These
+fixtures are useful for checking by hand that any wrong password, including the
+empty one tried at startup, brings back the password prompt:
+
+- With AES-256-CBC, `wrong130` is a wrong password that still passes the CBC
+  padding check. It must be rejected.
+- RC4 has no padding, so any wrong password decrypts to garbage, which must
+  also be rejected.
+
+Recreate them from this directory with:
+
+```sh
+keytool -exportcert -rfc -alias root-cert -keystore trusted-cert.jks \
+  -storepass changeit -file fixture.pem
+openssl pkcs12 -export -nomac -nokeys -certpbe AES-256-CBC -in fixture.pem \
+  -out openssl-no-mac-aes.p12 -passout pass:changeit
+openssl pkcs12 -export -nomac -nokeys -certpbe PBE-SHA1-3DES -in fixture.pem \
+  -out openssl-no-mac-3des.p12 -passout pass:changeit
+openssl pkcs12 -export -legacy -nomac -nokeys -certpbe PBE-SHA1-RC2-40 \
+  -in fixture.pem -out openssl-no-mac-rc2.p12 -passout pass:changeit
+openssl pkcs12 -export -legacy -nomac -nokeys -certpbe PBE-SHA1-RC4-128 \
+  -in fixture.pem -out openssl-no-mac-rc4.p12 -passout pass:changeit
+openssl pkcs12 -export -legacy -nomac -nokeys -certpbe PBE-SHA1-RC4-40 \
+  -in fixture.pem -out openssl-no-mac-rc4-40.p12 -passout pass:changeit
+rm fixture.pem
+```
+
+`-certpbe` must be given: with `-nomac` and the default algorithm, OpenSSL
+leaves the certificates unencrypted. Each run uses a new salt, so after
+regenerating `openssl-no-mac-aes.p12`, find a new wrong password that passes the
+padding check and update `VALID_PADDING_PASSWORD` in `src/pkcs12.rs`, the
+password in `src/tests.rs`, and this file. OpenSSL reports such a password with
+an ASN.1 error instead of `bad decrypt`:
+
+```sh
+for n in $(seq 1 10000); do
+  openssl pkcs12 -in openssl-no-mac-aes.p12 -nomacver -nokeys -noout \
+    -passin "pass:wrong$n" 2>&1 | grep -q 'bad decrypt' || { echo "wrong$n"; break; }
+done
+```
+
+`invalid-ciphertext-no-mac.p12` is `openssl-no-mac-3des.p12` with the last byte
+of its encrypted content removed, so the 3DES ciphertext is no longer a whole
+number of blocks. It opens without a prompt, as an empty store with the
+incomplete-list warning, and must not crash. The script needs only the Python
+standard library. Recreate it with:
+
+```sh
+python3 truncate_ciphertext.py openssl-no-mac-3des.p12 invalid-ciphertext-no-mac.p12
+```
 
 `empty-password.p12` and `nul-password.p12` contain the same certificate under
 the alias `root-cert`, stored by Java with an empty password and with a single

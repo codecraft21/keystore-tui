@@ -102,7 +102,8 @@ in an interactive terminal.
 ### Fixtures
 
 Fixtures are generated with Java `keytool`, OpenSSL, or, for `example.jks`,
-Python's `cryptography` package. The commands are recorded in
+Python's `cryptography` package. `invalid-ciphertext-no-mac.p12` is derived
+from an OpenSSL fixture by a script that uses only the Python standard library. The commands are recorded in
 `tests/fixtures/README.md`. These tools are needed only to regenerate fixtures,
 never to build, test, or run the app. Tests that need private-key entries build them at
 runtime from synthetic bytes, so no private key is ever committed.
