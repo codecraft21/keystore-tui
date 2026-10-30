@@ -497,7 +497,7 @@ impl App {
         } else {
             frame.render_widget(
                 Paragraph::new(
-                    "No keystore selected.\n\nPress o to open a keystore (.jks, .jceks, .p12, .pfx) or a certificate or request file (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10).",
+                    "No keystore selected.\n\nPress o to open a keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts) or a certificate or request file (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10).",
                 )
                 .block(Block::bordered().title(" keystore-tui ".blue()))
                 .wrap(Wrap { trim: false }),
