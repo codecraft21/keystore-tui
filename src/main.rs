@@ -118,13 +118,6 @@ enum Store {
     Pkcs12(pkcs12::Store),
 }
 
-/// A move through the entry table, by one row up or down.
-#[derive(Clone, Copy)]
-enum Step {
-    Previous,
-    Next,
-}
-
 impl Store {
     fn verify(self, password: &str) -> Result<pkcs12::Verified, Box<(Self, Option<&'static str>)>> {
         match self {
@@ -144,6 +137,13 @@ impl Store {
             },
         }
     }
+}
+
+/// A move through the entry table, by one row up or down.
+#[derive(Clone, Copy)]
+enum Step {
+    Previous,
+    Next,
 }
 
 impl App {
