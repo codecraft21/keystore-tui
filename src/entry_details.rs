@@ -21,6 +21,7 @@ use crate::{
     certificate::{Summary, details::fingerprint, extensions::Extension, signature::Signature},
     export::{self, ExportPrompt, Outcome, Scope},
     keystore::{Content, KeystoreEntry},
+    path_bar,
 };
 use chain::ChainView;
 use request::RequestView;
@@ -403,7 +404,7 @@ impl EntryDetails {
         .unwrap_or(u16::MAX);
         self.scroll = self.scroll.min(self.max_scroll);
         frame.render_widget(paragraph.scroll((self.scroll, 0)).block(block), details);
-        frame.render_widget(crate::path_line(&self.path), path_bar);
+        frame.render_widget(path_bar::line(&self.path), path_bar);
         frame.render_widget(footer, footer_area);
     }
 
