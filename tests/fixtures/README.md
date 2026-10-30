@@ -162,6 +162,28 @@ for (var fixture : new String[][] {{"empty-password.p12", ""}, {"nul-password.p1
 EOF
 ```
 
+`empty-password-no-mac.p12` holds the same certificate, stored by Java with an
+empty password and no MacData. Its certificate is encrypted with legacy 40-bit
+RC2, whose key derivation encodes Java's empty password as a NUL character, so
+it opens only through the NUL fallback. Recreate it with `jshell` from this
+directory:
+
+```sh
+jshell -q -R-Dkeystore.pkcs12.macAlgorithm=NONE \
+  -R-Dkeystore.pkcs12.certProtectionAlgorithm=PBEWithSHA1AndRC2_40 <<'EOF'
+var source = java.security.KeyStore.getInstance("PKCS12");
+source.load(new java.io.FileInputStream("trusted-cert.p12"), "changeit".toCharArray());
+var store = java.security.KeyStore.getInstance("PKCS12");
+store.load(null, null);
+store.setCertificateEntry("root-cert", source.getCertificate("root-cert"));
+try (var out = new java.io.FileOutputStream("empty-password-no-mac.p12")) { store.store(out, "".toCharArray()); }
+/exit
+EOF
+```
+
+With Java's default AES encryption, an empty password is encoded as no bytes
+at all and needs no fallback.
+
 Private-key and secret-key PKCS12 cases are generated only in memory by tests;
 no private key fixture is committed. Neither Java nor `keytool` is needed to run
 the app or its tests.
