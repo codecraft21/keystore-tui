@@ -7,6 +7,7 @@ mod export;
 mod file_picker;
 mod java_serialization;
 mod keystore;
+mod path_bar;
 mod pkcs12;
 mod startup;
 
@@ -138,6 +139,13 @@ impl Store {
     }
 }
 
+/// A move through the entry table, by one row up or down.
+#[derive(Clone, Copy)]
+enum Step {
+    Previous,
+    Next,
+}
+
 impl App {
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press {
@@ -177,8 +185,8 @@ impl App {
                     self.refresh_visible();
                 }
                 KeyCode::Esc => return true,
-                KeyCode::Down | KeyCode::Char('j') => self.move_entry_selection(1),
-                KeyCode::Up | KeyCode::Char('k') => self.move_entry_selection(-1),
+                KeyCode::Down | KeyCode::Char('j') => self.move_entry_selection(Step::Next),
+                KeyCode::Up | KeyCode::Char('k') => self.move_entry_selection(Step::Previous),
                 _ => {}
             }
         }
@@ -210,22 +218,23 @@ impl App {
                 self.filter.pop();
             }
             KeyCode::Char(ch) if is_text_input(key.modifiers) => self.filter.push(ch),
-            KeyCode::Down => return self.move_entry_selection(1),
-            KeyCode::Up => return self.move_entry_selection(-1),
+            KeyCode::Down => return self.move_entry_selection(Step::Next),
+            KeyCode::Up => return self.move_entry_selection(Step::Previous),
             _ => return,
         }
         self.refresh_visible();
     }
 
-    fn move_entry_selection(&mut self, offset: isize) {
+    /// Moves one row, wrapping at either end; selects the first row when
+    /// none is selected.
+    fn move_entry_selection(&mut self, step: Step) {
         let Some(last) = self.visible.len().checked_sub(1) else {
             self.entries_state.select(None);
             return;
         };
-        let next = match self.entries_state.selected() {
-            Some(0) if offset < 0 => last,
-            Some(index) if offset < 0 => index - 1,
-            Some(index) if index < last => index + 1,
+        let next = match (self.entries_state.selected(), step) {
+            (Some(index), Step::Previous) => index.checked_sub(1).unwrap_or(last),
+            (Some(index), Step::Next) if index < last => index + 1,
             _ => 0,
         };
         self.entries_state.select(Some(next));
@@ -527,7 +536,7 @@ impl App {
             None => self.keystore_path.as_ref(),
         };
         if let Some(path) = path {
-            frame.render_widget(path_line(path), path_bar);
+            frame.render_widget(path_bar::line(path), path_bar);
         }
         if let Some(picker) = &mut self.file_picker {
             picker.draw(frame);
@@ -639,15 +648,6 @@ fn read_bounded(reader: impl Read, size_hint: u64, limit: u64) -> io::Result<Vec
         return Err(too_large(limit));
     }
     Ok(data)
-}
-
-/// The status bar's `Path: '<path>'`, with the path itself in blue.
-fn path_line(path: &Path) -> Line<'static> {
-    Line::from(vec![
-        "Path: '".into(),
-        path.display().to_string().blue(),
-        "'".into(),
-    ])
 }
 
 fn too_large(limit: u64) -> io::Error {

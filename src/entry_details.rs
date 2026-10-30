@@ -21,6 +21,7 @@ use crate::{
     certificate::{Summary, details::fingerprint, extensions::Extension, signature::Signature},
     export::{self, ExportPrompt, Outcome, Scope},
     keystore::{Content, KeystoreEntry},
+    path_bar,
 };
 use chain::ChainView;
 use request::RequestView;
@@ -119,10 +120,9 @@ pub struct EntryDetails {
     scroll: u16,
     page: u16,
     max_scroll: u16,
-    /// The opened file, shown below the panes.
+    /// The opened file, shown below the panes. Exports are suggested, and
+    /// relative export names resolved, in its directory.
     path: PathBuf,
-    /// Where exports are suggested and relative export names are resolved.
-    directory: PathBuf,
     export: Option<ExportPrompt>,
     /// The last export result, and whether it failed.
     message: Option<(String, bool)>,
@@ -154,7 +154,6 @@ impl EntryDetails {
             page: 1,
             max_scroll: 0,
             path: path.to_path_buf(),
-            directory: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
             export: None,
             message: None,
         };
@@ -198,7 +197,8 @@ impl EntryDetails {
             KeyCode::Esc => return true,
             KeyCode::Char(letter @ ('x' | 'X')) => {
                 if let Some(scope) = self.export_scope(letter == 'X') {
-                    self.export = Some(ExportPrompt::new(scope, &self.directory, &self.alias));
+                    let directory = self.path.parent().unwrap_or(Path::new("."));
+                    self.export = Some(ExportPrompt::new(scope, directory, &self.alias));
                 }
             }
             code => self.handle_key(code),
@@ -404,7 +404,7 @@ impl EntryDetails {
         .unwrap_or(u16::MAX);
         self.scroll = self.scroll.min(self.max_scroll);
         frame.render_widget(paragraph.scroll((self.scroll, 0)).block(block), details);
-        frame.render_widget(crate::path_line(&self.path), path_bar);
+        frame.render_widget(path_bar::line(&self.path), path_bar);
         frame.render_widget(footer, footer_area);
     }
 
