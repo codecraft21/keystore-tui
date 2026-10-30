@@ -429,6 +429,53 @@ fn encrypted_cacerts_without_mac_prompts_and_allows_password_retry() {
 }
 
 #[test]
+fn openssl_stores_without_mac_prompt_until_the_right_password() {
+    let directory = TestDirectory::new();
+    for (name, data) in [
+        (
+            "aes.p12",
+            include_bytes!("../tests/fixtures/openssl-no-mac-aes.p12").as_slice(),
+        ),
+        (
+            "rc4.p12",
+            include_bytes!("../tests/fixtures/openssl-no-mac-rc4.p12").as_slice(),
+        ),
+    ] {
+        let path = directory.path().join(name);
+        fs::write(&path, data).unwrap();
+        let mut app = App::default();
+        app.open_file(path);
+        assert!(app.password_prompt.is_some());
+        // RC4 has no padding, and this password passes the AES padding check.
+        type_password(&mut app, "wrong130");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.password_prompt.is_some());
+        assert!(app.entries.is_empty());
+        type_password(&mut app, "changeit");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.password_prompt.is_none());
+        assert_eq!(app.entries.len(), 1);
+        assert!(app.warning.is_none());
+    }
+}
+
+#[test]
+fn pkcs12_without_mac_and_invalid_ciphertext_opens_as_incomplete() {
+    let directory = TestDirectory::new();
+    let path = directory.path().join("invalid.p12");
+    fs::write(
+        &path,
+        include_bytes!("../tests/fixtures/invalid-ciphertext-no-mac.p12"),
+    )
+    .unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    assert!(app.password_prompt.is_none());
+    assert!(app.entries.is_empty());
+    assert!(screen(&mut app, 100, 24).contains("entry list is incomplete"));
+}
+
+#[test]
 fn truncated_pkcs12_is_rejected_before_password_prompt() {
     let directory = TestDirectory::new();
     let path = directory.path().join("truncated.p12");

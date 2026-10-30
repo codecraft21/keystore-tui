@@ -6,7 +6,7 @@ use crown::{
     x509::{
         algorithm::AlgorithmIdentifier,
         attribute::parse_attributes,
-        pbe::{LegacyPbe, Pbes2},
+        pbe::{LegacyPbe, LegacyPbeKind, Pbes2, Pbes2Cipher},
     },
 };
 use zeroize::Zeroizing;
@@ -19,6 +19,9 @@ use crate::{
 const MAX_ITERATIONS: u32 = 1_000_000;
 const MAX_SALT_SIZE: usize = 64;
 const TRUSTED_KEY_USAGE: &[u64] = &[2, 16, 840, 1, 113894, 746875, 1, 1];
+// RFC 7292, appendix C. Crown 0.31 swaps these two OIDs.
+const PBE_SHA1_128BIT_RC4: &[u64] = &[1, 2, 840, 113549, 1, 12, 1, 1];
+const PBE_SHA1_40BIT_RC4: &[u64] = &[1, 2, 840, 113549, 1, 12, 1, 2];
 
 pub struct Store(Pfx);
 
@@ -95,16 +98,18 @@ impl Store {
                     .map(Zeroizing::new)
                     .ok()
             } else if info.content_type.matches(oid::OID_PKCS7_ENCRYPTED_DATA) {
-                match decrypt_safe(&info.content, password_bytes) {
-                    Ok(content) => Some(Zeroizing::new(content)),
-                    Err(
-                        CryptoError::UnpadError
-                        | CryptoError::AuthenticationFailed
-                        | CryptoError::StrError("pkcs: invalid padding"),
-                    ) if self.0.mac.is_none() => {
+                // Without a MAC, only decryption shows whether the password
+                // is right. Most wrong keys fail CBC padding, but about 1 in
+                // 256 pass it and RC4 has no padding, so plaintext that is
+                // not SafeContents also means a wrong password.
+                match decrypt_safe(&info.content, password_bytes).map(Zeroizing::new) {
+                    Ok(content) if self.0.mac.is_some() || is_safe_contents(&content) => {
+                        Some(content)
+                    }
+                    Ok(_) | Err(SafeError::Decryption) if self.0.mac.is_none() => {
                         return Err(VerifyError::Password);
                     }
-                    Err(_) => None,
+                    _ => None,
                 }
             } else {
                 None
@@ -325,29 +330,78 @@ fn parse_metadata_bag(raw: &[u8]) -> Result<Option<MetadataBag>, CryptoError> {
     }))
 }
 
-fn decrypt_safe(content: &[u8], password: &[u8]) -> Result<Vec<u8>, CryptoError> {
+/// Why an encrypted safe could not be read.
+enum SafeError {
+    /// The safe is malformed, or uses unsupported or excessive parameters.
+    Unreadable,
+    /// Decryption failed, as it does for most wrong passwords.
+    Decryption,
+}
+
+fn decrypt_safe(content: &[u8], password: &[u8]) -> Result<Vec<u8>, SafeError> {
+    let unreadable = |_| SafeError::Unreadable;
     let mut reader = Reader::new(content);
-    let mut sequence = reader.read_sequence()?;
-    let _version = sequence.read_integer()?;
-    let mut info = sequence.read_sequence()?;
-    let _content_type = info.read_oid()?;
-    let algorithm = AlgorithmIdentifier::parse(&mut info)?;
-    let ciphertext = info.read_implicit(0, false)?;
-    if algorithm.oid.matches(oid::OID_PBES2) {
-        let pbe = Pbes2::parse(&algorithm)?;
-        if pbe.iterations == 0 || pbe.iterations > MAX_ITERATIONS || pbe.salt.len() > MAX_SALT_SIZE
+    let mut sequence = reader.read_sequence().map_err(unreadable)?;
+    let _version = sequence.read_integer().map_err(unreadable)?;
+    let mut info = sequence.read_sequence().map_err(unreadable)?;
+    let _content_type = info.read_oid().map_err(unreadable)?;
+    let algorithm = AlgorithmIdentifier::parse(&mut info).map_err(unreadable)?;
+    let ciphertext = info.read_implicit(0, false).map_err(unreadable)?;
+    let check = |iterations, salt: &[u8], block_size| {
+        if iterations == 0
+            || iterations > MAX_ITERATIONS
+            || salt.len() > MAX_SALT_SIZE
+            || ciphertext.is_empty()
+            || !ciphertext.len().is_multiple_of(block_size)
         {
-            return Err(CryptoError::InvalidRound(pbe.iterations as usize));
+            Err(SafeError::Unreadable)
+        } else {
+            Ok(())
         }
+    };
+    let decrypted = if algorithm.oid.matches(oid::OID_PBES2) {
+        let pbe = Pbes2::parse(&algorithm).map_err(unreadable)?;
+        let block_size = match pbe.cipher {
+            Pbes2Cipher::Aes128Cbc { .. }
+            | Pbes2Cipher::Aes192Cbc { .. }
+            | Pbes2Cipher::Aes256Cbc { .. } => 16,
+            Pbes2Cipher::DesEde3Cbc { .. } => 8,
+        };
+        check(pbe.iterations, &pbe.salt, block_size)?;
         pbe.decrypt(ciphertext, password)
     } else {
-        let pbe = LegacyPbe::parse(&algorithm)?;
-        if pbe.iterations == 0 || pbe.iterations > MAX_ITERATIONS || pbe.salt.len() > MAX_SALT_SIZE
-        {
-            return Err(CryptoError::InvalidRound(pbe.iterations as usize));
+        let mut pbe = LegacyPbe::parse(&algorithm).map_err(unreadable)?;
+        if algorithm.oid.matches(PBE_SHA1_128BIT_RC4) {
+            pbe.kind = LegacyPbeKind::Rc4_128;
+        } else if algorithm.oid.matches(PBE_SHA1_40BIT_RC4) {
+            pbe.kind = LegacyPbeKind::Rc4_40;
         }
+        let block_size = match pbe.kind {
+            LegacyPbeKind::Rc4_40 | LegacyPbeKind::Rc4_128 => 1,
+            LegacyPbeKind::DesEde3 | LegacyPbeKind::DesEde2 | LegacyPbeKind::Rc2_40 => 8,
+        };
+        check(pbe.iterations, &pbe.salt, block_size)?;
         pbe.decrypt(ciphertext, password)
+    };
+    // An unsupported parameter is not a wrong password; any other failure can be.
+    decrypted.map_err(|error| match error {
+        CryptoError::UnsupportedOperation(_) => SafeError::Unreadable,
+        _ => SafeError::Decryption,
+    })
+}
+
+/// Whether `content` is a single SafeContents sequence of bags.
+fn is_safe_contents(content: &[u8]) -> bool {
+    let mut reader = Reader::new(content);
+    let Ok(mut bags) = reader.read_sequence() else {
+        return false;
+    };
+    while !bags.is_empty() {
+        if bags.read_sequence().is_err() {
+            return false;
+        }
     }
+    reader.expect_end().is_ok()
 }
 
 #[cfg(test)]
@@ -356,11 +410,11 @@ mod tests {
     use crate::test_support::{fixture_certificate_der, fixture_summary};
     use crown::{
         asn1::{der, oid::ObjectIdentifier},
-        pkcs12::SafeBag,
+        pkcs12::{SafeBag, encode_safe_contents},
         rng::Rng,
         x509::{
             Certificate,
-            algorithm::AlgorithmIdentifier,
+            algorithm::{AlgorithmIdentifier, Hash},
             attribute::{friendly_name, local_key_id},
             keys::EncryptedPrivateKeyInfo,
         },
@@ -373,6 +427,16 @@ mod tests {
     const NUL_PASSWORD: &[u8] = include_bytes!("../tests/fixtures/nul-password.p12");
     const OPENSSL: &[u8] = include_bytes!("../tests/fixtures/openssl-cert.p12");
     const OPENSSL_LEGACY: &[u8] = include_bytes!("../tests/fixtures/openssl-cert-legacy.p12");
+    const OPENSSL_NO_MAC_AES: &[u8] = include_bytes!("../tests/fixtures/openssl-no-mac-aes.p12");
+    const OPENSSL_NO_MAC: [&[u8]; 5] = [
+        OPENSSL_NO_MAC_AES,
+        include_bytes!("../tests/fixtures/openssl-no-mac-3des.p12"),
+        include_bytes!("../tests/fixtures/openssl-no-mac-rc2.p12"),
+        include_bytes!("../tests/fixtures/openssl-no-mac-rc4.p12"),
+        include_bytes!("../tests/fixtures/openssl-no-mac-rc4-40.p12"),
+    ];
+    /// A wrong password that passes the padding check of `OPENSSL_NO_MAC_AES`.
+    const VALID_PADDING_PASSWORD: &str = "wrong130";
 
     struct TestRng(u8);
     impl Rng for TestRng {
@@ -588,6 +652,212 @@ mod tests {
             verified.entries[0].certificates(),
             [fixture_certificate_der().to_vec()]
         );
+    }
+
+    fn secret_bag() -> SafeBag {
+        SafeBag {
+            bag: Bag::Secret {
+                oid: ObjectIdentifier::new(oid::OID_PKCS12_SECRET_BAG).unwrap(),
+                value: der::octet_string(&[1, 2, 3]),
+            },
+            attributes: vec![friendly_name("secret")],
+        }
+    }
+
+    fn pbes2(cipher: Pbes2Cipher) -> Pbes2 {
+        Pbes2 {
+            salt: vec![7; 8],
+            iterations: 1,
+            key_length: None,
+            prf: Hash::Sha256,
+            cipher,
+        }
+    }
+
+    fn legacy(kind: LegacyPbeKind) -> LegacyPbe {
+        LegacyPbe {
+            salt: vec![7; 8],
+            iterations: 1,
+            kind,
+        }
+    }
+
+    /// A store whose only safe is EncryptedData, with no MacData.
+    fn encrypted_without_mac(algorithm: AlgorithmIdentifier, ciphertext: &[u8]) -> Vec<u8> {
+        let data = ObjectIdentifier::new(oid::OID_PKCS7_DATA).unwrap();
+        let encrypted = der::sequence(
+            &[
+                der::integer(&[0]),
+                der::sequence(
+                    &[
+                        der::oid(&data),
+                        algorithm.encode(),
+                        der::implicit(0, false, ciphertext),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+        );
+        let safe = ContentInfo {
+            content_type: ObjectIdentifier::new(oid::OID_PKCS7_ENCRYPTED_DATA).unwrap(),
+            content: encrypted,
+        };
+        Pfx {
+            version: 3,
+            auth_safe: ContentInfo {
+                content_type: data,
+                content: der::octet_string(&der::sequence(&safe.encode())),
+            },
+            mac: None,
+        }
+        .encode()
+    }
+
+    #[test]
+    fn encrypted_stores_without_mac_reject_wrong_passwords_with_every_scheme() {
+        let plaintext = encode_safe_contents(&[secret_bag()]);
+        let mut stores = Vec::new();
+        for cipher in [
+            Pbes2Cipher::Aes128Cbc { iv: vec![1; 16] },
+            Pbes2Cipher::Aes192Cbc { iv: vec![1; 16] },
+            Pbes2Cipher::Aes256Cbc { iv: vec![1; 16] },
+            Pbes2Cipher::DesEde3Cbc { iv: vec![1; 8] },
+        ] {
+            let pbe = pbes2(cipher);
+            let ciphertext = pbe.encrypt(&plaintext, b"changeit").unwrap();
+            stores.push(encrypted_without_mac(pbe.to_algorithm(), &ciphertext));
+        }
+        for kind in [
+            LegacyPbeKind::Rc4_40,
+            LegacyPbeKind::Rc4_128,
+            LegacyPbeKind::DesEde3,
+            LegacyPbeKind::DesEde2,
+            LegacyPbeKind::Rc2_40,
+        ] {
+            let pbe = legacy(kind);
+            let ciphertext = pbe.encrypt(&plaintext, b"changeit").unwrap();
+            let mut algorithm = pbe.to_algorithm();
+            // Crown writes the two RC4 OIDs swapped.
+            let rfc_oid = match kind {
+                LegacyPbeKind::Rc4_40 => Some(PBE_SHA1_40BIT_RC4),
+                LegacyPbeKind::Rc4_128 => Some(PBE_SHA1_128BIT_RC4),
+                _ => None,
+            };
+            if let Some(arcs) = rfc_oid {
+                algorithm.oid = ObjectIdentifier::new(arcs).unwrap();
+            }
+            stores.push(encrypted_without_mac(algorithm, &ciphertext));
+        }
+        for data in stores {
+            let store = parse(&data).unwrap();
+            for password in ["", "\0", "wrong", "changeiT"] {
+                assert!(matches!(store.verify(password), Err(VerifyError::Password)));
+            }
+            let verified = store.verify("changeit").unwrap();
+            assert!(!verified.incomplete);
+            assert_eq!(verified.entries.len(), 1);
+            assert_eq!(verified.entries[0].alias, "secret");
+        }
+    }
+
+    #[test]
+    fn wrong_password_with_valid_padding_is_rejected_without_a_mac() {
+        let pbe = pbes2(Pbes2Cipher::Aes256Cbc { iv: vec![1; 16] });
+        let ciphertext = pbe
+            .encrypt(&encode_safe_contents(&[secret_bag()]), b"changeit")
+            .unwrap();
+        let store = parse(&encrypted_without_mac(pbe.to_algorithm(), &ciphertext)).unwrap();
+        // About 1 wrong key in 256 decrypts to plaintext with valid padding.
+        let password = (0..10_000)
+            .map(|n| format!("wrong{n}"))
+            .find(|password| pbe.decrypt(&ciphertext, password.as_bytes()).is_ok())
+            .unwrap();
+        assert!(matches!(
+            store.verify(&password),
+            Err(VerifyError::Password)
+        ));
+    }
+
+    #[test]
+    fn unreadable_encryption_without_a_mac_is_incomplete_rather_than_a_wrong_password() {
+        let plaintext = encode_safe_contents(&[secret_bag()]);
+        let aes = pbes2(Pbes2Cipher::Aes256Cbc { iv: vec![1; 16] });
+        let ciphertext = aes.encrypt(&plaintext, b"changeit").unwrap();
+        let unknown = AlgorithmIdentifier::with_null(ObjectIdentifier::new(&[1, 2, 3, 4]).unwrap());
+        let excessive = Pbes2 {
+            iterations: MAX_ITERATIONS + 1,
+            ..aes.clone()
+        };
+        let mismatched_key = Pbes2 {
+            key_length: Some(16),
+            ..aes.clone()
+        };
+        let triple_des = legacy(LegacyPbeKind::DesEde3);
+        for data in [
+            encrypted_without_mac(unknown, &ciphertext),
+            encrypted_without_mac(excessive.to_algorithm(), &ciphertext),
+            encrypted_without_mac(mismatched_key.to_algorithm(), &ciphertext),
+            encrypted_without_mac(aes.to_algorithm(), &ciphertext[1..]),
+            encrypted_without_mac(aes.to_algorithm(), &[]),
+            encrypted_without_mac(triple_des.to_algorithm(), &[0; 15]),
+        ] {
+            let verified = parse(&data).unwrap().verify("").unwrap();
+            assert!(verified.entries.is_empty());
+            assert!(verified.incomplete);
+        }
+    }
+
+    #[test]
+    fn reads_openssl_stores_without_a_mac_only_with_the_right_password() {
+        for data in OPENSSL_NO_MAC {
+            let store = parse(data).unwrap();
+            assert!(store.0.mac.is_none());
+            for password in ["", "wrong", VALID_PADDING_PASSWORD] {
+                assert!(matches!(store.verify(password), Err(VerifyError::Password)));
+            }
+            let verified = store.verify("changeit").unwrap();
+            assert_eq!(
+                verified.entries,
+                vec![KeystoreEntry {
+                    alias: "JKS TUI test fixture".into(),
+                    certificate: Some(fixture_summary()),
+                    content: Content::Certificates {
+                        kind: Kind::Certificate,
+                        certificates: vec![fixture_certificate_der().to_vec()],
+                    },
+                    chain_warning: None,
+                }]
+            );
+            assert!(!verified.incomplete);
+        }
+    }
+
+    #[test]
+    fn openssl_aes_fixture_has_a_wrong_password_with_valid_padding() {
+        // tests/fixtures/README.md names this password for manual testing.
+        let safe = Pfx::parse(OPENSSL_NO_MAC_AES)
+            .unwrap()
+            .authenticated_safe()
+            .unwrap();
+        let mut reader = Reader::new(&safe);
+        let mut safes = reader.read_sequence().unwrap();
+        let info = ContentInfo::parse_reader(&mut safes).unwrap();
+        let plaintext = decrypt_safe(&info.content, VALID_PADDING_PASSWORD.as_bytes())
+            .ok()
+            .unwrap();
+        assert!(!is_safe_contents(&plaintext));
+    }
+
+    #[test]
+    fn invalid_ciphertext_length_without_a_mac_is_incomplete() {
+        let data = include_bytes!("../tests/fixtures/invalid-ciphertext-no-mac.p12");
+        let store = parse(data).unwrap();
+        for password in ["", "changeit"] {
+            let verified = store.verify(password).unwrap();
+            assert!(verified.entries.is_empty());
+            assert!(verified.incomplete);
+        }
     }
 
     #[test]
