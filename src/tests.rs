@@ -1118,6 +1118,16 @@ fn entry_selection_cycles_in_display_order_with_and_without_a_filter() {
 }
 
 #[test]
+fn entry_selection_starts_at_the_first_row_when_none_is_selected() {
+    for key in [KeyCode::Up, KeyCode::Down] {
+        let mut app = triage_app();
+        app.entries_state.select(None);
+        press(&mut app, key);
+        assert_eq!(app.entries_state.selected(), Some(0));
+    }
+}
+
+#[test]
 fn entry_selection_handles_single_and_empty_lists() {
     let mut app = triage_app();
     press(&mut app, KeyCode::Char('/'));

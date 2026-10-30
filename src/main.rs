@@ -118,6 +118,13 @@ enum Store {
     Pkcs12(pkcs12::Store),
 }
 
+/// A move through the entry table, by one row up or down.
+#[derive(Clone, Copy)]
+enum Step {
+    Previous,
+    Next,
+}
+
 impl Store {
     fn verify(self, password: &str) -> Result<pkcs12::Verified, Box<(Self, Option<&'static str>)>> {
         match self {
@@ -178,8 +185,8 @@ impl App {
                     self.refresh_visible();
                 }
                 KeyCode::Esc => return true,
-                KeyCode::Down | KeyCode::Char('j') => self.move_entry_selection(1),
-                KeyCode::Up | KeyCode::Char('k') => self.move_entry_selection(-1),
+                KeyCode::Down | KeyCode::Char('j') => self.move_entry_selection(Step::Next),
+                KeyCode::Up | KeyCode::Char('k') => self.move_entry_selection(Step::Previous),
                 _ => {}
             }
         }
@@ -211,22 +218,23 @@ impl App {
                 self.filter.pop();
             }
             KeyCode::Char(ch) if is_text_input(key.modifiers) => self.filter.push(ch),
-            KeyCode::Down => return self.move_entry_selection(1),
-            KeyCode::Up => return self.move_entry_selection(-1),
+            KeyCode::Down => return self.move_entry_selection(Step::Next),
+            KeyCode::Up => return self.move_entry_selection(Step::Previous),
             _ => return,
         }
         self.refresh_visible();
     }
 
-    fn move_entry_selection(&mut self, offset: isize) {
+    /// Moves one row, wrapping at either end; selects the first row when
+    /// none is selected.
+    fn move_entry_selection(&mut self, step: Step) {
         let Some(last) = self.visible.len().checked_sub(1) else {
             self.entries_state.select(None);
             return;
         };
-        let next = match self.entries_state.selected() {
-            Some(0) if offset < 0 => last,
-            Some(index) if offset < 0 => index - 1,
-            Some(index) if index < last => index + 1,
+        let next = match (self.entries_state.selected(), step) {
+            (Some(index), Step::Previous) => index.checked_sub(1).unwrap_or(last),
+            (Some(index), Step::Next) if index < last => index + 1,
             _ => 0,
         };
         self.entries_state.select(Some(next));
