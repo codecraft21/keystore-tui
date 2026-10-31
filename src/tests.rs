@@ -1535,6 +1535,16 @@ fn the_opened_file_directory_is_absolute() {
 }
 
 #[test]
+fn the_opened_file_directory_resolves_parent_components() {
+    let directory = TestDirectory::new();
+    let certs = directory.path().join("certs");
+    fs::create_dir(&certs).unwrap();
+    let relative = test_support::relative_to_working_directory(&certs);
+    let path = relative.join("..").join("certs").join("server.pem");
+    assert_eq!(path_bar::directory(&path), certs.canonicalize().unwrap());
+}
+
+#[test]
 fn details_opened_through_a_relative_path_export_to_the_suggested_folder() {
     let directory = TestDirectory::new();
     let relative = test_support::relative_to_working_directory(directory.path());

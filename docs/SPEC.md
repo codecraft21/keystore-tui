@@ -158,7 +158,8 @@ any existing incomplete-entry warnings.
 - Certificates marked with Java's trusted-key-usage attribute are `Trusted
   certificate` entries, named by their friendly name. Every such certificate
   is listed, even if another certificate or key has the same name or a name
-  differing only in case. A certificate without it
+  differing only in case. Identical copies, with the same name and the same
+  certificate, are listed once. A certificate without it
   is listed as a `Certificate` entry unless it is part of a private key's
   chain. Such an entry is named by its friendly name, else its subject name,
   else `Certificate N`.
@@ -422,9 +423,9 @@ any existing incomplete-entry warnings.
   request and `X` does nothing.
 - A prompt replaces the detail shortcuts. It suggests `<alias>.pem`,
   `<alias>-chain.pem`, or `<alias>.csr` for a request, in the open file's
-  directory, shown as an absolute path. Characters other than
-  letters, digits, `-`, `_`, and `.` in the alias become `_`, and a name that
-  already exists gets a number, such as `server-2.pem`.
+  directory, shown as an absolute path with any `..` resolved. Characters
+  other than letters, digits, `-`, `_`, and `.` in the alias become `_`, and a
+  name that already exists gets a number, such as `server-2.pem`.
 - While the prompt is open, every character without `Ctrl` or `Alt` is typed
   into the name, including `q`, `x`, and `j`. `Backspace` deletes a character,
   `Ctrl+U` clears the name, `Enter` saves, and `Esc` cancels without leaving the
