@@ -68,7 +68,9 @@ pub struct ExportPrompt {
 
 impl ExportPrompt {
     /// Suggests `<alias>.pem`, `<alias>-chain.pem`, or `<alias>.csr` in
-    /// `directory`, numbered to avoid names that already exist.
+    /// `directory`, numbered to avoid names that already exist. Enter resolves
+    /// the name against `directory` once, so the suggestion includes the
+    /// directory only when it is absolute.
     pub fn new(scope: Scope, directory: &Path, alias: &str) -> Self {
         let mut stem: String = alias
             .chars()
@@ -87,13 +89,18 @@ impl ExportPrompt {
             stem.push_str("-chain");
         }
         let extension = scope.extension();
-        let path = (1..100)
+        let name = (1..100)
             .map(|n| match n {
-                1 => directory.join(format!("{stem}.{extension}")),
-                n => directory.join(format!("{stem}-{n}.{extension}")),
+                1 => PathBuf::from(format!("{stem}.{extension}")),
+                n => PathBuf::from(format!("{stem}-{n}.{extension}")),
             })
-            .find(|path| !path.exists())
-            .unwrap_or_else(|| directory.join(format!("{stem}.{extension}")));
+            .find(|name| !directory.join(name).exists())
+            .unwrap_or_else(|| PathBuf::from(format!("{stem}.{extension}")));
+        let path = if directory.is_absolute() {
+            directory.join(name)
+        } else {
+            name
+        };
         Self {
             scope,
             path: path.to_string_lossy().into_owned(),
@@ -165,7 +172,7 @@ pub fn save(path: &Path, items: &[Vec<u8>], pem_label: &str) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{TestDirectory, metadata_certificate};
+    use crate::test_support::{TestDirectory, metadata_certificate, relative_to_working_directory};
 
     fn type_text(prompt: &mut ExportPrompt, text: &str) {
         for ch in text.chars() {
@@ -218,6 +225,22 @@ mod tests {
             prompt.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             Outcome::Cancelled
         ));
+    }
+
+    #[test]
+    fn a_relative_directory_is_joined_once() {
+        let directory = TestDirectory::new();
+        let relative = relative_to_working_directory(directory.path());
+        assert!(relative.is_relative());
+        fs::write(relative.join("server.pem"), b"existing").unwrap();
+        let mut prompt = ExportPrompt::new(Scope::Certificate, &relative, "server");
+        assert_eq!(prompt.path, "server-2.pem");
+        let Outcome::Save(path) =
+            prompt.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        else {
+            panic!("expected a save");
+        };
+        assert_eq!(path, relative.join("server-2.pem"));
     }
 
     #[test]

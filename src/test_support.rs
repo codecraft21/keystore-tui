@@ -45,11 +45,14 @@ pub struct TestDirectory {
 impl TestDirectory {
     pub fn new() -> Self {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
+        // Cargo's `TMPDIR` ends in `.`, which `std::path::absolute` drops
+        // from the paths the app shows; drop it here too so they compare equal.
+        let path = std::path::absolute(std::env::temp_dir().join(format!(
             "keystore-tui-test-{}-{}",
             std::process::id(),
             NEXT_ID.fetch_add(1, Ordering::Relaxed)
-        ));
+        )))
+        .unwrap();
         fs::create_dir(&path).unwrap();
         Self { path }
     }
@@ -63,6 +66,17 @@ impl Drop for TestDirectory {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+/// `path` relative to the working directory, which holds the test
+/// directories because Cargo sets `TMPDIR` to the repository root.
+pub fn relative_to_working_directory(path: &Path) -> PathBuf {
+    let working_directory = std::env::current_dir().unwrap().canonicalize().unwrap();
+    path.canonicalize()
+        .unwrap()
+        .strip_prefix(&working_directory)
+        .expect("test directories are inside the working directory")
+        .to_path_buf()
 }
 
 /// Writes a keystore field by field, recording where each length or count

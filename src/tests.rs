@@ -1507,6 +1507,70 @@ fn details_export_certificates_next_to_the_opened_file() {
 }
 
 #[test]
+fn the_opened_file_directory_is_absolute() {
+    let working_directory = std::env::current_dir().unwrap();
+    assert_eq!(
+        path_bar::directory(Path::new("store.jks")),
+        working_directory
+    );
+    assert_eq!(
+        path_bar::directory(Path::new("certs/server.pem")),
+        working_directory.join("certs")
+    );
+    assert_eq!(
+        path_bar::directory(Path::new("/stores/certs/server.pem")),
+        Path::new("/stores/certs")
+    );
+}
+
+#[test]
+fn details_opened_through_a_relative_path_export_to_the_suggested_folder() {
+    let directory = TestDirectory::new();
+    let relative = test_support::relative_to_working_directory(directory.path());
+    let path = relative.join("server.pem");
+    fs::write(
+        &path,
+        crown::asn1::pem::encode("CERTIFICATE", test_support::fixture_certificate_der()),
+    )
+    .unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    press(&mut app, KeyCode::Enter);
+    assert!(app.entry_details.is_some());
+
+    press(&mut app, KeyCode::Char('x'));
+    let suggested = directory
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("JKS_TUI_test_fixture.pem");
+    let suggestion = format!("Save certificate to: {}", suggested.display());
+    assert!(screen(&mut app, 200, 40).contains(&suggestion));
+    press(&mut app, KeyCode::Enter);
+    assert!(
+        screen(&mut app, 200, 40)
+            .contains(&format!("Saved certificate to '{}'.", suggested.display()))
+    );
+    assert!(suggested.is_file());
+    assert!(!relative.join(&relative).exists());
+}
+
+#[test]
+fn the_file_browser_opens_in_the_directory_of_a_bare_or_relative_name() {
+    let directory = TestDirectory::new();
+    let relative = test_support::relative_to_working_directory(directory.path());
+    for path in [PathBuf::from("store.jks"), relative.join("store.jks")] {
+        let mut app = App {
+            keystore_path: Some(path),
+            ..App::default()
+        };
+        press(&mut app, KeyCode::Char('o'));
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert!(app.file_picker.is_some());
+    }
+}
+
+#[test]
 fn weak_certificates_are_flagged_in_the_list_details_and_hierarchy() {
     use crown::asn1::pem;
     let directory = TestDirectory::new();
