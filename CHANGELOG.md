@@ -5,6 +5,8 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- Reject deeply nested JCEKS superclass descriptors instead of crashing and
+  leaving the terminal in raw mode.
 - Show the opened file's path in the detail view, including chain diagnostics,
   as well as in the entry list. The path itself is now shown in blue.
 - The password prompt shows the path of the file being opened, instead of the

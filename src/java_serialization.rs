@@ -162,6 +162,11 @@ impl<'a> Stream<'a> {
     }
 
     fn new_class(&mut self, depth: usize) -> Result<usize, Error> {
+        // Superclass descriptors recurse through class_desc without passing
+        // through content, so they need their own nesting check.
+        if depth > MAX_DEPTH {
+            return Err(Error::Unsupported);
+        }
         let name = self.utf()?.to_vec();
         self.take(8)?; // serialVersionUID.
         let index = self.classes.len();
@@ -328,6 +333,24 @@ mod tests {
         // The superclass refers back to the descriptor being read.
         data.extend_from_slice(&[TC_REFERENCE, 0, 0x7e, 0, 0]);
         assert_eq!(skip_object(&data), Err(Error::Invalid));
+    }
+
+    #[test]
+    fn bounds_superclass_descriptor_nesting() {
+        for depth in [1, MAX_DEPTH, MAX_DEPTH + 1, 50_000] {
+            let mut data = vec![0xac, 0xed, 0, 5, TC_OBJECT];
+            for _ in 0..depth {
+                data.extend_from_slice(&[TC_CLASSDESC, 0, 1, b'A']);
+                data.extend_from_slice(&[0; 8]); // serialVersionUID.
+                data.extend_from_slice(&[SC_SERIALIZABLE, 0, 0, TC_ENDBLOCKDATA]);
+            }
+            data.push(TC_NULL);
+            if depth <= MAX_DEPTH {
+                assert_eq!(skip_object(&data), Ok((b"A".to_vec(), &[][..])));
+            } else {
+                assert_eq!(skip_object(&data), Err(Error::Unsupported));
+            }
+        }
     }
 
     #[test]
