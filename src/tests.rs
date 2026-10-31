@@ -1128,6 +1128,17 @@ fn entry_selection_starts_at_the_first_row_when_none_is_selected() {
 }
 
 #[test]
+fn entry_selection_past_the_end_moves_from_the_last_row() {
+    let last = triage_app().visible.len() - 1;
+    for (key, expected) in [(KeyCode::Up, last - 1), (KeyCode::Down, 0)] {
+        let mut app = triage_app();
+        app.entries_state.select(Some(last + 5));
+        press(&mut app, key);
+        assert_eq!(app.entries_state.selected(), Some(expected));
+    }
+}
+
+#[test]
 fn entry_selection_handles_single_and_empty_lists() {
     let mut app = triage_app();
     press(&mut app, KeyCode::Char('/'));

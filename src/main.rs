@@ -226,13 +226,15 @@ impl App {
     }
 
     /// Moves one row, wrapping at either end; selects the first row when
-    /// none is selected.
+    /// none is selected. A selection past the end counts as the last row,
+    /// as in `selected_entry`.
     fn move_entry_selection(&mut self, step: Step) {
         let Some(last) = self.visible.len().checked_sub(1) else {
             self.entries_state.select(None);
             return;
         };
-        let next = match (self.entries_state.selected(), step) {
+        let selected = self.entries_state.selected().map(|index| index.min(last));
+        let next = match (selected, step) {
             (Some(index), Step::Previous) => index.checked_sub(1).unwrap_or(last),
             (Some(index), Step::Next) if index < last => index + 1,
             _ => 0,
@@ -383,7 +385,7 @@ impl App {
             details.draw(frame);
             return;
         }
-        let [content, status, path_bar, help] = Layout::vertical([
+        let [content, status, path_area, help] = Layout::vertical([
             Constraint::Min(3),
             Constraint::Length(2),
             Constraint::Length(1),
@@ -535,7 +537,7 @@ impl App {
             None => self.keystore_path.as_ref(),
         };
         if let Some(path) = path {
-            frame.render_widget(path_bar::line(path), path_bar);
+            frame.render_widget(path_bar::line(path), path_area);
         }
         if let Some(picker) = &mut self.file_picker {
             picker.draw(frame);
