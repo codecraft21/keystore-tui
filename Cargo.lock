@@ -372,6 +372,7 @@ version = "1.0.1"
 dependencies = [
  "crown",
  "ratatui",
+ "rustix",
  "sha1",
  "zeroize",
 ]

@@ -28,15 +28,14 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-On Linux, macOS, or WSL, also run the PTY smoke tests (Python 3, standard library only):
+On Linux, macOS, or WSL, `cargo test` also runs the PTY smoke tests in
+`tests/terminal_smoke.rs` against the built binary. To test another build, run:
 
 ```sh
-cargo build --locked
-python3 tests/terminal_smoke.py
+KEYSTORE_TUI_BINARY=/absolute/path/to/keystore-tui cargo test --locked --test terminal_smoke
 ```
 
-Use `--binary /absolute/path/to/keystore-tui` to test another build. The
-script's docstring lists what the smoke tests cover; keep it current when
+The module documentation lists what the smoke tests cover; keep it current when
 adding or changing them. For TUI
 changes, also check rendering, input, and terminal restoration by hand in an
 interactive terminal. CI (`.github/workflows/rust.yml`) runs these automated
