@@ -55,14 +55,21 @@ certificate requests (`.csr`, `.p10`). Java truststores named `cacerts` or
 `jssecacerts` also appear without a file extension. The first directory or
 file is selected when a directory opens.
 
+Type the start of a name to list only the entries that begin with it, ignoring
+case. `../` is hidden while you filter, and each directory you enter starts
+without a filter. Every letter, including `j`, `k`, and `q`, is typed into the
+filter.
+
 | Key | Action in the file browser |
 | --- | --- |
-| `Up` / `Down` or `k` / `j` | Move the selection, wrapping at either end (including `../`) |
+| Characters | Add to the name filter |
+| `Backspace` | Delete the last filter character |
+| `Up` / `Down` | Move the selection, wrapping at either end (including `../`) |
 | `Home` / `End` | Jump to the first / last entry |
 | `Enter` | Enter a directory or select a file |
 | `Right` | Enter the selected directory |
-| `Left` / `Backspace` or `Enter` on `../` | Go to the parent directory |
-| `Esc` | Cancel and keep the previous selection |
+| `Left` or `Enter` on `../` | Go to the parent directory |
+| `Esc` | Clear the filter; with no filter, cancel and keep the previous selection |
 
 After you select a file, type the keystore password and press `Enter`. Input is
 masked, `Backspace` deletes a character, and `Esc` cancels. A keystore with an
@@ -199,8 +206,8 @@ the save fails with a red message and you can choose another name.
 
 | Key | Quits from |
 | --- | --- |
-| `q` | The file browser, entry list (when not typing a filter), or detail view (when not typing an export name) |
+| `q` | The entry list (when not typing a filter) or detail view (when not typing an export name) |
 | `Esc` | The entry list, when not typing a filter |
-| `Ctrl+C` | Any view, including the password prompt and while typing a filter or export name |
+| `Ctrl+C` | Any view, including the file browser, the password prompt, and while typing a filter or export name |
 
 The terminal is restored when the app exits.

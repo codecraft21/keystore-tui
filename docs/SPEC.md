@@ -88,6 +88,17 @@ any existing incomplete-entry warnings.
   `../` takes part in the wrap.
 - Each directory opens with its first directory or file selected. When it has
   none, `../` is selected.
+- Typing printable characters (without Ctrl or Alt) builds a name filter, shown
+  below the directory path. Only entries whose name starts with the filter,
+  ignoring case, are listed; `../` is hidden while the filter is non-empty.
+  Selection moves and wraps within the listed entries. The selected entry stays
+  selected while it is still listed; otherwise the first listed entry other than
+  `../` is selected, or nothing when no entry matches. Nothing opens until
+  `Enter`.
+- While the browser is open, letters such as `j`, `k`, and `q` are typed into
+  the filter. `Backspace` deletes the last filter character and never changes
+  directory; `Left` opens the parent. `Esc` clears a non-empty filter and
+  otherwise closes the browser. Each directory opened starts with no filter.
 - Cancelling the browser keeps the keystore that was already loaded.
 
 ## Loading and validation
@@ -461,8 +472,9 @@ any existing incomplete-entry warnings.
 
 ## Quitting and terminal restoration
 
-- `q` quits from the browser, the entry list, and the detail view, except while
-  an export name is being typed; see [Exporting](#exporting).
+- `q` quits from the entry list and the detail view, except while an export
+  name is being typed; see [Exporting](#exporting). In the file browser, `q` is
+  typed into the name filter; see [File selection](#file-selection).
 - `Esc` quits from the entry list.
 - While a filter is being typed, `q` and `Esc` edit the filter instead; see
   [Filtering](#filtering).

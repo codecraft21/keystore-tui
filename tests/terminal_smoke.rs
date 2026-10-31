@@ -24,6 +24,9 @@
 //!   `Esc` cancels the prompt.
 //! - The `keytool` certificate request fixture: its signature is verified and it
 //!   exports as PEM.
+//! - The file browser's prefix filter: `q` is typed into it, matching ignores
+//!   case, `Esc` clears it and then closes the browser, and `Enter` opens the
+//!   only match.
 //! - `--version` and `--help` print and exit without starting the app.
 //! - `q`, `Esc`, and `Ctrl+C` (including while typing a filter) restore terminal
 //!   modes, leave the alternate screen, and show the cursor again.
@@ -754,6 +757,32 @@ fn entry_selection_wraps_with_arrow_keys() {
     app.send(b"\x1b");
     app.expect(&["3 entries | Sort: alias"]);
     app.send(b"q");
+    app.assert_restored();
+}
+
+#[test]
+fn picker_filters_by_typed_prefix() {
+    let directory = TempDir::new();
+    fs::write(directory.join("alpha.jks"), empty_password_fixture()).unwrap();
+    fs::write(directory.join("quux.jks"), empty_password_fixture()).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[]);
+    app.expect(&["No keystore selected"]);
+    app.send(b"o");
+    app.expect(&["> alpha.jks", "quux.jks"]);
+    app.send(b"qu"); // `q` is typed into the filter, not a quit.
+    app.expect(&["Filter: qu", "> quux.jks"]);
+    assert_eq!(app.exited(), None);
+    assert!(!app.screen().contains("alpha.jks"));
+    app.send(b"\x1b"); // Clears the filter, keeping the selection.
+    app.expect(&["alpha.jks", "> quux.jks", "../"]);
+    assert!(!app.screen().contains("Filter:"));
+    app.send(b"\x1b"); // Closes the browser.
+    app.expect(&["No keystore selected"]);
+    app.send(b"o");
+    app.expect(&["> alpha.jks"]);
+    app.send(b"QU\r");
+    app.expect(&["root-cert", "Path:", "quux.jks"]);
+    app.send(b"\x03");
     app.assert_restored();
 }
 
