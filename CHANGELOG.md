@@ -5,6 +5,8 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- Keep PKCS12 trusted certificates visible when another certificate or key
+  shares their alias, including aliases that differ only in case.
 - Reject deeply nested JCEKS superclass descriptors instead of crashing and
   leaving the terminal in raw mode.
 - Show the opened file's path in the detail view, including chain diagnostics,

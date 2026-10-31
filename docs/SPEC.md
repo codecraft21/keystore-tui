@@ -156,7 +156,9 @@ any existing incomplete-entry warnings.
   listed under the subject name (common name, else the full subject) of the
   certificate sharing its local key ID, else as `Private key N`.
 - Certificates marked with Java's trusted-key-usage attribute are `Trusted
-  certificate` entries, named by their friendly name. A certificate without it
+  certificate` entries, named by their friendly name. Every such certificate
+  is listed, even if another certificate or key has the same name or a name
+  differing only in case. A certificate without it
   is listed as a `Certificate` entry unless it is part of a private key's
   chain. Such an entry is named by its friendly name, else its subject name,
   else `Certificate N`.
