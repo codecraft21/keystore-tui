@@ -3,6 +3,31 @@
 
 Run `cargo build --locked`, then `python3 tests/terminal_smoke.py`.
 Requires Python 3 and a Unix terminal API (including Linux/WSL); no pip packages.
+Pass `--binary /absolute/path/to/keystore-tui` to test another build.
+
+Coverage (keep this list in step with the tests):
+
+- Opening a public-certificate fixture with an empty password: detail
+  navigation, scrolling, signature checks, fingerprints, extensions, the file
+  path, resizing, and returning to the list.
+- The hidden startup password prompt for JKS, JCEKS, and PKCS12 fixtures,
+  including the no-MAC `encrypted-no-mac.p12`; a wrong password, `Ctrl+C`, or
+  `Esc` there exits without starting the app.
+- `empty-password.p12` and the no-MAC `passwordless.p12` open without a prompt.
+- A missing, invalid, or malformed path shows a warning, a path with spaces
+  opens, and extra arguments print usage.
+- PEM, DER, and request files given at startup open straight into their
+  details; the chain diagnostics view opens and closes.
+- A three-entry store, built at runtime from copies of the certificate:
+  entry selection wrapping with the arrow keys, filtering (including `q` typed
+  into the filter and `Esc` cancelling it), and sorting.
+- Exporting a PEM certificate file: `q` is typed into the export name and
+  `Esc` cancels the prompt.
+- The `keytool` certificate request fixture: its signature is verified and it
+  exports as PEM.
+- `--version` and `--help` print and exit without starting the app.
+- `q`, `Esc`, and `Ctrl+C` (including while typing a filter) restore terminal
+  modes, leave the alternate screen, and show the cursor again.
 """
 
 import argparse
@@ -521,7 +546,9 @@ def triage_keystore():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--binary", type=Path, default=TerminalSmoke.binary)
     arguments = parser.parse_args()
     TerminalSmoke.binary = arguments.binary.resolve()

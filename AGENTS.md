@@ -35,7 +35,9 @@ cargo build --locked
 python3 tests/terminal_smoke.py
 ```
 
-Use `--binary /absolute/path/to/keystore-tui` to test another build. For TUI
+Use `--binary /absolute/path/to/keystore-tui` to test another build. The
+script's docstring lists what the smoke tests cover; keep it current when
+adding or changing them. For TUI
 changes, also check rendering, input, and terminal restoration by hand in an
 interactive terminal. CI (`.github/workflows/rust.yml`) runs these automated
 checks on Linux for pushes to `main` and PRs; release CI also runs `dist plan` on PRs.
