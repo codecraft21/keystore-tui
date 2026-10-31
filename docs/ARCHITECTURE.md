@@ -26,7 +26,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/entry_details/request.rs` | A certificate request's details, shown in place of a hierarchy |
 | `src/export.rs` | The export name prompt and writing PEM/DER certificate and request files |
 | `src/test_support.rs`, `src/tests.rs` | Unit-test helpers, synthetic keystores, and tests |
-| `tests/terminal_smoke.py` | PTY smoke tests against the built binary |
+| `tests/terminal_smoke.rs` | Unix PTY smoke tests against the built binary |
 | `tests/fixtures/` | Generated keystore fixtures; see its `README.md` for how they were made |
 | `dist-workspace.toml`, `.github/workflows/release.yml` | Release configuration for [`dist`](https://github.com/axodotdev/cargo-dist) and the workflow it generates |
 | `.github/workflows/publish-crates.yml` | The crates.io publish job that `release.yml` calls |
@@ -39,4 +39,7 @@ Dependencies are deliberately few:
 - `crown` for ASN.1, PEM, X.509, PKCS#7, PKCS12 (MAC and PBE), and signature
   verification (certificates and requests).
 - `zeroize` for wiping passwords.
+
+The PTY smoke tests also use `rustix` (Unix only, a dev-dependency) for
+pseudo-terminals; crossterm already depends on it.
 

@@ -13,7 +13,7 @@ categories = ["command-line-utilities", "cryptography"]
 include = [
     "/src",
     "/tests/fixtures",
-    "/tests/terminal_smoke.py",
+    "/tests/terminal_smoke.rs",
     "/docs/SPEC.md",
     "/docs/REFERENCE.md",
     "/Cargo.toml",
@@ -28,6 +28,10 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 sha1 = { version = "0.10.7", default-features = false }
 zeroize = "1"
 crown = { version = "0.31.1", default-features = false, features = ["alloc"] }
+
+# The PTY smoke tests (tests/terminal_smoke.rs); already a crossterm dependency.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1.1.5", default-features = false, features = ["std", "event", "process", "pty", "termios"] }
 
 # The profile that 'dist' will build with
 [profile.dist]
