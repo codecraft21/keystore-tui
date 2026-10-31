@@ -133,7 +133,7 @@ any existing incomplete-entry warnings.
 - A secret key that is not a `com.sun.crypto.provider.SealedObjectForKeyProtector`,
   uses serialization features Java does not write for sealed keys (enums, proxy
   classes, externalizable objects, resets, or exceptions), or nests more than 32
-  levels deep is reported as an error.
+  levels deep (including superclass descriptors) is reported as an error.
 - Secret-key entries in a JKS file are an error, as they are in Java.
 
 ### PKCS12 compatibility
