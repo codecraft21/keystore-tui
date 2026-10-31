@@ -22,6 +22,11 @@ All notable changes to keystore-tui are listed here. Versions follow
   that could not be typed.
 - The "No keystore selected" hint now mentions Java truststores named
   `cacerts` or `jssecacerts`, matching the file browser.
+- Fix exports from a file opened through a relative path, such as
+  `keystore-tui certs/server.pem`, which saved to `certs/certs/` instead of the
+  suggested folder. The suggested name now shows the folder as an absolute path.
+- Fix the file browser failing to open when the open file was given as a bare
+  name, such as `keystore-tui store.jks`.
 
 ## 1.0.1
 

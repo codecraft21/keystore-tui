@@ -197,8 +197,8 @@ impl EntryDetails {
             KeyCode::Esc => return true,
             KeyCode::Char(letter @ ('x' | 'X')) => {
                 if let Some(scope) = self.export_scope(letter == 'X') {
-                    let directory = self.path.parent().unwrap_or(Path::new("."));
-                    self.export = Some(ExportPrompt::new(scope, directory, &self.alias));
+                    let directory = path_bar::directory(&self.path);
+                    self.export = Some(ExportPrompt::new(scope, &directory, &self.alias));
                 }
             }
             code => self.handle_key(code),

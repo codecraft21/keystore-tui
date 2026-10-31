@@ -364,8 +364,7 @@ impl App {
         let directory = self
             .keystore_path
             .as_deref()
-            .and_then(|path| path.parent())
-            .map_or_else(std::env::current_dir, |path| Ok(path.to_path_buf()));
+            .map_or_else(std::env::current_dir, |path| Ok(path_bar::directory(path)));
 
         match directory.and_then(|path| FilePicker::new(&path)) {
             Ok(picker) => {

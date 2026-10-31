@@ -78,7 +78,8 @@ any existing incomplete-entry warnings.
 ## File selection
 
 - The browser starts in the working directory. If a keystore is open, it starts
-  in that keystore's directory.
+  in that keystore's directory, which for a bare file name is the working
+  directory.
 - It lists directories, then files whose extension is `.jks`, `.jceks`, `.p12`,
   `.pfx`, `.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`, `.csr`, or `.p10`
   (case-insensitive). It also lists the Java truststore names `cacerts` and
@@ -419,7 +420,7 @@ any existing incomplete-entry warnings.
   request and `X` does nothing.
 - A prompt replaces the detail shortcuts. It suggests `<alias>.pem`,
   `<alias>-chain.pem`, or `<alias>.csr` for a request, in the open file's
-  directory. Characters other than
+  directory, shown as an absolute path. Characters other than
   letters, digits, `-`, `_`, and `.` in the alias become `_`, and a name that
   already exists gets a number, such as `server-2.pem`.
 - While the prompt is open, every character without `Ctrl` or `Alt` is typed
