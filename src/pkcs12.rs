@@ -182,22 +182,16 @@ impl Store {
                         continue;
                     }
                     if let Some(alias) = bag.friendly_name() {
-                        if !entries
-                            .iter()
-                            .any(|entry| entry.alias.eq_ignore_ascii_case(&alias))
-                        {
-                            let (certificates, chain_warning) =
-                                certificate::details::chain(der, &pool);
-                            entries.push(KeystoreEntry {
-                                alias,
-                                certificate: certificate::summarize(der),
-                                content: Content::Certificates {
-                                    kind: Kind::TrustedCertificate,
-                                    certificates,
-                                },
-                                chain_warning,
-                            });
-                        }
+                        let (certificates, chain_warning) = certificate::details::chain(der, &pool);
+                        entries.push(KeystoreEntry {
+                            alias,
+                            certificate: certificate::summarize(der),
+                            content: Content::Certificates {
+                                kind: Kind::TrustedCertificate,
+                                certificates,
+                            },
+                            chain_warning,
+                        });
                     } else {
                         incomplete = true;
                     }
@@ -1058,6 +1052,74 @@ mod tests {
                 ("named", "Certificate", 1),
             ]
         );
+    }
+
+    #[test]
+    fn trusted_certificates_with_colliding_aliases_remain_visible() {
+        use crate::test_support::metadata_certificate;
+        use crown::x509::attribute::Attribute;
+
+        let first = metadata_certificate("first", "first", &[1], &[]);
+        let second = metadata_certificate("second", "second", &[2], &[]);
+        let trusted = |der: &[u8], alias| {
+            raw_certificate(
+                der,
+                vec![
+                    friendly_name(alias),
+                    Attribute::new(
+                        ObjectIdentifier::new(TRUSTED_KEY_USAGE).unwrap(),
+                        vec![der::oid(
+                            &ObjectIdentifier::new(&[2, 5, 29, 37, 0]).unwrap(),
+                        )],
+                    ),
+                ],
+            )
+        };
+        for alias in ["shared", "SHARED"] {
+            let data = synthetic(vec![trusted(&first, "shared"), trusted(&second, alias)]);
+            let verified = parse(&data).unwrap().verify("changeit").unwrap();
+            assert!(!verified.incomplete);
+            assert_eq!(verified.entries.len(), 2);
+            let mut expected = vec![("shared", first.clone()), (alias, second.clone())];
+            expected.sort_by(|a, b| a.0.cmp(b.0));
+            for (entry, (alias, der)) in verified.entries.iter().zip(expected) {
+                assert_eq!(entry.alias, alias);
+                assert_eq!(entry.kind(), "Trusted certificate");
+                assert_eq!(entry.certificates(), [der]);
+            }
+
+            // A name shared with a key must not hide a trusted certificate either.
+            let key = SafeBag {
+                bag: Bag::ShroudedKey(EncryptedPrivateKeyInfo {
+                    algorithm: AlgorithmIdentifier::with_null(
+                        ObjectIdentifier::new(oid::OID_PBES2).unwrap(),
+                    ),
+                    encrypted_data: vec![1, 2, 3],
+                }),
+                attributes: vec![friendly_name("shared")],
+            };
+            let mut secret = secret_bag();
+            secret.attributes = vec![friendly_name("shared")];
+            for other in [key, secret] {
+                let kind = if matches!(other.bag, Bag::ShroudedKey(_)) {
+                    "Private key"
+                } else {
+                    "Secret key"
+                };
+                let data = synthetic(vec![other, trusted(&second, alias)]);
+                let verified = parse(&data).unwrap().verify("changeit").unwrap();
+                assert!(!verified.incomplete);
+                assert_eq!(verified.entries.len(), 2);
+                assert!(verified.entries.iter().any(|entry| entry.kind() == kind));
+                let certificate = verified
+                    .entries
+                    .iter()
+                    .find(|entry| entry.kind() == "Trusted certificate")
+                    .unwrap();
+                assert_eq!(certificate.alias, alias);
+                assert_eq!(certificate.certificates(), std::slice::from_ref(&second));
+            }
+        }
     }
 
     #[test]

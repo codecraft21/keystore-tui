@@ -84,6 +84,9 @@ The main view lists the keystore's entries, sorted by alias. The status bar
 shows the path of the open keystore, and the table's bottom border shows the
 entry count, any filter, and the sort order.
 
+Entries sharing an alias remain separate rows, including PKCS12 trusted
+certificates whose names match another certificate or key.
+
 | Column | Shows |
 | --- | --- |
 | Alias | The entry alias |
