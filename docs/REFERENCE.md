@@ -52,7 +52,8 @@ directory, or in the current file's directory when you open another file. It
 shows directories first, then keystores (`.jks`, `.jceks`, `.p12`, `.pfx`),
 certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`), and
 certificate requests (`.csr`, `.p10`). Java truststores named `cacerts` or
-`jssecacerts` also appear without a file extension.
+`jssecacerts` also appear without a file extension. The first directory or
+file is selected when a directory opens.
 
 | Key | Action in the file browser |
 | --- | --- |

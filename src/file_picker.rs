@@ -48,6 +48,9 @@ impl FilePicker {
                 .cmp(&a.is_directory)
                 .then_with(|| a.path.file_name().cmp(&b.path.file_name()))
         });
+        // Select the first file or folder rather than `../`; with nothing
+        // else listed, select `../` (or nothing at the filesystem root).
+        let first = usize::from(directory.parent().is_some() && !entries.is_empty());
         if let Some(parent) = directory.parent() {
             entries.insert(
                 0,
@@ -58,7 +61,7 @@ impl FilePicker {
             );
         }
 
-        let selection = ListState::default().with_selected((!entries.is_empty()).then_some(0));
+        let selection = ListState::default().with_selected((!entries.is_empty()).then_some(first));
         Ok(Self {
             directory,
             entries,

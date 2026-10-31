@@ -685,12 +685,11 @@ fn startup_empty_password() {
     }
 }
 
-/// Open a file through the picker: it lists the parent directory first.
+/// Open a file through the picker: it selects the first file or folder.
 fn open_from_picker(app: &mut PtyApp, name: &str) {
     app.expect(&["No keystore selected"]);
     app.send(b"o");
     app.expect(&[name]);
-    app.send(b"\x1b[B"); // Skip the parent-directory row.
     app.send(b"\r");
 }
 
