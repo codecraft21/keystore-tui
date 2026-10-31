@@ -6,7 +6,8 @@ All notable changes to keystore-tui are listed here. Versions follow
 ## Unreleased
 
 - Keep PKCS12 trusted certificates visible when another certificate or key
-  shares their alias, including aliases that differ only in case.
+  shares their alias, including aliases that differ only in case. Identical
+  copies of a trusted certificate under the same alias are listed once.
 - Reject deeply nested JCEKS superclass descriptors instead of crashing and
   leaving the terminal in raw mode.
 - Show the opened file's path in the detail view, including chain diagnostics,
@@ -28,7 +29,8 @@ All notable changes to keystore-tui are listed here. Versions follow
   `cacerts` or `jssecacerts`, matching the file browser.
 - Fix exports from a file opened through a relative path, such as
   `keystore-tui certs/server.pem`, which saved to `certs/certs/` instead of the
-  suggested folder. The suggested name now shows the folder as an absolute path.
+  suggested folder. The suggested name now shows the folder as an absolute path,
+  with any `..` resolved.
 - Fix the file browser failing to open when the open file was given as a bare
   name, such as `keystore-tui store.jks`.
 

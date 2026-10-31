@@ -182,6 +182,21 @@ impl Store {
                         continue;
                     }
                     if let Some(alias) = bag.friendly_name() {
+                        // An identical copy of a trusted certificate already
+                        // listed under the same name adds nothing.
+                        if entries.iter().any(|entry| {
+                            entry.alias == alias
+                                && matches!(
+                                    entry.content,
+                                    Content::Certificates {
+                                        kind: Kind::TrustedCertificate,
+                                        ..
+                                    }
+                                )
+                                && entry.certificates().first().map(Vec::as_slice) == Some(der)
+                        }) {
+                            continue;
+                        }
                         let (certificates, chain_warning) = certificate::details::chain(der, &pool);
                         entries.push(KeystoreEntry {
                             alias,
@@ -1120,6 +1135,38 @@ mod tests {
                 assert_eq!(certificate.certificates(), std::slice::from_ref(&second));
             }
         }
+    }
+
+    #[test]
+    fn identical_trusted_certificates_are_listed_once() {
+        use crate::test_support::metadata_certificate;
+        use crown::x509::attribute::Attribute;
+
+        let der = metadata_certificate("ca", "ca", &[1], &[]);
+        let trusted = |alias| {
+            raw_certificate(
+                &der,
+                vec![
+                    friendly_name(alias),
+                    Attribute::new(
+                        ObjectIdentifier::new(TRUSTED_KEY_USAGE).unwrap(),
+                        vec![der::oid(
+                            &ObjectIdentifier::new(&[2, 5, 29, 37, 0]).unwrap(),
+                        )],
+                    ),
+                ],
+            )
+        };
+        let data = synthetic(vec![trusted("ca"), trusted("ca")]);
+        let verified = parse(&data).unwrap().verify("changeit").unwrap();
+        assert!(!verified.incomplete);
+        assert_eq!(verified.entries.len(), 1);
+        assert_eq!(verified.entries[0].alias, "ca");
+
+        // The same certificate under names differing in case stays separate.
+        let data = synthetic(vec![trusted("ca"), trusted("CA")]);
+        let verified = parse(&data).unwrap().verify("changeit").unwrap();
+        assert_eq!(verified.entries.len(), 2);
     }
 
     #[test]

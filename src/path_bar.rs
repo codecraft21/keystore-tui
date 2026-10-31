@@ -1,7 +1,7 @@
 //! The opened file's path, shown below the entry table and the detail view,
 //! and the directory it is in.
 
-use std::path::{self, Path, PathBuf};
+use std::path::{self, Component, Path, PathBuf};
 
 use ratatui::{style::Stylize, text::Line};
 
@@ -22,5 +22,17 @@ pub fn directory(path: &Path) -> PathBuf {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    path::absolute(parent).unwrap_or_else(|_| parent.to_path_buf())
+    let Ok(absolute) = path::absolute(parent) else {
+        return parent.to_path_buf();
+    };
+    // Unix keeps `..` in absolute paths. Resolving it lexically would be
+    // wrong after a symbolic link, so ask the file system instead.
+    if absolute
+        .components()
+        .any(|part| part == Component::ParentDir)
+    {
+        absolute.canonicalize().unwrap_or(absolute)
+    } else {
+        absolute
+    }
 }
