@@ -5,6 +5,11 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- Type in the file browser to list only entries whose name starts with the
+  typed text, ignoring case. `Backspace` deletes a filter character and `Esc`
+  clears the filter before closing the browser. In the browser, `j`, `k`, and
+  `q` are now typed into the filter (use `Up`/`Down` to move and `Ctrl+C` to
+  quit), and `Backspace` no longer goes to the parent directory (use `Left`).
 - The file browser selects the first directory or file when a directory opens,
   instead of the `../` entry.
 - Keep PKCS12 trusted certificates visible when another certificate or key

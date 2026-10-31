@@ -185,23 +185,58 @@ fn browser_cycles_through_parent_directories_and_files_in_both_directions() {
     fs::create_dir(directory.path().join("nested")).unwrap();
     fs::write(directory.path().join("store.jks"), empty_keystore()).unwrap();
 
-    for (up, down) in [
-        (KeyCode::Up, KeyCode::Down),
-        (KeyCode::Char('k'), KeyCode::Char('j')),
-    ] {
-        let mut app = browsing(directory.path());
-        assert!(screen(&mut app, 100, 24).contains("> nested/"));
-        for expected in ["../", "store.jks", "nested/"] {
-            assert!(!press(&mut app, up));
-            assert!(screen(&mut app, 100, 24).contains(&format!("> {expected}")));
-        }
-        for expected in ["store.jks", "../", "nested/"] {
-            assert!(!press(&mut app, down));
-            assert!(screen(&mut app, 100, 24).contains(&format!("> {expected}")));
-        }
-        assert!(app.keystore_path.is_none());
-        assert!(app.file_picker.is_some());
+    let mut app = browsing(directory.path());
+    assert!(screen(&mut app, 100, 24).contains("> nested/"));
+    for expected in ["../", "store.jks", "nested/"] {
+        assert!(!press(&mut app, KeyCode::Up));
+        assert!(screen(&mut app, 100, 24).contains(&format!("> {expected}")));
     }
+    for expected in ["store.jks", "../", "nested/"] {
+        assert!(!press(&mut app, KeyCode::Down));
+        assert!(screen(&mut app, 100, 24).contains(&format!("> {expected}")));
+    }
+    assert!(app.keystore_path.is_none());
+    assert!(app.file_picker.is_some());
+}
+
+#[test]
+fn browser_filters_by_typed_prefix() {
+    let directory = TestDirectory::new();
+    let nested = directory.path().join("query");
+    fs::create_dir(&nested).unwrap();
+    fs::write(nested.join("inner.jks"), "").unwrap();
+    fs::write(directory.path().join("alpha.jks"), "").unwrap();
+    fs::write(directory.path().join("Quux.p12"), "").unwrap();
+    let mut app = browsing(directory.path());
+
+    // `q` is typed rather than quitting, and matching ignores case.
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    let rendered = screen(&mut app, 100, 24);
+    assert!(rendered.contains("Filter: q"), "{rendered}");
+    assert!(rendered.contains("> query/"));
+    assert!(rendered.contains("Quux.p12"));
+    assert!(!rendered.contains("alpha.jks"));
+    assert!(!rendered.contains("../"));
+
+    press(&mut app, KeyCode::Char('z'));
+    assert!(screen(&mut app, 100, 24).contains("No entries start with \"qz\"."));
+    press(&mut app, KeyCode::Backspace);
+
+    // Entering a directory starts it unfiltered.
+    press(&mut app, KeyCode::Enter);
+    let rendered = screen(&mut app, 100, 24);
+    assert!(!rendered.contains("Filter:"), "{rendered}");
+    assert!(rendered.contains("> inner.jks"));
+    press(&mut app, KeyCode::Left);
+
+    // Esc first clears the filter, then closes the browser.
+    press(&mut app, KeyCode::Char('A'));
+    assert!(screen(&mut app, 100, 24).contains("> alpha.jks"));
+    assert!(!press(&mut app, KeyCode::Esc));
+    assert!(app.file_picker.is_some());
+    assert!(screen(&mut app, 100, 24).contains("../"));
+    assert!(!press(&mut app, KeyCode::Esc));
+    assert!(app.file_picker.is_none());
 }
 
 #[test]
@@ -224,12 +259,7 @@ fn browser_wrapping_scrolls_between_ends_of_a_long_list() {
 fn browser_cycles_safely_with_only_the_parent_entry() {
     let directory = TestDirectory::new();
     let mut app = browsing(directory.path());
-    for key in [
-        KeyCode::Up,
-        KeyCode::Down,
-        KeyCode::Char('k'),
-        KeyCode::Char('j'),
-    ] {
+    for key in [KeyCode::Up, KeyCode::Down, KeyCode::Home, KeyCode::End] {
         assert!(!press(&mut app, key));
         assert!(screen(&mut app, 100, 24).contains("> ../"));
     }
@@ -567,7 +597,7 @@ fn directories_can_be_entered_and_left_before_selecting() {
     assert!(app.keystore_path.is_none());
     assert!(screen(&mut app, 200, 24).contains("nested-keystore.jks"));
 
-    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Left);
     let parent = screen(&mut app, 200, 24);
     assert!(parent.contains("nested/"));
     assert!(!parent.contains("nested-keystore.jks"));

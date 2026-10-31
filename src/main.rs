@@ -164,8 +164,10 @@ impl App {
             self.handle_password(key);
         } else if let Some(picker) = &mut self.file_picker {
             if key.code == KeyCode::Esc {
-                self.file_picker = None;
-            } else if let Some(path) = picker.handle_key(key.code) {
+                if !picker.clear_filter() {
+                    self.file_picker = None;
+                }
+            } else if let Some(path) = picker.handle_key(key) {
                 self.file_picker = None;
                 self.open_file(path);
             }
@@ -197,6 +199,7 @@ impl App {
     /// Whether letter keys are typed as text rather than used as shortcuts.
     fn typing(&self) -> bool {
         self.password_prompt.is_some()
+            || self.file_picker.is_some()
             || self.editing_filter
             || self
                 .entry_details
