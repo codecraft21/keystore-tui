@@ -332,7 +332,7 @@ impl EntryDetails {
         let footer_height = u16::try_from(footer.line_count(area.width))
             .unwrap_or(u16::MAX)
             .min(area.height / 2);
-        let [header, content, path_bar, footer_area] = Layout::vertical([
+        let [header, content, path_area, footer_area] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(1),
@@ -404,7 +404,7 @@ impl EntryDetails {
         .unwrap_or(u16::MAX);
         self.scroll = self.scroll.min(self.max_scroll);
         frame.render_widget(paragraph.scroll((self.scroll, 0)).block(block), details);
-        frame.render_widget(path_bar::line(&self.path), path_bar);
+        frame.render_widget(path_bar::line(&self.path), path_area);
         frame.render_widget(footer, footer_area);
     }
 
