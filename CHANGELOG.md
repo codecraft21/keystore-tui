@@ -5,6 +5,8 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- The file browser selects the first directory or file when a directory opens,
+  instead of the `../` entry.
 - Keep PKCS12 trusted certificates visible when another certificate or key
   shares their alias, including aliases that differ only in case. Identical
   copies of a trusted certificate under the same alias are listed once.

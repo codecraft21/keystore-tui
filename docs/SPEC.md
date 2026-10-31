@@ -86,6 +86,8 @@ any existing incomplete-entry warnings.
   `jssecacerts`, case-insensitively. Directories come first.
 - A `../` entry leads to the parent directory. Selection wraps at both ends, and
   `../` takes part in the wrap.
+- Each directory opens with its first directory or file selected. When it has
+  none, `../` is selected.
 - Cancelling the browser keeps the keystore that was already loaded.
 
 ## Loading and validation

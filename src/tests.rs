@@ -190,12 +190,12 @@ fn browser_cycles_through_parent_directories_and_files_in_both_directions() {
         (KeyCode::Char('k'), KeyCode::Char('j')),
     ] {
         let mut app = browsing(directory.path());
-        assert!(screen(&mut app, 100, 24).contains("> ../"));
-        for expected in ["store.jks", "nested/", "../"] {
+        assert!(screen(&mut app, 100, 24).contains("> nested/"));
+        for expected in ["../", "store.jks", "nested/"] {
             assert!(!press(&mut app, up));
             assert!(screen(&mut app, 100, 24).contains(&format!("> {expected}")));
         }
-        for expected in ["nested/", "store.jks", "../"] {
+        for expected in ["store.jks", "../", "nested/"] {
             assert!(!press(&mut app, down));
             assert!(screen(&mut app, 100, 24).contains(&format!("> {expected}")));
         }
@@ -211,6 +211,8 @@ fn browser_wrapping_scrolls_between_ends_of_a_long_list() {
         fs::write(directory.path().join(format!("store-{index:02}.jks")), "").unwrap();
     }
     let mut app = browsing(directory.path());
+    assert!(screen(&mut app, 100, 20).contains("> store-00.jks"));
+    press(&mut app, KeyCode::Home);
     assert!(screen(&mut app, 100, 20).contains("> ../"));
     press(&mut app, KeyCode::Up);
     assert!(screen(&mut app, 100, 20).contains("> store-39.jks"));
@@ -561,7 +563,6 @@ fn directories_can_be_entered_and_left_before_selecting() {
     fs::write(&path, empty_keystore()).unwrap();
     let mut app = browsing(directory.path());
 
-    press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Right);
     assert!(app.keystore_path.is_none());
     assert!(screen(&mut app, 200, 24).contains("nested-keystore.jks"));
@@ -571,9 +572,9 @@ fn directories_can_be_entered_and_left_before_selecting() {
     assert!(parent.contains("nested/"));
     assert!(!parent.contains("nested-keystore.jks"));
 
-    press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Enter);
-    // The first entry is ../, so Enter also navigates to the parent.
+    // Home selects ../, so Enter also navigates to the parent.
+    press(&mut app, KeyCode::Home);
     press(&mut app, KeyCode::Enter);
     assert!(!screen(&mut app, 200, 24).contains("nested-keystore.jks"));
 
@@ -676,7 +677,6 @@ fn invalid_file_shows_a_red_error_and_valid_selection_recovers() {
     fs::write(directory.path().join("b-valid.jks"), mixed_keystore()).unwrap();
     let mut app = browsing(directory.path());
 
-    press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Enter);
     assert!(app.file_picker.is_none());
     assert!(app.password_prompt.is_none());
@@ -757,7 +757,6 @@ fn cancelling_a_password_prompt_preserves_the_loaded_entries() {
     fs::write(&original, mixed_keystore()).unwrap();
     fs::write(directory.path().join("b-other.jks"), KEYTOOL_JKS).unwrap();
     let mut app = browsing(directory.path());
-    press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Enter);
     type_password(&mut app, "changeit");
     press(&mut app, KeyCode::Enter);
