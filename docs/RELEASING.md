@@ -48,6 +48,8 @@ token.
 Don't edit `release.yml` by hand. Change `dist-workspace.toml` and run
 `dist generate`, using the `cargo-dist-version` it pins. `dist` is only needed
 for this; it is not a build or test dependency.
+Dependabot leaves `release.yml` out of its GitHub Actions updates for the same
+reason; its actions are updated by upgrading `dist`.
 
 `dist` picks the build runners when the release runs. `dist-workspace.toml`
 overrides the Apple Silicon runner under `[dist.github-custom-runners]`, because
