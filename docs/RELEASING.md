@@ -49,6 +49,13 @@ Don't edit `release.yml` by hand. Change `dist-workspace.toml` and run
 `dist generate`, using the `cargo-dist-version` it pins. `dist` is only needed
 for this; it is not a build or test dependency.
 
+`dist` picks the build runners when the release runs. `dist-workspace.toml`
+overrides the Apple Silicon runner under `[dist.github-custom-runners]`, because
+GitHub retired the `macos-14` runner that `dist` 0.33.1 uses by default. If a
+build job is cancelled at once without a runner, check whether GitHub has
+retired its runner image, and override that target there. A rerun uses the
+workflow and configuration at the tagged commit, so a fix needs a new version.
+
 The workflows need two repository secrets:
 
 - `HOMEBREW_TAP_TOKEN`: a token that can push to `codecraft21/homebrew-tap`.
