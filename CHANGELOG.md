@@ -5,6 +5,10 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- A certificate or certificate request file holding a single entry now opens
+  straight into its details from the file browser too, as it already did from
+  the command line. Files with several certificates now open on the entry list,
+  from the command line as well. Keystores still open on the entry list.
 - Type in the file browser to list only entries whose name starts with the
   typed text, ignoring case. `Backspace` deletes a filter character and `Esc`
   clears the filter before closing the browser. In the browser, `j`, `k`, and

@@ -17,6 +17,9 @@ pub const UNICODE_PASSWORD_JKS: &[u8] = include_bytes!("../tests/fixtures/unicod
 pub const UNICODE_ALIAS_JKS: &[u8] = include_bytes!("../tests/fixtures/unicode-alias.jks");
 pub const KEYTOOL_JCEKS: &[u8] = include_bytes!("../tests/fixtures/trusted-cert.jceks");
 pub const KEYTOOL_REQUEST: &[u8] = include_bytes!("../tests/fixtures/keytool-request.csr");
+pub const TRUSTED_CERT_PEM: &[u8] = include_bytes!("../tests/fixtures/trusted-cert.pem");
+pub const TRUSTED_CERT_CRT: &[u8] = include_bytes!("../tests/fixtures/trusted-cert.crt");
+pub const BUNDLE_PEM: &[u8] = include_bytes!("../tests/fixtures/bundle.pem");
 pub const OPENSSL_REQUEST_DER: &[u8] = include_bytes!("../tests/fixtures/openssl-request.der");
 
 /// The DER certificate stored in `KEYTOOL_JKS` under the alias `root-cert`.

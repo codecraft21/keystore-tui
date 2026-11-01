@@ -435,6 +435,50 @@ fn passwordless_cacerts_opens_without_a_prompt() {
 }
 
 #[test]
+fn single_certificate_files_from_the_browser_open_in_details() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for (name, heading) in [
+        ("trusted-cert.pem", "Certificate hierarchy"),
+        ("trusted-cert.crt", "Certificate hierarchy"),
+        ("keytool-request.csr", "Request details"),
+    ] {
+        let mut app = App::default();
+        app.open_file(fixtures.join(name));
+        assert!(app.error.is_none(), "{name}");
+        assert_eq!(app.entries.len(), 1, "{name}");
+        assert!(app.entry_details.is_some(), "{name}");
+        assert!(screen(&mut app, 100, 30).contains(heading), "{name}");
+        assert!(!press(&mut app, KeyCode::Esc));
+        assert!(app.entry_details.is_none(), "{name}");
+        assert!(screen(&mut app, 100, 30).contains("1 entries | Sort: alias"));
+    }
+
+    // Several certificates, or a single-entry keystore, open on the list.
+    for (name, count) in [("bundle.pem", 2), ("passwordless.p12", 1)] {
+        let mut app = App::default();
+        app.open_file(fixtures.join(name));
+        assert!(app.error.is_none(), "{name}");
+        assert_eq!(app.entries.len(), count, "{name}");
+        assert!(app.entry_details.is_none(), "{name}");
+    }
+}
+
+#[test]
+fn certificate_fixtures_hold_the_keystore_certificate() {
+    assert_eq!(
+        test_support::TRUSTED_CERT_CRT,
+        test_support::fixture_certificate_der()
+    );
+    let file = certificate_file::parse(test_support::TRUSTED_CERT_PEM).unwrap();
+    assert_eq!(file.entries.len(), 1);
+    assert_eq!(file.entries[0].certificate, Some(fixture_summary()));
+    let bundle = certificate_file::parse(test_support::BUNDLE_PEM).unwrap();
+    assert_eq!(bundle.entries.len(), 2);
+    assert_eq!(bundle.entries[0].certificate, Some(fixture_summary()));
+    assert_ne!(bundle.entries[1].certificate, Some(fixture_summary()));
+}
+
+#[test]
 fn encrypted_cacerts_without_mac_prompts_and_allows_password_retry() {
     let directory = TestDirectory::new();
     let path = directory.path().join("cacerts");
@@ -1415,6 +1459,9 @@ fn certificate_files_open_without_a_prompt_in_file_order() {
     assert!(app.error.is_none());
     assert!(app.warning.is_none());
     assert_eq!(shown_aliases(&app), ["JKS TUI test fixture"]);
+    // A single certificate opens straight into its details.
+    assert!(app.entry_details.is_some());
+    press(&mut app, KeyCode::Esc);
 
     let bad = directory.path().join("bad.pem");
     fs::write(
@@ -1441,6 +1488,9 @@ fn certificate_requests_open_without_a_prompt_or_expiry() {
     assert!(app.password_prompt.is_none());
     assert!(app.error.is_none());
     assert_eq!(shown_aliases(&app), ["CSR TUI test fixture"]);
+    // A single request opens straight into its details.
+    assert!(app.entry_details.is_some());
+    press(&mut app, KeyCode::Esc);
     let rendered = screen(&mut app, 120, 24);
     let row = rendered
         .lines()

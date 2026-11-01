@@ -64,9 +64,7 @@ pub(crate) fn prepare(
     let store = match load(&path) {
         Ok(Loaded::Store(store)) => store,
         Ok(Loaded::Certificates(file)) => {
-            app.show_entries(path, file.entries);
-            app.warning = file.skipped.then_some(crate::SKIPPED_WARNING);
-            app.show_selected_details();
+            app.show_certificate_file(path, file);
             return Ok(app);
         }
         Err(error) => {
@@ -165,60 +163,44 @@ mod tests {
     }
 
     #[test]
-    fn certificates_open_directly_in_details() {
-        use crate::test_support::{TestDirectory, fixture_certificate_der};
+    fn single_certificate_files_open_directly_in_details() {
+        use crate::test_support::{
+            BUNDLE_PEM, KEYTOOL_REQUEST, OPENSSL_REQUEST_DER, TRUSTED_CERT_CRT, TRUSTED_CERT_PEM,
+            TestDirectory,
+        };
         use crown::asn1::pem;
 
         let directory = TestDirectory::new();
-        let der = fixture_certificate_der();
-        let certificate = pem::encode("CERTIFICATE", der);
+        let with_private_key = [
+            TRUSTED_CERT_PEM,
+            pem::encode("PRIVATE KEY", b"synthetic, not a key").as_bytes(),
+        ]
+        .concat();
         for (name, data, count, skipped) in [
-            (
-                "certificate with spaces.pem",
-                certificate.as_bytes(),
-                1,
-                false,
-            ),
-            ("certificate.der", der, 1, false),
-            (
-                "bundle.pem",
-                [
-                    certificate.as_str(),
-                    certificate.as_str(),
-                    &pem::encode("PRIVATE KEY", b"synthetic, not a key"),
-                ]
-                .concat()
-                .as_bytes(),
-                2,
-                true,
-            ),
-            (
-                "request.csr",
-                crate::test_support::KEYTOOL_REQUEST,
-                1,
-                false,
-            ),
-            (
-                "request.der",
-                crate::test_support::OPENSSL_REQUEST_DER,
-                1,
-                false,
-            ),
+            ("certificate with spaces.pem", TRUSTED_CERT_PEM, 1, false),
+            ("trusted-cert.crt", TRUSTED_CERT_CRT, 1, false),
+            ("with-key.pem", &with_private_key, 1, true),
+            ("bundle.pem", BUNDLE_PEM, 2, false),
+            ("request.csr", KEYTOOL_REQUEST, 1, false),
+            ("request.der", OPENSSL_REQUEST_DER, 1, false),
         ] {
             let path = directory.path().join(name);
             std::fs::write(&path, data).unwrap();
             let mut app = prepare(Some(path.clone()), || panic!("unexpected prompt")).unwrap();
-            assert_eq!(app.keystore_path, Some(path));
-            assert!(app.startup_warning.is_none());
-            assert_eq!(app.entries.len(), count);
-            assert_eq!(app.warning.is_some(), skipped);
-            assert!(app.entry_details.is_some());
-            assert!(!app.handle_key(ratatui::crossterm::event::KeyEvent::new(
-                KeyCode::Esc,
-                KeyModifiers::NONE,
-            )));
-            assert!(app.entry_details.is_none());
-            assert_eq!(app.visible.len(), count);
+            assert_eq!(app.keystore_path, Some(path), "{name}");
+            assert!(app.startup_warning.is_none(), "{name}");
+            assert_eq!(app.entries.len(), count, "{name}");
+            assert_eq!(app.warning.is_some(), skipped, "{name}");
+            // Only a file with a single entry skips the list.
+            assert_eq!(app.entry_details.is_some(), count == 1, "{name}");
+            if count == 1 {
+                assert!(!app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+                    KeyCode::Esc,
+                    KeyModifiers::NONE,
+                )));
+                assert!(app.entry_details.is_none(), "{name}");
+            }
+            assert_eq!(app.visible.len(), count, "{name}");
         }
     }
 

@@ -34,8 +34,11 @@ There is one attempt: an incorrect password exits with code 1. `Esc`, `Ctrl+C`,
 or `Ctrl+D` cancels and exits non-zero.
 
 Standalone certificates (PEM, DER, or PKCS#7) and certificate requests open
-directly in the detail screen without a password. For files with multiple
-entries, the first entry is shown. Press `Esc` to return to the entry list.
+without a password. A file holding a single certificate or request opens
+directly in the detail screen, both from the command line and from the file
+browser; press `Esc` to return to the entry list. Files with several entries
+open on the entry list. Keystores always open on the entry list, even with a
+single entry.
 
 If the path is missing, unreadable, or not a supported file, the app opens
 normally with a yellow message at the bottom. Use the file browser to open
