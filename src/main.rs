@@ -321,8 +321,7 @@ impl App {
         let keystore = match load(&path) {
             Ok(Loaded::Store(keystore)) => keystore,
             Ok(Loaded::Certificates(file)) => {
-                self.show_entries(path, file.entries);
-                self.warning = file.skipped.then_some(SKIPPED_WARNING);
+                self.show_certificate_file(path, file);
                 return;
             }
             Err(error) => {
@@ -358,6 +357,16 @@ impl App {
         self.entry_details = None;
         self.error = None;
         self.warning = None;
+    }
+
+    /// Lists a standalone certificate file. A file with a single certificate
+    /// or request opens straight into its details; `Esc` returns to the list.
+    fn show_certificate_file(&mut self, path: PathBuf, file: certificate_file::CertificateFile) {
+        self.show_entries(path, file.entries);
+        self.warning = file.skipped.then_some(SKIPPED_WARNING);
+        if self.entries.len() == 1 {
+            self.show_selected_details();
+        }
     }
 
     fn show_verified(&mut self, path: PathBuf, verified: pkcs12::Verified) {

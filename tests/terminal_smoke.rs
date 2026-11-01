@@ -15,13 +15,16 @@
 //! - `empty-password.p12` and the no-MAC `passwordless.p12` open without a prompt.
 //! - A missing, invalid, or malformed path shows a warning, a path with spaces
 //!   opens, and extra arguments print usage.
-//! - PEM, DER, and request files given at startup open straight into their
-//!   details; the chain diagnostics view opens and closes.
+//! - The committed single-certificate PEM and DER (`.crt`) fixtures and the
+//!   request fixture given at startup open straight into their details, and
+//!   `Esc` returns to the list; the two-certificate `bundle.pem` opens on the
+//!   list. The chain diagnostics view opens and closes.
 //! - A three-entry store, built at runtime from copies of the certificate:
 //!   entry selection wrapping with the arrow keys, filtering (including `q` typed
 //!   into the filter and `Esc` cancelling it), and sorting.
-//! - Exporting a PEM certificate file: `q` is typed into the export name and
-//!   `Esc` cancels the prompt.
+//! - Exporting a PEM certificate file opened from the file browser, which goes
+//!   straight to its details: `q` is typed into the export name and `Esc`
+//!   cancels the prompt.
 //! - The `keytool` certificate request fixture: its signature is verified and it
 //!   exports as PEM.
 //! - The file browser's prefix filter: `q` is typed into it, matching ignores
@@ -605,21 +608,20 @@ fn startup_spaces_and_malformed() {
 #[test]
 fn startup_certificate_details() {
     let directory = TempDir::new();
-    let der = fixture_certificate();
-    for (name, data, heading) in [
+    for (name, source, heading) in [
         (
             "certificate with spaces.pem",
-            certificate_pem(&der).into_bytes(),
+            "trusted-cert.pem",
             "Certificate hierarchy",
         ),
-        ("certificate.der", der.clone(), "Certificate hierarchy"),
         (
-            "request.csr",
-            fs::read(fixture("keytool-request.csr")).unwrap(),
-            "Request details",
+            "trusted-cert.crt",
+            "trusted-cert.crt",
+            "Certificate hierarchy",
         ),
+        ("request.csr", "keytool-request.csr", "Request details"),
     ] {
-        fs::write(directory.join(name), data).unwrap();
+        fs::copy(fixture(source), directory.join(name)).unwrap();
         let mut app = PtyApp::spawn(directory.path(), &[OsStr::new(name)]);
         app.expect(&[heading, "[verified]", &format!("{name}'")]);
         assert!(!contains(&app.output, b"Keystore password:"), "{name}");
@@ -628,6 +630,20 @@ fn startup_certificate_details() {
         app.send(b"q");
         app.assert_restored();
     }
+}
+
+#[test]
+fn startup_certificate_bundle_opens_on_the_list() {
+    let directory = TempDir::new();
+    let mut app = PtyApp::spawn(directory.path(), &[fixture("bundle.pem").as_os_str()]);
+    app.expect(&[
+        "JKS TUI test fixture",
+        "example-03",
+        "2 entries | Sort: alias",
+    ]);
+    assert!(!contains(&app.output, b"Certificate hierarchy"));
+    app.send(b"q");
+    app.assert_restored();
 }
 
 #[test]
@@ -860,15 +876,10 @@ fn ctrl_c_while_filtering_restores_terminal() {
 fn certificate_file(exit_key: &[u8]) {
     let pem = certificate_pem(&fixture_certificate());
     let directory = TempDir::new();
-    fs::write(directory.join("bundle.pem"), &pem).unwrap();
+    fs::write(directory.join("certificate.pem"), &pem).unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[]);
-    open_from_picker(&mut app, "bundle.pem");
-    app.expect(&[
-        "JKS TUI test fixture",
-        "Certificate",
-        "1 entries | Sort: alias",
-    ]);
-    app.send(b"\r");
+    // A single certificate opens from the browser straight into its details.
+    open_from_picker(&mut app, "certificate.pem");
     app.expect(&["Certificate hierarchy", "x Export certificate"]);
     app.send(b"x");
     app.expect(&["Save certificate to:"]);
@@ -905,12 +916,6 @@ fn certificate_request_export_then_quit_restores_terminal() {
     fs::write(directory.join("server.csr"), &request).unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[]);
     open_from_picker(&mut app, "server.csr");
-    app.expect(&[
-        "CSR TUI test fixture",
-        "Certificate request",
-        "1 entries | Sort: alias",
-    ]);
-    app.send(b"\r");
     app.expect(&["Request details", "[verified]", "x Export request"]);
     app.send(b"x");
     app.expect(&["Save certificate request to:"]);

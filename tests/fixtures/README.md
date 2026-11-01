@@ -230,6 +230,33 @@ openssl pkcs12 -export -legacy -nokeys -in fixture.pem \
 rm fixture.pem
 ```
 
+`trusted-cert.pem` and `trusted-cert.crt` hold the `root-cert` certificate from
+`trusted-cert.jks` as a standalone PEM file and as a DER file with the `.crt`
+extension. `bundle.pem` holds that certificate followed by `example-03` from
+`example.jks`, so it lists two entries. They are useful for checking that a
+file with a single certificate opens straight into its details while a bundle
+opens on the entry list:
+
+```sh
+cargo run -- tests/fixtures/trusted-cert.pem
+```
+
+Recreate them from this directory with:
+
+```sh
+keytool -exportcert -rfc -alias root-cert -keystore trusted-cert.jks \
+  -storepass changeit -file trusted-cert.pem
+keytool -exportcert -alias root-cert -keystore trusted-cert.jks \
+  -storepass changeit -file trusted-cert.crt
+keytool -exportcert -rfc -alias example-03 -keystore example.jks \
+  -storepass '' -file example-03.pem
+cat trusted-cert.pem example-03.pem > bundle.pem
+rm example-03.pem
+```
+
+Regenerate them whenever `trusted-cert.jks` changes, and `bundle.pem` whenever
+`example.jks` is regenerated.
+
 `keytool-request.csr` and `openssl-request.der` are certificate signing
 requests. The first is a PEM request from `keytool -certreq` for a P-256 key,
 with Subject Alternative Name and Extended Key Usage extensions. The second is

@@ -63,8 +63,8 @@ and terminal settings restored after input.
 
 Standalone certificate files (PEM, DER, and PKCS#7) and PKCS#10 requests use
 the same loader as the file browser and open without prompting for a password.
-Startup selects the first entry and opens its detail screen directly. Escape
-returns to the full entry list, including all entries in a bundle. Skipped-PEM
+A file with exactly one certificate or request opens its detail screen
+directly, as described in [Certificate files](#certificate-files). Skipped-PEM
 block warnings are retained for display on the entry list.
 
 Missing paths, directories, unreadable files, malformed files, and unsupported
@@ -202,6 +202,11 @@ any existing incomplete-entry warnings.
   keeps that order). The alias is the subject common name, else the whole
   subject, else `Certificate N` or `Certificate request N` for its position in
   the file. Requests are never part of a certificate's chain.
+- A file with exactly one certificate or request opens straight into its
+  detail screen, whether it is opened from the command line or the file
+  browser. `Esc` returns to the entry list, which then shows that one entry.
+  A file with several entries opens on the entry list. Keystores always open on
+  the entry list, even with a single entry.
 
 ## Password prompt
 
