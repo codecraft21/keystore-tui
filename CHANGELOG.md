@@ -3,7 +3,10 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## 1.0.2
+## 1.0.3
+
+Version 1.0.2 was tagged but never published, because its release build
+failed. These are its changes.
 
 - A certificate or certificate request file holding a single entry now opens
   straight into its details from the file browser too, as it already did from
