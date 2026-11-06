@@ -7,8 +7,7 @@ updates:
     schedule:
       interval: monthly
     groups:
-      # Ratatui and crossterm usually have to move together; check TUI
-      # rendering by hand after merging these.
+      # Ratatui and crossterm usually have to move together.
       tui:
         patterns:
           - "ratatui*"
