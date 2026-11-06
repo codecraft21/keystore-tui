@@ -1,3 +1,4 @@
+mod canonical_path;
 mod certificate;
 mod certificate_file;
 mod certificate_request;

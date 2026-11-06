@@ -1,2 +1,5 @@
 [env]
 TMPDIR = { value = ".", relative = true, force = true }
+# Windows reads the temporary directory from `TMP`, then `TEMP`.
+TMP = { value = ".", relative = true, force = true }
+TEMP = { value = ".", relative = true, force = true }
