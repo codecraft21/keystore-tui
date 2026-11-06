@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" alt="keystore-tui logo: a terminal prompt with a key as the cursor" width="96">
+
 # keystore-tui
 
 A terminal app for inspecting keystores, certificates, and certificate signing requests.
