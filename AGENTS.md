@@ -41,7 +41,8 @@ changes, also check rendering, input, and terminal restoration by hand in an
 interactive terminal. CI (`.github/workflows/rust.yml`) runs these automated
 checks on Linux for pushes to `main` and PRs, builds with the minimum supported
 Rust from `rust-version`, runs all tests, including the PTY smoke tests, on
-macOS, builds on Windows, and measures test coverage with `cargo llvm-cov` for Codecov; release CI also runs
+macOS, runs the unit tests on Windows, and measures test coverage with
+`cargo llvm-cov` for Codecov; release CI also runs
 `dist plan` on PRs. When changing `rust-version`, update the toolchain in the
 `msrv` job too.
 
@@ -51,7 +52,8 @@ auto-merge for all of them, so they merge once the required checks pass; the
 automated checks, including the PTY smoke tests, stand in for a manual TUI
 check. Merges made this way don't trigger the push workflows on `main`.
 
-Cargo sets `TMPDIR` to the repository root (`.cargo/config.toml`). Fixture
+Cargo sets the temporary directory (`TMPDIR`, and `TMP` and `TEMP` on Windows)
+to the repository root (`.cargo/config.toml`). Fixture
 regeneration tools are not build, test, or runtime dependencies. Before changing
 fixtures, read [their generation instructions](tests/fixtures/README.md).
 Tests needing private-key entries use synthetic bytes at runtime; never commit private keys.

@@ -84,6 +84,10 @@ any existing incomplete-entry warnings.
   `.pfx`, `.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`, `.csr`, or `.p10`
   (case-insensitive). It also lists the Java truststore names `cacerts` and
   `jssecacerts`, case-insensitively. Directories come first.
+- Paths are shown as users type them: on Windows, without the verbatim `\\?\`
+  prefix (`C:\certs`, not `\\?\C:\certs`), unless a path needs it, such as
+  one longer than 259 characters. This applies to the browser's directory, the
+  opened file's path in the status bar, and the export prompt's suggestion.
 - A `../` entry leads to the parent directory. Selection wraps at both ends, and
   `../` takes part in the wrap.
 - Each directory opens with its first directory or file selected. When it has

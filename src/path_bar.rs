@@ -31,7 +31,7 @@ pub fn directory(path: &Path) -> PathBuf {
         .components()
         .any(|part| part == Component::ParentDir)
     {
-        absolute.canonicalize().unwrap_or(absolute)
+        crate::canonical_path::canonicalize(&absolute).unwrap_or(absolute)
     } else {
         absolute
     }

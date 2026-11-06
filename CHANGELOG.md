@@ -3,6 +3,12 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- On Windows, the file browser, the path bar, and the export prompt show paths
+  such as `C:\certs\server.pem` instead of the verbatim form
+  `\\?\C:\certs\server.pem`.
+
 ## 1.0.3
 
 Version 1.0.2 was tagged but never published, because its release build

@@ -42,8 +42,8 @@ jobs:
 
   # Builds and tests on the other release platforms. macOS runs all tests,
   # including the PTY smoke tests. Windows builds the app, including the
-  # Windows crossterm backend, and compiles the tests without running them:
-  # several unit tests still assume Unix paths.
+  # Windows crossterm backend, and runs the unit tests; the PTY smoke tests
+  # are Unix only.
   platforms:
 
     name: platforms (${{ matrix.os }})
@@ -54,7 +54,7 @@ jobs:
         - os: macos-latest
           test: cargo test --locked --verbose
         - os: windows-latest
-          test: cargo test --locked --verbose --no-run
+          test: cargo test --locked --verbose
     runs-on: ${{ matrix.os }}
 
     steps:

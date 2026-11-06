@@ -606,7 +606,7 @@ fn selecting_a_valid_empty_keystore_displays_its_absolute_path() {
     press(&mut app, KeyCode::End);
     assert!(!press(&mut app, KeyCode::Enter));
 
-    let expected = path.canonicalize().unwrap();
+    let expected = canonical_path::canonicalize(&path).unwrap();
     assert_eq!(app.keystore_path.as_deref(), Some(expected.as_path()));
     assert!(app.file_picker.is_none());
     let rendered = screen(&mut app, 200, 24);
@@ -662,7 +662,10 @@ fn directories_can_be_entered_and_left_before_selecting() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::End);
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.keystore_path, Some(path.canonicalize().unwrap()));
+    assert_eq!(
+        app.keystore_path,
+        Some(canonical_path::canonicalize(&path).unwrap())
+    );
 }
 
 #[test]
@@ -671,7 +674,7 @@ fn reopening_and_cancelling_preserves_the_previous_keystore() {
     let original = directory.path().join("a.jks");
     fs::write(&original, empty_keystore()).unwrap();
     fs::write(directory.path().join("b.jks"), empty_keystore()).unwrap();
-    let original = original.canonicalize().unwrap();
+    let original = canonical_path::canonicalize(&original).unwrap();
     let mut app = App {
         keystore_path: Some(original.clone()),
         ..App::default()
@@ -690,7 +693,7 @@ fn reopening_and_cancelling_preserves_the_previous_keystore() {
     press(&mut app, KeyCode::Enter);
     assert_eq!(
         app.keystore_path,
-        Some(directory.path().join("b.jks").canonicalize().unwrap())
+        Some(canonical_path::canonicalize(&directory.path().join("b.jks")).unwrap())
     );
 }
 
@@ -710,7 +713,10 @@ fn a_missing_file_reports_an_error_and_allows_recovery() {
 
     fs::write(&path, empty_keystore()).unwrap();
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.keystore_path, Some(path.canonicalize().unwrap()));
+    assert_eq!(
+        app.keystore_path,
+        Some(canonical_path::canonicalize(&path).unwrap())
+    );
 }
 
 #[test]
@@ -845,14 +851,17 @@ fn cancelling_a_password_prompt_preserves_the_loaded_entries() {
     press(&mut app, KeyCode::End);
     press(&mut app, KeyCode::Enter);
     type_password(&mut app, "partial");
-    let other = directory.path().join("b-other.jks").canonicalize().unwrap();
+    let other = canonical_path::canonicalize(&directory.path().join("b-other.jks")).unwrap();
     assert!(screen(&mut app, 200, 24).contains(&format!("Path: '{}'", other.display())));
     assert!(!press(&mut app, KeyCode::Esc));
     assert!(app.password_prompt.is_none());
-    assert_eq!(app.keystore_path, Some(original.canonicalize().unwrap()));
+    assert_eq!(
+        app.keystore_path,
+        Some(canonical_path::canonicalize(&original).unwrap())
+    );
     assert!(screen(&mut app, 200, 24).contains(&format!(
         "Path: '{}'",
-        original.canonicalize().unwrap().display()
+        canonical_path::canonicalize(&original).unwrap().display()
     )));
     assert_eq!(app.entries.len(), 2);
     assert!(screen(&mut app, 100, 24).contains("server-key"));
@@ -860,7 +869,7 @@ fn cancelling_a_password_prompt_preserves_the_loaded_entries() {
     assert!(app.entry_details.is_some());
     assert!(screen(&mut app, 200, 30).contains(&format!(
         "Path: '{}'",
-        original.canonicalize().unwrap().display()
+        canonical_path::canonicalize(&original).unwrap().display()
     )));
     press(&mut app, KeyCode::Esc);
 
@@ -1613,10 +1622,10 @@ fn the_opened_file_directory_is_absolute() {
         path_bar::directory(Path::new("certs/server.pem")),
         working_directory.join("certs")
     );
-    assert_eq!(
-        path_bar::directory(Path::new("/stores/certs/server.pem")),
-        Path::new("/stores/certs")
-    );
+    // `/` on Unix, the current drive's root, such as `D:\`, on Windows.
+    let root = working_directory.ancestors().last().unwrap();
+    let certs = root.join("stores").join("certs");
+    assert_eq!(path_bar::directory(&certs.join("server.pem")), certs);
 }
 
 #[test]
@@ -1626,7 +1635,7 @@ fn the_opened_file_directory_resolves_parent_components() {
     fs::create_dir(&certs).unwrap();
     let relative = test_support::relative_to_working_directory(&certs);
     let path = relative.join("..").join("certs").join("server.pem");
-    assert_eq!(path_bar::directory(&path), certs.canonicalize().unwrap());
+    assert_eq!(path_bar::directory(&path), certs);
 }
 
 #[test]
@@ -1645,11 +1654,7 @@ fn details_opened_through_a_relative_path_export_to_the_suggested_folder() {
     assert!(app.entry_details.is_some());
 
     press(&mut app, KeyCode::Char('x'));
-    let suggested = directory
-        .path()
-        .canonicalize()
-        .unwrap()
-        .join("JKS_TUI_test_fixture.pem");
+    let suggested = directory.path().join("JKS_TUI_test_fixture.pem");
     let suggestion = format!("Save certificate to: {}", suggested.display());
     assert!(screen(&mut app, 200, 40).contains(&suggestion));
     press(&mut app, KeyCode::Enter);

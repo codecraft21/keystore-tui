@@ -6,6 +6,7 @@ use std::{
 
 use crown::asn1::Asn1Time;
 
+use crate::canonical_path::canonicalize;
 use crate::certificate::Summary;
 use crate::keystore::{
     CERTIFICATE_TYPE, JCEKS_MAGIC, MAGIC, PRIVATE_KEY_TAG, SECRET_KEY_TAG, TRUSTED_CERT_TAG,
@@ -48,15 +49,15 @@ pub struct TestDirectory {
 impl TestDirectory {
     pub fn new() -> Self {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
-        // Cargo's `TMPDIR` ends in `.`, which `std::path::absolute` drops
-        // from the paths the app shows; drop it here too so they compare equal.
-        let path = std::path::absolute(std::env::temp_dir().join(format!(
+        let path = std::env::temp_dir().join(format!(
             "keystore-tui-test-{}-{}",
             std::process::id(),
             NEXT_ID.fetch_add(1, Ordering::Relaxed)
-        )))
-        .unwrap();
+        ));
         fs::create_dir(&path).unwrap();
+        // Canonical, as the file browser shows it: Cargo's temporary
+        // directory ends in `.`, and Windows may give it as a short name.
+        let path = canonicalize(&path).unwrap();
         Self { path }
     }
 
@@ -72,10 +73,11 @@ impl Drop for TestDirectory {
 }
 
 /// `path` relative to the working directory, which holds the test
-/// directories because Cargo sets `TMPDIR` to the repository root.
+/// directories because Cargo sets the temporary directory (`TMPDIR`, and
+/// `TMP` and `TEMP` on Windows) to the repository root.
 pub fn relative_to_working_directory(path: &Path) -> PathBuf {
-    let working_directory = std::env::current_dir().unwrap().canonicalize().unwrap();
-    path.canonicalize()
+    let working_directory = canonicalize(&std::env::current_dir().unwrap()).unwrap();
+    canonicalize(path)
         .unwrap()
         .strip_prefix(&working_directory)
         .expect("test directories are inside the working directory")

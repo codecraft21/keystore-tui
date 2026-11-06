@@ -10,6 +10,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/certificate_file.rs` | PEM, DER, and PKCS#7 certificate files (including requests), and chain linking within a file |
 | `src/certificate_request.rs` | PKCS#10 certificate requests: fields, requested extensions, and attributes |
 | `src/file_picker.rs` | The keystore file browser |
+| `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |
 | `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
 | `src/keystore.rs` | JKS and JCEKS parsing and integrity check (SHA-1); the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
 | `src/java_serialization.rs` | Skipping a serialized Java object (a JCEKS secret key) without deserializing it |
@@ -31,7 +32,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `dist-workspace.toml`, `.github/workflows/release.yml` | Release configuration for [`dist`](https://github.com/axodotdev/cargo-dist) and the workflow it generates |
 | `.github/workflows/publish-crates.yml` | The crates.io publish job that `release.yml` calls |
 | `.github/workflows/tag-release.yml` | Tags a new `Cargo.toml` version on `main`, which starts `release.yml` |
-| `.github/workflows/rust.yml` | CI checks (format, lint, build, tests), a minimum-supported-Rust build, macOS tests, including the PTY smoke tests, a Windows build, and test coverage, uploaded to Codecov, for pushes to `main` and PRs |
+| `.github/workflows/rust.yml` | CI checks (format, lint, build, tests), a minimum-supported-Rust build, macOS tests, including the PTY smoke tests, Windows unit tests, and test coverage, uploaded to Codecov, for pushes to `main` and PRs |
 | `.github/dependabot.yml` | Monthly grouped Cargo and GitHub Actions updates, leaving out the generated `release.yml` |
 | `.github/workflows/dependabot-auto-merge.yml` | Turns on auto-merge for Dependabot PRs, which merge once the required checks pass |
 

@@ -30,7 +30,7 @@ pub(crate) struct FilePicker {
 
 impl FilePicker {
     pub(crate) fn new(directory: &Path) -> io::Result<Self> {
-        let directory = directory.canonicalize()?;
+        let directory = crate::canonical_path::canonicalize(directory)?;
         let mut entries = Vec::new();
         for entry in fs::read_dir(&directory)? {
             let path = entry?.path();
@@ -194,7 +194,7 @@ impl FilePicker {
         if entry.is_directory {
             *self = Self::new(&entry.path)?;
         } else if allow_file {
-            let path = entry.path.canonicalize()?;
+            let path = crate::canonical_path::canonicalize(&entry.path)?;
             if !fs::metadata(&path)?.is_file() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -310,6 +310,7 @@ mod tests {
     }
 
     /// A picker over `/base` listing `../` and the given names, unfiltered.
+    /// `listed` and `selected` give entries by name, as `../` for the parent.
     fn picker(names: &[&str]) -> FilePicker {
         let directory = PathBuf::from("/base");
         let mut entries = vec![Entry {
@@ -334,7 +335,13 @@ mod tests {
         picker
             .visible
             .iter()
-            .map(|&i| picker.entries[i].path.to_string_lossy().into_owned())
+            .map(|&i| {
+                let path = &picker.entries[i].path;
+                match path.strip_prefix(&picker.directory) {
+                    Ok(name) => name.to_string_lossy().into_owned(),
+                    Err(_) => "../".to_owned(),
+                }
+            })
             .collect()
     }
 
@@ -365,29 +372,29 @@ mod tests {
     fn typing_lists_case_insensitive_prefix_matches_without_the_parent() {
         let mut picker = picker(&["Keys/", "alpha.jks", "keystore.JKS", "my-key.p12"]);
         type_text(&mut picker, "kE");
-        assert_eq!(listed(&picker), ["/base/Keys", "/base/keystore.JKS"]);
-        assert_eq!(selected(&picker).as_deref(), Some("/base/Keys"));
+        assert_eq!(listed(&picker), ["Keys", "keystore.JKS"]);
+        assert_eq!(selected(&picker).as_deref(), Some("Keys"));
 
         // Selection wraps within the matches only.
         press(&mut picker, KeyCode::Up);
-        assert_eq!(selected(&picker).as_deref(), Some("/base/keystore.JKS"));
+        assert_eq!(selected(&picker).as_deref(), Some("keystore.JKS"));
         press(&mut picker, KeyCode::Down);
-        assert_eq!(selected(&picker).as_deref(), Some("/base/Keys"));
+        assert_eq!(selected(&picker).as_deref(), Some("Keys"));
         press(&mut picker, KeyCode::End);
-        assert_eq!(selected(&picker).as_deref(), Some("/base/keystore.JKS"));
+        assert_eq!(selected(&picker).as_deref(), Some("keystore.JKS"));
     }
 
     #[test]
     fn shortcut_letters_are_typed_into_the_filter() {
         let mut picker = picker(&["jks/", "kq.pem", "q.pem"]);
         type_text(&mut picker, "q");
-        assert_eq!(listed(&picker), ["/base/q.pem"]);
+        assert_eq!(listed(&picker), ["q.pem"]);
         assert!(picker.clear_filter());
         type_text(&mut picker, "kq");
-        assert_eq!(listed(&picker), ["/base/kq.pem"]);
+        assert_eq!(listed(&picker), ["kq.pem"]);
         assert!(picker.clear_filter());
         type_text(&mut picker, "j");
-        assert_eq!(listed(&picker), ["/base/jks"]);
+        assert_eq!(listed(&picker), ["jks"]);
     }
 
     #[test]
@@ -405,15 +412,15 @@ mod tests {
     fn backspace_edits_the_filter_and_never_leaves_the_directory() {
         let mut picker = picker(&["ab.pem", "ac.pem", "b.pem"]);
         type_text(&mut picker, "ab");
-        assert_eq!(listed(&picker), ["/base/ab.pem"]);
+        assert_eq!(listed(&picker), ["ab.pem"]);
         press(&mut picker, KeyCode::Backspace);
-        assert_eq!(listed(&picker), ["/base/ab.pem", "/base/ac.pem"]);
+        assert_eq!(listed(&picker), ["ab.pem", "ac.pem"]);
         press(&mut picker, KeyCode::Down);
-        assert_eq!(selected(&picker).as_deref(), Some("/base/ac.pem"));
+        assert_eq!(selected(&picker).as_deref(), Some("ac.pem"));
         press(&mut picker, KeyCode::Backspace);
         assert_eq!(listed(&picker).len(), 4);
         // The selected entry stays selected as the list widens.
-        assert_eq!(selected(&picker).as_deref(), Some("/base/ac.pem"));
+        assert_eq!(selected(&picker).as_deref(), Some("ac.pem"));
         press(&mut picker, KeyCode::Backspace);
         assert_eq!(picker.directory, PathBuf::from("/base"));
         assert_eq!(listed(&picker).len(), 4);
@@ -440,11 +447,11 @@ mod tests {
         assert!(picker.clear_filter());
         assert!(picker.filter.is_empty());
         assert_eq!(listed(&picker).len(), 3);
-        assert_eq!(selected(&picker).as_deref(), Some("/base/b.pem"));
+        assert_eq!(selected(&picker).as_deref(), Some("b.pem"));
         type_text(&mut picker, "z");
         assert!(picker.clear_filter());
         // With nothing previously selected, the first entry after `../` is.
-        assert_eq!(selected(&picker).as_deref(), Some("/base/a.pem"));
+        assert_eq!(selected(&picker).as_deref(), Some("a.pem"));
         assert!(!picker.clear_filter());
     }
 }
