@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Check formatting
       run: cargo fmt --check
     - name: Lint
@@ -25,3 +25,32 @@ jobs:
     - name: Run tests, including terminal interaction and restoration
       run: cargo test --locked --verbose
       timeout-minutes: 10
+
+  # Measures line coverage of all tests, including the PTY smoke tests, which
+  # run the instrumented binary, and uploads it to Codecov for the README
+  # badge. Codecov authenticates with OIDC, so no token is stored. An upload
+  # failure (such as on fork PRs, which get no OIDC token) doesn't fail CI.
+  coverage:
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Install LLVM tools
+      run: rustup component add llvm-tools-preview
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-llvm-cov
+    - name: Measure test coverage
+      run: cargo llvm-cov --locked --lcov --output-path lcov.info
+      timeout-minutes: 10
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v7
+      with:
+        files: lcov.info
+        disable_search: true
+        use_oidc: true
