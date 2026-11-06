@@ -40,8 +40,8 @@ adding or changing them. For TUI
 changes, also check rendering, input, and terminal restoration by hand in an
 interactive terminal. CI (`.github/workflows/rust.yml`) runs these automated
 checks on Linux for pushes to `main` and PRs, builds with the minimum supported
-Rust from `rust-version`, runs the unit tests on macOS, builds on Windows, and measures
-test coverage with `cargo llvm-cov` for Codecov; release CI also runs
+Rust from `rust-version`, runs all tests, including the PTY smoke tests, on
+macOS, builds on Windows, and measures test coverage with `cargo llvm-cov` for Codecov; release CI also runs
 `dist plan` on PRs. When changing `rust-version`, update the toolchain in the
 `msrv` job too.
 

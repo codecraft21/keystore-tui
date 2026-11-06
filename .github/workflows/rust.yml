@@ -40,11 +40,10 @@ jobs:
     - name: Build all targets with the minimum supported Rust
       run: cargo +1.88 check --locked --all-targets
 
-  # Builds and tests on the other release platforms. macOS runs the unit
-  # tests; its PTY smoke tests hang in the export tests, so they are only
-  # compiled. Windows builds the app, including the Windows crossterm backend,
-  # and compiles the tests without running them: several unit tests still
-  # assume Unix paths.
+  # Builds and tests on the other release platforms. macOS runs all tests,
+  # including the PTY smoke tests. Windows builds the app, including the
+  # Windows crossterm backend, and compiles the tests without running them:
+  # several unit tests still assume Unix paths.
   platforms:
 
     name: platforms (${{ matrix.os }})
@@ -53,7 +52,7 @@ jobs:
       matrix:
         include:
         - os: macos-latest
-          test: cargo test --locked --verbose --bin keystore-tui && cargo test --locked --verbose --no-run
+          test: cargo test --locked --verbose
         - os: windows-latest
           test: cargo test --locked --verbose --no-run
     runs-on: ${{ matrix.os }}
