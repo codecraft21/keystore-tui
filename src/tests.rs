@@ -135,7 +135,12 @@ fn browser_shows_directories_then_supported_keystore_files() {
     fs::write(directory.path().join("e-keystore.jceks"), "").unwrap();
     fs::write(directory.path().join("cacerts"), "").unwrap();
     fs::write(directory.path().join("jssecacerts"), "").unwrap();
-    fs::write(directory.path().join("CACERTS"), "").unwrap();
+    // On a case-insensitive file system, such as macOS by default, `CACERTS`
+    // is the same file as `cacerts`.
+    let case_sensitive = !directory.path().join("CACERTS").exists();
+    if case_sensitive {
+        fs::write(directory.path().join("CACERTS"), "").unwrap();
+    }
     fs::write(directory.path().join("ignored.txt"), "").unwrap();
     fs::write(directory.path().join("ignored.jks.bak"), "").unwrap();
     fs::write(directory.path().join("cacerts.bak"), "").unwrap();
@@ -149,9 +154,10 @@ fn browser_shows_directories_then_supported_keystore_files() {
     assert!(rendered.find("c-keystore.p12").unwrap() < rendered.find("d-keystore.PFX").unwrap());
     assert!(rendered.find("d-keystore.PFX").unwrap() < rendered.find("e-keystore.jceks").unwrap());
     assert!(!rendered.contains("ignored"));
-    for name in ["cacerts", "jssecacerts", "CACERTS"] {
+    for name in ["cacerts", "jssecacerts"] {
         assert!(rendered.contains(name));
     }
+    assert_eq!(rendered.contains("CACERTS"), case_sensitive);
     assert!(!rendered.contains("cacerts.bak"));
 }
 
