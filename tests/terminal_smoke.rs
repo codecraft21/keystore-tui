@@ -47,7 +47,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use rustix::fs::{Mode, OFlags, open};
+use rustix::fs::{Mode, OFlags, fcntl_getfl, fcntl_setfl, open};
 use rustix::io::{Errno, FdFlags, fcntl_setfd, read, write};
 use rustix::process::{ioctl_tiocsctty, setsid};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
@@ -125,6 +125,8 @@ impl PtyApp {
     fn spawn(directory: &Path, args: &[&OsStr]) -> Self {
         let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).unwrap();
         fcntl_setfd(&master, FdFlags::CLOEXEC).unwrap();
+        // Reads and writes must never block: see `read`.
+        fcntl_setfl(&master, fcntl_getfl(&master).unwrap() | OFlags::NONBLOCK).unwrap();
         grantpt(&master).unwrap();
         unlockpt(&master).unwrap();
         let name = ptsname(&master, Vec::new()).unwrap();
@@ -190,34 +192,67 @@ impl PtyApp {
     }
 
     /// Read whatever is available within `timeout`; return whether data arrived.
+    ///
+    /// The master is non-blocking, so a read never waits longer than
+    /// `timeout`. macOS's poll(2) documents that it doesn't support devices,
+    /// and may report the PTY master ready (`POLLNVAL`) without output; a
+    /// blocking read after it would wait forever for output the app isn't
+    /// going to write. When `poll` can't wait, sleep briefly between reads.
     fn read(&mut self, timeout: Duration) -> bool {
-        let timeout = Timespec {
+        let deadline = Instant::now() + timeout;
+        let mut buffer = [0; 65536];
+        loop {
+            match read(&self.master, &mut buffer) {
+                Ok(count) => {
+                    self.output.extend_from_slice(&buffer[..count]);
+                    return count > 0;
+                }
+                Err(Errno::AGAIN | Errno::INTR) => {}
+                Err(Errno::IO) => return false, // The child may have closed its terminal.
+                Err(error) => panic!("read failed: {error}"),
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            self.wait_readable(remaining);
+        }
+    }
+
+    /// Wait up to `timeout` for output, or less if `poll` can't wait.
+    fn wait_readable(&self, timeout: Duration) {
+        let timespec = Timespec {
             tv_sec: timeout.as_secs() as _,
             tv_nsec: timeout.subsec_nanos() as _,
         };
         let mut fds = [PollFd::new(&self.master, PollFlags::IN)];
-        match poll(&mut fds, Some(&timeout)) {
-            Ok(0) | Err(Errno::INTR) => return false,
+        match poll(&mut fds, Some(&timespec)) {
+            Ok(0) | Err(Errno::INTR) => {}
+            Ok(_) if fds[0].revents().contains(PollFlags::NVAL) => {
+                thread::sleep(timeout.min(Duration::from_millis(10)));
+            }
             Ok(_) => {}
             Err(error) => panic!("poll failed: {error}"),
         }
-        let mut buffer = [0; 65536];
-        match read(&self.master, &mut buffer) {
-            Ok(count) => {
-                self.output.extend_from_slice(&buffer[..count]);
-                count > 0
-            }
-            Err(Errno::IO | Errno::INTR) => false, // The child may have closed its terminal.
-            Err(error) => panic!("read failed: {error}"),
-        }
     }
 
+    /// Write keys to the app, reading its output while the PTY is full.
     fn send(&mut self, keys: &[u8]) {
+        let deadline = Instant::now() + TIMEOUT;
         let mut keys = keys;
         while !keys.is_empty() {
             match write(&self.master, keys) {
                 Ok(count) => keys = &keys[count..],
                 Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "TUI {:?} did not accept input\n{}",
+                        self.args,
+                        self.screen()
+                    );
+                    self.read(Duration::from_millis(10));
+                }
                 Err(error) => panic!("write failed: {error}"),
             }
         }
@@ -230,7 +265,8 @@ impl PtyApp {
             .map(|status| status.code().unwrap_or(-1))
     }
 
-    /// Wait for the child to exit and return its exit code.
+    /// Wait for the child to exit and return its exit code, reading its output
+    /// so that it never blocks writing to a full PTY.
     fn wait(&mut self) -> i32 {
         let deadline = Instant::now() + TIMEOUT;
         loop {
@@ -240,7 +276,7 @@ impl PtyApp {
             if Instant::now() >= deadline {
                 panic!("TUI {:?} did not exit\n{}", self.args, self.screen());
             }
-            thread::sleep(Duration::from_millis(10));
+            self.read(Duration::from_millis(10));
         }
     }
 
