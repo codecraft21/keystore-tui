@@ -36,7 +36,7 @@
 
 #![cfg(unix)]
 
-use std::ffi::OsStr;
+use std::ffi::{CString, OsStr};
 use std::fs;
 use std::os::fd::{BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt;
@@ -51,7 +51,7 @@ use rustix::fs::{Mode, OFlags, fcntl_getfl, fcntl_setfl, open};
 use rustix::io::{Errno, FdFlags, fcntl_setfd, read, write};
 use rustix::process::{ioctl_tiocsctty, setsid};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
-use rustix::termios::{Winsize, tcgetattr, tcgetwinsize, tcsetwinsize};
+use rustix::termios::{Winsize, tcgetattr, tcsetwinsize};
 use sha1::{Digest, Sha1};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
@@ -111,11 +111,14 @@ impl Drop for TempDir {
     }
 }
 
-/// Own the child and PTY, retaining the slave to inspect restored modes.
+/// Own the child and PTY, retaining the slave's name to inspect restored modes.
 struct PtyApp {
     args: Vec<String>,
     master: OwnedFd,
     slave: OwnedFd,
+    slave_name: CString,
+    /// The terminal's width and height.
+    size: (u16, u16),
     child: Child,
     output: Vec<u8>,
     original_modes: String,
@@ -130,14 +133,9 @@ impl PtyApp {
         grantpt(&master).unwrap();
         unlockpt(&master).unwrap();
         let name = ptsname(&master, Vec::new()).unwrap();
-        let slave = open(
-            name.as_c_str(),
-            OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .unwrap();
+        let slave = open_slave(&name);
         set_size(&slave, 100, 30);
-        let original_modes = modes(&slave);
+        let original_modes = modes(&name);
 
         let mut command = Command::new(binary());
         command
@@ -165,6 +163,8 @@ impl PtyApp {
                 .collect(),
             master,
             slave,
+            slave_name: name,
+            size: (100, 30),
             child,
             output: Vec::new(),
             original_modes,
@@ -179,6 +179,7 @@ impl PtyApp {
     fn resize(&mut self, width: u16, height: u16) {
         let start = self.output.len();
         set_size(&self.slave, width, height);
+        self.size = (width, height);
         let deadline = Instant::now() + TIMEOUT;
         while !contains(&self.output[start..], b"\x1b[2J") {
             assert!(
@@ -194,10 +195,10 @@ impl PtyApp {
     /// Read whatever is available within `timeout`; return whether data arrived.
     ///
     /// The master is non-blocking, so a read never waits longer than
-    /// `timeout`. macOS's poll(2) documents that it doesn't support devices,
-    /// and may report the PTY master ready (`POLLNVAL`) without output; a
-    /// blocking read after it would wait forever for output the app isn't
-    /// going to write. When `poll` can't wait, sleep briefly between reads.
+    /// `timeout`: on macOS, a blocking read after `poll` reported the master
+    /// ready could wait forever for output the app wasn't going to write.
+    /// macOS's poll(2) documents that it doesn't support devices; when it
+    /// reports `POLLNVAL`, sleep briefly between reads instead.
     fn read(&mut self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         let mut buffer = [0; 65536];
@@ -285,8 +286,7 @@ impl PtyApp {
     /// The fixture uses single-column text. This is a small screen reader for
     /// these checks, not a general ANSI or Unicode terminal emulator.
     fn screen(&self) -> String {
-        let size = tcgetwinsize(&self.slave).unwrap();
-        let (height, width) = (i64::from(size.ws_row), i64::from(size.ws_col));
+        let (width, height) = (i64::from(self.size.0), i64::from(self.size.1));
         let blank = || vec![vec![' '; width as usize]; height as usize];
         let mut grid = blank();
         let (mut y, mut x) = (0_i64, 0_i64);
@@ -380,7 +380,7 @@ impl PtyApp {
 
     fn assert_modes_restored(&self) {
         assert_eq!(
-            modes(&self.slave),
+            modes(&self.slave_name),
             self.original_modes,
             "TUI {:?}",
             self.args
@@ -444,8 +444,20 @@ fn set_size(slave: &OwnedFd, width: u16, height: u16) {
     tcsetwinsize(slave, size).unwrap();
 }
 
-fn modes(slave: &OwnedFd) -> String {
-    format!("{:?}", tcgetattr(slave).unwrap())
+fn open_slave(name: &CString) -> OwnedFd {
+    open(
+        name.as_c_str(),
+        OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .unwrap()
+}
+
+/// The terminal modes, read through a newly opened slave: when the app, the
+/// session leader, exits, macOS revokes its controlling terminal, so the
+/// harness's earlier slave descriptor no longer accepts terminal calls.
+fn modes(name: &CString) -> String {
+    format!("{:?}", tcgetattr(open_slave(name)).unwrap())
 }
 
 /// Append the JKS integrity digest for an empty password.
