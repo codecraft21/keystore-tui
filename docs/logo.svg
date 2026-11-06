@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="title">
+  <title id="title">keystore-tui</title>
+  <!-- Terminal window -->
+  <rect x="8" y="14" width="112" height="100" rx="14" fill="#11161c" stroke="#2b3440" stroke-width="3"/>
+  <line x1="9.5" y1="38" x2="118.5" y2="38" stroke="#2b3440" stroke-width="3"/>
+  <circle cx="24" cy="26" r="3.5" fill="#3a4552"/>
+  <circle cx="35" cy="26" r="3.5" fill="#3a4552"/>
+  <circle cx="46" cy="26" r="3.5" fill="#3a4552"/>
+  <!-- Prompt chevron -->
+  <polyline points="25,60 41,74 25,88" fill="none" stroke="#4ade80" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Key as the cursor -->
+  <g fill="none" stroke="#fbbf24" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="61" cy="86" r="9"/>
+    <path d="M70 86 H103 M93 86 V95 M101 86 V93"/>
+  </g>
+</svg>
