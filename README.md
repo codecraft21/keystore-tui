@@ -3,6 +3,7 @@
 # keystore-tui
 
 [![CI](https://github.com/codecraft21/keystore-tui/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/codecraft21/keystore-tui/actions/workflows/rust.yml?query=branch%3Amain)
+[![Coverage](https://codecov.io/gh/codecraft21/keystore-tui/graph/badge.svg?branch=main)](https://codecov.io/gh/codecraft21/keystore-tui)
 [![Release](https://img.shields.io/github/v/release/codecraft21/keystore-tui)](https://github.com/codecraft21/keystore-tui/releases/latest)
 [![crates.io](https://img.shields.io/crates/v/keystore-tui.svg)](https://crates.io/crates/keystore-tui)
 [![License](https://img.shields.io/crates/l/keystore-tui.svg)](LICENSE)

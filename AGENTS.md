@@ -39,7 +39,8 @@ The module documentation lists what the smoke tests cover; keep it current when
 adding or changing them. For TUI
 changes, also check rendering, input, and terminal restoration by hand in an
 interactive terminal. CI (`.github/workflows/rust.yml`) runs these automated
-checks on Linux for pushes to `main` and PRs; release CI also runs `dist plan` on PRs.
+checks on Linux for pushes to `main` and PRs, and measures test coverage with
+`cargo llvm-cov` for Codecov; release CI also runs `dist plan` on PRs.
 Dependabot (`.github/dependabot.yml`) opens monthly grouped dependency and
 GitHub Actions update PRs; review them like any other change, including a manual
 TUI check for `ratatui` or `crossterm` updates. Its Rust updates don't check `rust-version`.

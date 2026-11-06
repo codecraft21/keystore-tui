@@ -31,7 +31,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `dist-workspace.toml`, `.github/workflows/release.yml` | Release configuration for [`dist`](https://github.com/axodotdev/cargo-dist) and the workflow it generates |
 | `.github/workflows/publish-crates.yml` | The crates.io publish job that `release.yml` calls |
 | `.github/workflows/tag-release.yml` | Tags a new `Cargo.toml` version on `main`, which starts `release.yml` |
-| `.github/workflows/rust.yml` | CI checks (format, lint, build, tests) for pushes to `main` and PRs |
+| `.github/workflows/rust.yml` | CI checks (format, lint, build, tests) and test coverage, uploaded to Codecov, for pushes to `main` and PRs |
 | `.github/dependabot.yml` | Monthly grouped Cargo and GitHub Actions updates, leaving out the generated `release.yml` |
 
 Dependencies are deliberately few:
