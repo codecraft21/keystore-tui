@@ -796,6 +796,10 @@ fn picker_filters_by_typed_prefix() {
     app.expect(&["No keystore selected"]);
     app.send(b"o");
     app.expect(&["> alpha.jks"]);
+    // Only the path bar tells the two files apart. Widen the terminal so the
+    // file name isn't clipped from a long temporary directory path, such as
+    // under `cargo llvm-cov`'s target directory in CI.
+    app.resize(250, 30);
     app.send(b"QU\r");
     app.expect(&["root-cert", "Path:", "quux.jks"]);
     app.send(b"\x03");
