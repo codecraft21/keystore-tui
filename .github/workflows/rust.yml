@@ -26,6 +26,46 @@ jobs:
       run: cargo test --locked --verbose
       timeout-minutes: 10
 
+  # Checks that the crate still builds with the `rust-version` in Cargo.toml,
+  # which Dependabot doesn't check before raising dependency requirements.
+  # Keep the toolchain here in step with `rust-version`.
+  msrv:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Install the minimum supported Rust
+      run: rustup toolchain install 1.88 --profile minimal
+    - name: Build all targets with the minimum supported Rust
+      run: cargo +1.88 check --locked --all-targets
+
+  # Builds and tests on the other release platforms. macOS runs the unit
+  # tests; its PTY smoke tests hang in the export tests, so they are only
+  # compiled. Windows builds the app, including the Windows crossterm backend,
+  # and compiles the tests without running them: several unit tests still
+  # assume Unix paths.
+  platforms:
+
+    name: platforms (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: macos-latest
+          test: cargo test --locked --verbose --bin keystore-tui && cargo test --locked --verbose --no-run
+        - os: windows-latest
+          test: cargo test --locked --verbose --no-run
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Build
+      run: cargo build --locked --verbose
+    - name: Test
+      run: ${{ matrix.test }}
+      timeout-minutes: 10
+
   # Measures line coverage of all tests, including the PTY smoke tests, which
   # run the instrumented binary, and uploads it to Codecov for the README
   # badge. Codecov authenticates with OIDC, so no token is stored. An upload
