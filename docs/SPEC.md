@@ -27,6 +27,8 @@ document and the usage reference, and also the README if its overview changes.
   - [Small terminals](#small-terminals)
 - [Visual style](#visual-style)
 - [Quitting and terminal restoration](#quitting-and-terminal-restoration)
+- [Offline chain diagnostics](#offline-chain-diagnostics)
+- [ASN.1 and PEM views](#asn1-and-pem-views)
 
 ## Scope
 
@@ -37,8 +39,8 @@ document and the usage reference, and also the README if its overview changes.
   [Exporting](#exporting).
 - It runs without Java or `keytool` installed.
 - Private keys are never decrypted, displayed, or exported.
-- The following are out of scope for now: import, keystore editing, raw ASN.1
-  views, and clipboard actions.
+- The following are out of scope for now: import, keystore editing, and
+  clipboard actions.
 
 ## Command-line startup
 
@@ -290,8 +292,7 @@ any existing incomplete-entry warnings.
 - The view is full-screen and read-only, and it does not change the entry list's
   state. Returning to the list keeps the list's selection and scroll position.
 - As in the entry list, a status bar above the keyboard shortcuts shows the
-  opened file's path as `Path: '<path>'`, in both certificate details and chain
-  diagnostics.
+  opened file's path as `Path: '<path>'`, whatever the bottom pane shows.
 - The top pane is a selectable certificate hierarchy, starting with the leaf
   certificate selected. The bottom pane shows the fields of the selected
   certificate:
@@ -352,6 +353,8 @@ any existing incomplete-entry warnings.
   because the issued certificate is signed by the CA, not with the request's
   hash.
 - `x` exports the request; `X` does nothing. See [Exporting](#exporting).
+- `a` and `p` show the request's ASN.1 structure and PEM encoding; `d` does
+  nothing. See [ASN.1 and PEM views](#asn1-and-pem-views).
 
 ### Weak cryptography
 
@@ -498,8 +501,9 @@ idle, so a missed resize notification does not require a key press to redraw.
 
 ## Offline chain diagnostics
 
-- `d` toggles the certificate detail pane between its existing fields and a
-  report of the entire stored chain, leaf first. It does nothing for CSRs.
+- `d` shows a report of the entire stored chain, leaf first, in the bottom
+  pane, or returns to the certificate details when the report is shown. From
+  the ASN.1 or PEM view it switches to the report. It does nothing for CSRs.
 - Toggling preserves the hierarchy selection and fingerprint preference, resets
   scroll to zero, and focuses the details pane. Existing scrolling, resizing,
   export, Back, and Quit keys retain their behaviour.
@@ -528,3 +532,45 @@ idle, so a missed resize notification does not require a key press to redraw.
   RFC 5280 validation. Name constraints, policy processing, purpose/EKU, hostname,
   and authority issuer/serial matching are outside these checks. Root certificates
   are inspected as stored issuers, not treated as trusted anchors.
+
+## ASN.1 and PEM views
+
+- `a` shows the DER structure of the certificate selected in the hierarchy, or
+  of the request, in the bottom pane; `p` shows its PEM encoding. Pressing the
+  same key again returns to the details, and `d` switches to the chain
+  diagnostics. Each key resets scroll to zero and focuses the bottom pane.
+  Its title is "Certificate ASN.1", "Certificate PEM", "Request ASN.1", or
+  "Request PEM".
+- The hierarchy selection and fingerprint preference are kept. With the
+  hierarchy focused, selecting another certificate shows its structure or PEM
+  from the top. Scrolling, resizing, export, Back, and Quit keys keep their
+  behaviour. An entry without certificates shows "No certificate is stored with
+  this entry."
+- The ASN.1 view starts with the DER length, then lists one element per line,
+  indented by depth, each line starting with the element's byte offset:
+  - Constructed elements show their element count, then their elements.
+  - INTEGER and ENUMERATED values of up to 8 bytes are shown in signed decimal,
+    longer ones in hex. BOOLEAN is `true` or `false`, and NULL is shown as is.
+  - OIDs are dotted, followed by a name when known, such as
+    `2.5.29.19 (Basic Constraints)`.
+  - Strings are quoted, with control characters escaped. Times show the UTC
+    time and the stored text. Implicitly tagged values that are visible ASCII,
+    such as DNS names and URIs, are quoted.
+  - An OCTET STRING, or a BIT STRING without unused bits, whose content is
+    exactly one well-formed element, such as an extension value or a public
+    key, is marked `(encapsulates)` and its content is listed as nested
+    elements. Other values are shown in colon-separated hex: inline up to 16
+    bytes, otherwise in rows of 16 bytes below the element. A BIT STRING with
+    unused bits says how many.
+  - Bytes that cannot be decoded, including data after the last element, are
+    reported with their length and the reason, followed by their hex.
+  - Elements nested more than 48 levels deep are summarized, and the dump stops
+    after 20,000 lines with a note.
+- A request's challenge password value is never shown: elements after the
+  challenge password OID in its attribute are listed as `(challenge password;
+  not shown)`. A request's undecodable bytes are reported without their hex,
+  because they could hold a password. When anything is left out, a yellow
+  note says so, and the PEM view shows a yellow explanation instead of the
+  encoding; `x` can still export the request.
+- The PEM view shows a `CERTIFICATE` or `CERTIFICATE REQUEST` block of the
+  stored bytes with 64-character lines, as exports write it.

@@ -5,6 +5,10 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- Press `a` in the detail view to show the ASN.1 structure of the selected
+  certificate or certificate request, with byte offsets, named OIDs, decoded
+  strings and times, and nested extension values and public keys. Press `p` to
+  show its PEM encoding. A request's challenge password stays hidden in both.
 - On Windows, the file browser, the path bar, and the export prompt show paths
   such as `C:\certs\server.pem` instead of the verbatim form
   `\\?\C:\certs\server.pem`.

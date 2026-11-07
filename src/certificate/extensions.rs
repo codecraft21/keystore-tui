@@ -110,8 +110,8 @@ impl Extension {
     pub fn title(&self) -> String {
         let mut title = match &self.oid {
             None => "Malformed extension".into(),
-            Some(oid) => match KNOWN.iter().find(|(arcs, _, _)| oid.matches(arcs)) {
-                Some((_, name, _)) => format!("{name} ({oid})"),
+            Some(oid) => match name(oid) {
+                Some(name) => format!("{name} ({oid})"),
                 None => oid.to_dotted_string(),
             },
         };
@@ -120,6 +120,14 @@ impl Extension {
         }
         title
     }
+}
+
+/// The name of a decoded extension type, such as `Key Usage`.
+pub(crate) fn name(oid: &ObjectIdentifier) -> Option<&'static str> {
+    KNOWN
+        .iter()
+        .find(|(arcs, _, _)| oid.matches(arcs))
+        .map(|(_, name, _)| *name)
 }
 
 fn fields(encoding: &[u8]) -> CryptoResult<(ObjectIdentifier, bool, &[u8])> {

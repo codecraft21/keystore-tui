@@ -17,7 +17,10 @@ use ratatui::{
     widgets::{Block, Paragraph, Row, Table, TableState, Wrap},
 };
 
+use crown::asn1::pem;
+
 use crate::{
+    asn1_dump,
     certificate::{Summary, details::fingerprint, extensions::Extension, signature::Signature},
     export::{self, ExportPrompt, Outcome, Scope},
     keystore::{Content, KeystoreEntry},
@@ -109,6 +112,18 @@ enum View {
     Request(RequestView),
 }
 
+/// What the bottom pane shows. Each key toggles its pane and the details.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pane {
+    Details,
+    /// The whole stored chain's diagnostics; certificates only.
+    Diagnostics,
+    /// The selected certificate's or the request's DER structure.
+    Asn1,
+    /// The selected certificate or the request in PEM.
+    Pem,
+}
+
 pub struct EntryDetails {
     alias: String,
     kind: &'static str,
@@ -116,7 +131,7 @@ pub struct EntryDetails {
     view: View,
     details_focused: bool,
     sha1: bool,
-    diagnostics: bool,
+    pane: Pane,
     scroll: u16,
     page: u16,
     max_scroll: u16,
@@ -149,7 +164,7 @@ impl EntryDetails {
             details_focused: matches!(view, View::Request(_)),
             view,
             sha1: false,
-            diagnostics: false,
+            pane: Pane::Details,
             scroll: 0,
             page: 1,
             max_scroll: 0,
@@ -254,10 +269,10 @@ impl EntryDetails {
         match key {
             KeyCode::Tab | KeyCode::BackTab => self.details_focused = !self.details_focused,
             KeyCode::Char('d') if matches!(self.view, View::Chain(_)) => {
-                self.diagnostics = !self.diagnostics;
-                self.details_focused = true;
-                self.scroll = 0;
+                self.toggle(Pane::Diagnostics)
             }
+            KeyCode::Char('a') => self.toggle(Pane::Asn1),
+            KeyCode::Char('p') => self.toggle(Pane::Pem),
             KeyCode::Char('f') => self.sha1 = !self.sha1,
             KeyCode::PageDown => {
                 self.scroll = self.scroll.saturating_add(self.page).min(self.max_scroll)
@@ -283,6 +298,17 @@ impl EntryDetails {
         }
     }
 
+    /// Shows `pane`, or the details when it is already shown, and focuses it.
+    fn toggle(&mut self, pane: Pane) {
+        self.pane = if self.pane == pane {
+            Pane::Details
+        } else {
+            pane
+        };
+        self.details_focused = true;
+        self.scroll = 0;
+    }
+
     fn select(&mut self, index: usize) {
         if self.hierarchy.selected() != Some(index) {
             self.hierarchy.select(Some(index));
@@ -292,29 +318,83 @@ impl EntryDetails {
 
     fn text(&self, now: i64) -> Text<'static> {
         let text = format!("Alias: {}\nType: {}\n\n", self.alias, self.kind);
-        match &self.view {
-            View::Request(view) => view.text(text, self.sha1),
-            View::Chain(chain) if self.diagnostics => chain.diagnostics(now),
-            View::Chain(chain) => chain.text(text, self.selected(chain), now, self.sha1),
+        match (&self.view, self.pane) {
+            (_, Pane::Asn1) => self.encoding_text(false),
+            (_, Pane::Pem) => self.encoding_text(true),
+            (View::Chain(chain), Pane::Diagnostics) => chain.diagnostics(now),
+            (View::Request(view), _) => view.text(text, self.sha1),
+            (View::Chain(chain), _) => chain.text(text, self.selected(chain), now, self.sha1),
         }
+    }
+
+    /// The selected certificate's or the request's DER, its PEM label, and
+    /// whether it is a request.
+    fn encoding(&self) -> Option<(&[u8], &'static str, bool)> {
+        match &self.view {
+            View::Request(view) => Some((&view.der, Scope::Request.pem_label(), true)),
+            View::Chain(chain) => self.selected(chain).map(|index| {
+                (
+                    chain.certificates[index].as_slice(),
+                    Scope::Certificate.pem_label(),
+                    false,
+                )
+            }),
+        }
+    }
+
+    /// The ASN.1 structure, or with `pem` the PEM text. A request's PEM is not
+    /// shown when its dump had to leave anything out.
+    fn encoding_text(&self, pem: bool) -> Text<'static> {
+        let Some((der, label, request)) = self.encoding() else {
+            return Text::from("No certificate is stored with this entry.");
+        };
+        let dump = asn1_dump::dump(der, request);
+        if pem {
+            if dump.withheld {
+                return Text::from(Line::from(
+                    "The PEM encoding is not shown, because the request holds a challenge password or data that could not be decoded. Press x to export it to a file.",
+                ).yellow());
+            }
+            return Text::from(pem::encode(label, der));
+        }
+        let mut lines = vec![Line::from(format!(
+            "DER encoding, {} bytes. Each line starts with the element's byte offset.",
+            der.len()
+        ))];
+        if dump.withheld {
+            lines.push(
+                Line::from(
+                    "Challenge password values, and any bytes that could not be decoded, are not shown.",
+                )
+                .yellow(),
+            );
+        }
+        lines.push(Line::from(""));
+        lines.extend(dump.lines.into_iter().map(Line::from));
+        Text::from(lines)
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let (shortcuts, tree_title, details_title) = match &self.view {
             View::Chain(_) => (
-                "Tab Focus | ↑/↓ j/k Navigate | PgUp/PgDn Home/End Scroll\nd Diagnostics/details | f SHA-256/SHA-1 | x Export certificate | X Export chain | Esc Back | q / Ctrl+C Quit",
+                "Tab Focus | ↑/↓ j/k Navigate | PgUp/PgDn Home/End Scroll\nd Diagnostics | a ASN.1 | p PEM | f SHA-256/SHA-1 | x Export certificate | X Export chain | Esc Back | q / Ctrl+C Quit",
                 "Certificate hierarchy",
-                if self.diagnostics {
-                    "Chain diagnostics"
-                } else {
-                    "Certificate details"
+                match self.pane {
+                    Pane::Details => "Certificate details",
+                    Pane::Diagnostics => "Chain diagnostics",
+                    Pane::Asn1 => "Certificate ASN.1",
+                    Pane::Pem => "Certificate PEM",
                 },
             ),
             View::Request(_) => (
-                "Tab Focus | ↑/↓ j/k Scroll | PgUp/PgDn Home/End Scroll\nf SHA-256/SHA-1 | x Export request | Esc Back | q / Ctrl+C Quit",
+                "Tab Focus | ↑/↓ j/k Scroll | PgUp/PgDn Home/End Scroll\na ASN.1 | p PEM | f SHA-256/SHA-1 | x Export request | Esc Back | q / Ctrl+C Quit",
                 "Certificate request",
-                "Request details",
+                match self.pane {
+                    Pane::Asn1 => "Request ASN.1",
+                    Pane::Pem => "Request PEM",
+                    Pane::Details | Pane::Diagnostics => "Request details",
+                },
             ),
         };
         let minimum = Paragraph::new(shortcuts)
@@ -493,6 +573,107 @@ mod tests {
         assert_eq!(view.scroll, 0);
         assert_eq!(view.hierarchy.selected(), selected);
         assert!(view.text(0).to_string().contains("Subject: CN=leaf"));
+    }
+
+    #[test]
+    fn asn1_and_pem_panes_follow_the_selected_certificate() {
+        use crate::test_support::ed25519_certificate;
+        let data = entry(vec![
+            ed25519_certificate("leaf", "root", 3, 1),
+            ed25519_certificate("root", "root", 1, 1),
+        ]);
+        let mut view = EntryDetails::new(&data, Path::new(""));
+        let screen = draw(&mut view, 120, 40);
+        assert!(screen.contains("d Diagnostics | a ASN.1 | p PEM"));
+        view.handle_key(KeyCode::Char('a'));
+        assert_eq!(view.pane, Pane::Asn1);
+        assert!(view.details_focused);
+        let screen = draw(&mut view, 120, 40);
+        assert!(screen.contains(" Certificate ASN.1 [focused] "));
+        let text = view.text(0).to_string();
+        assert!(text.starts_with(&format!(
+            "DER encoding, {} bytes.",
+            data.certificates()[0].len()
+        )));
+        assert!(text.contains("UTF8String \"leaf\""));
+        view.handle_key(KeyCode::End);
+        assert!(view.scroll > 0);
+
+        // Selecting another certificate shows its structure from the top.
+        view.handle_key(KeyCode::Tab);
+        view.handle_key(KeyCode::Up);
+        assert_eq!(view.scroll, 0);
+        assert!(view.text(0).to_string().contains("UTF8String \"root\""));
+
+        view.handle_key(KeyCode::Char('p'));
+        assert_eq!(view.pane, Pane::Pem);
+        assert!(draw(&mut view, 120, 40).contains(" Certificate PEM [focused] "));
+        assert_eq!(
+            view.text(0).to_string(),
+            pem::encode("CERTIFICATE", &data.certificates()[1]).trim_end()
+        );
+        view.handle_key(KeyCode::Char('p'));
+        assert_eq!(view.pane, Pane::Details);
+        assert!(view.text(0).to_string().contains("Subject: CN=root"));
+        view.handle_key(KeyCode::Char('a'));
+        view.handle_key(KeyCode::Char('d'));
+        assert_eq!(view.pane, Pane::Diagnostics);
+
+        let mut empty = EntryDetails::new(&entry(vec![]), Path::new(""));
+        for key in ['a', 'p'] {
+            empty.handle_key(KeyCode::Char(key));
+            assert_eq!(
+                empty.text(0).to_string(),
+                "No certificate is stored with this entry."
+            );
+            draw(&mut empty, 80, 24);
+        }
+    }
+
+    #[test]
+    fn request_encodings_never_show_a_challenge_password() {
+        use crate::test_support::{KEYTOOL_REQUEST, ed25519_request};
+        let file = crate::certificate_file::parse(KEYTOOL_REQUEST).unwrap();
+        let mut view = EntryDetails::new(&file.entries[0], Path::new(""));
+        let Content::Request(der) = &file.entries[0].content else {
+            panic!("the fixture is a request");
+        };
+        assert!(draw(&mut view, 120, 40).contains("a ASN.1 | p PEM"));
+        view.handle_key(KeyCode::Char('a'));
+        assert!(draw(&mut view, 120, 40).contains(" Request ASN.1 [focused] "));
+        assert!(
+            view.text(0)
+                .to_string()
+                .contains("OBJECT IDENTIFIER 1.2.840.113549.1.9.14 (extensionRequest)")
+        );
+        view.handle_key(KeyCode::Char('p'));
+        assert!(draw(&mut view, 120, 40).contains(" Request PEM [focused] "));
+        assert_eq!(
+            view.text(0).to_string(),
+            pem::encode("CERTIFICATE REQUEST", der).trim_end()
+        );
+
+        let password = der::sequence(
+            &[
+                der::oid(&ObjectIdentifier::new(&[1, 2, 840, 113549, 1, 9, 7]).unwrap()),
+                der::set(&der::utf8_string("synthetic-secret")),
+            ]
+            .concat(),
+        );
+        let request = KeystoreEntry {
+            content: Content::Request(ed25519_request("device", &[password])),
+            ..entry(vec![])
+        };
+        let mut view = EntryDetails::new(&request, Path::new(""));
+        view.handle_key(KeyCode::Char('a'));
+        let text = view.text(0).to_string();
+        assert!(text.contains("Challenge password values, and any bytes"));
+        assert!(text.contains("SET (challenge password; not shown)"));
+        assert!(!text.contains("synthetic"));
+        view.handle_key(KeyCode::Char('p'));
+        let text = view.text(0).to_string();
+        assert!(text.starts_with("The PEM encoding is not shown"));
+        assert!(!text.contains("BEGIN"));
     }
 
     #[test]
@@ -681,7 +862,7 @@ mod tests {
         let directory = TestDirectory::new();
         let mut view = EntryDetails::new(data, &directory.path().join("request.csr"));
         view.handle_key(KeyCode::Char('d'));
-        assert!(!view.diagnostics);
+        assert_eq!(view.pane, Pane::Details);
         assert!(view.details_focused);
         let screen = draw(&mut view, 120, 60);
         assert!(screen.contains(" Certificate request "));

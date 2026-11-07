@@ -34,6 +34,7 @@ opens standalone certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`,
   identifiers, CA status, signing key usage, and path-length constraints.
 - Shows a certificate signing request's subject, public key, requested
   extensions, and attributes, and checks its signature with its own key.
+- Shows the raw ASN.1 structure and PEM encoding of a certificate or request.
 - Exports a certificate, a whole chain, or a request to a new PEM or DER file.
 - Detects the format from the file content, so a PKCS12 store renamed `.jks`
   still opens.
@@ -71,14 +72,14 @@ to return to the list, or `q` to quit. `keystore-tui --help` shows command-line
 usage.
 
 See the [usage reference](docs/REFERENCE.md) for all key bindings, filtering,
-certificate details, chain diagnostics, and exports.
+certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
 
 ## Limitations
 
 - Keystores are read-only: there is no import or editing. Only certificates,
   certificate chains, and certificate signing requests can be exported.
 - Private keys are never decrypted, shown, or exported.
-- Raw ASN.1 views and clipboard actions are not available yet.
+- Clipboard actions are not available yet.
 - PKCS12 integrity checks do not support PBMAC1 MACs.
 - Files larger than 64 MiB are refused.
 
