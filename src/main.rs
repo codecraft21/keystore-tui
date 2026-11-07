@@ -1,3 +1,4 @@
+mod asn1_dump;
 mod canonical_path;
 mod certificate;
 mod certificate_file;

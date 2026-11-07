@@ -9,6 +9,7 @@
 - [Entry list](#entry-list)
 - [Entry details](#entry-details)
 - [Offline chain diagnostics](#offline-chain-diagnostics)
+- [ASN.1 and PEM views](#asn1-and-pem-views)
 - [Certificate requests](#certificate-requests)
 - [Exporting certificates](#exporting-certificates)
 - [Quitting](#quitting)
@@ -151,7 +152,9 @@ explain the result below the signature algorithm.
 | `Tab` / `Shift+Tab` | Switch focus between hierarchy and details |
 | `Up` / `Down` or `k` / `j` | Select a certificate or scroll the focused details |
 | `PageUp` / `PageDown`, `Home` / `End` | Scroll details by a page or to the start / end |
-| `d` | Toggle certificate details / whole-chain diagnostics |
+| `d` | Toggle whole-chain diagnostics / certificate details |
+| `a` | Toggle the selected certificate's ASN.1 structure / details |
+| `p` | Toggle the selected certificate's PEM encoding / details |
 | `f` | Toggle SHA-256 / SHA-1 fingerprints; kept while switching certificates |
 | `x` | Export the selected certificate, or the certificate request |
 | `X` | Export the entry's whole chain, leaf first |
@@ -183,6 +186,25 @@ trust store is used. Name constraints, certificate policies, intended purpose,
 hostnames, and authority issuer/serial matching are not evaluated by this view.
 A passing check does not establish that a certificate is trusted or usable.
 
+## ASN.1 and PEM views
+
+Press `a` in the detail view to show the DER structure of the selected
+certificate, or of a certificate request, in the bottom pane. Press `p` to show
+it in PEM instead. Press the same key again to return to the details. The pane
+takes keyboard focus; press `Tab` to focus the hierarchy and select another
+certificate.
+
+Each line of the ASN.1 view starts with the element's byte offset and is
+indented by depth. OIDs are named when known, strings and times are decoded,
+and wrapped DER inside OCTET and BIT STRINGs, such as extension values and
+public keys, is listed as nested elements. Other values are shown in hex, and
+bytes that cannot be decoded are reported with the reason.
+
+A certificate request's challenge password is never shown, not even in these
+views. When a request holds one, or has bytes that cannot be decoded, the ASN.1
+view leaves them out with a note, and the PEM view is not shown; press `x` to
+export the request instead.
+
 ## Certificate requests
 
 A certificate request opens in the same view. The top pane shows the request
@@ -193,7 +215,8 @@ present but never shown. The signature is checked with the request's own public
 key: `[verified]` means the request is intact and was signed with the matching
 private key. Short keys are flagged as weak; the request's signature hash is not,
 because it does not carry into the issued certificate. The details pane has
-focus, so `Up` / `Down` scroll it, and `x` exports the request.
+focus, so `Up` / `Down` scroll it, and `x` exports the request. `a` and `p`
+show the request's [ASN.1 structure and PEM encoding](#asn1-and-pem-views).
 
 ## Exporting certificates
 

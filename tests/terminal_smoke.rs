@@ -19,6 +19,8 @@
 //!   request fixture given at startup open straight into their details, and
 //!   `Esc` returns to the list; the two-certificate `bundle.pem` opens on the
 //!   list. The chain diagnostics view opens and closes.
+//! - A certificate's ASN.1 and PEM panes open with `a` and `p`, and `p` again
+//!   returns to its details.
 //! - A three-entry store, built at runtime from copies of the certificate:
 //!   entry selection wrapping with the arrow keys, filtering (including `q` typed
 //!   into the filter and `Esc` cancelling it), and sorting.
@@ -714,6 +716,26 @@ fn chain_diagnostics_navigation() {
     app.expect(&["Certificate details", "Subject:"]);
     app.send(b"\x1b");
     app.expect(&["1 entries | Sort: alias"]);
+    app.send(b"q");
+    app.assert_restored();
+}
+
+#[test]
+fn asn1_and_pem_panes() {
+    let directory = TempDir::new();
+    fs::write(directory.join("certificate.der"), fixture_certificate()).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("certificate.der")]);
+    app.expect(&["Certificate details", "a ASN.1 | p PEM"]);
+    app.send(b"a");
+    app.expect(&[
+        "Certificate ASN.1 [focused]",
+        "SEQUENCE (3 elements)",
+        "(commonName)",
+    ]);
+    app.send(b"p");
+    app.expect(&["Certificate PEM [focused]", "-----BEGIN CERTIFICATE-----"]);
+    app.send(b"p");
+    app.expect(&["Certificate details [focused]", "Subject:"]);
     app.send(b"q");
     app.assert_restored();
 }
