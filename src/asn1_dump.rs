@@ -579,6 +579,53 @@ mod tests {
     }
 
     #[test]
+    fn unusual_and_invalid_values_fall_back_to_hex() {
+        let elements: &[(&[u8], &str)] = &[
+            (&[0x01, 0x01, 0x05], "BOOLEAN (invalid) 05"),
+            (&[0x0a, 0x01, 0x02], "ENUMERATED 2"),
+            (&[0x02, 0x00], "INTEGER (empty)"),
+            (
+                &[0x02, 0x09, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                "INTEGER 01:02:03:04:05:06:07:08:09",
+            ),
+            (&[0x03, 0x00], "BIT STRING (invalid, empty)"),
+            (&[0x03, 0x02, 0x00, 0x41], "BIT STRING 41"),
+            (&[0x04, 0x02, 0x05, 0x05], "OCTET STRING 05:05"),
+            (&[0x04, 0x03, 0x30, 0x01, 0x05], "OCTET STRING 30:01:05"),
+            (&[0x05, 0x01, 0x00], "NULL 00"),
+            (&[0x06, 0x01, 0x80], "OBJECT IDENTIFIER (invalid) 80"),
+            (&[0x13, 0x01, 0xff], "PrintableString (invalid) FF"),
+            (&[0x12, 0x03, b'1', b'2', b'3'], "NumericString \"123\""),
+            (&[0x12, 0x01, 0x00], "NumericString 00"),
+            (&[0x14, 0x02, b'h', b'i'], "TeletexString \"hi\""),
+            (&[0x1a, 0x01, b'v'], "VisibleString \"v\""),
+            (&[0x1e, 0x02, 0x00, b'A'], "BMPString \"A\""),
+            (&[0x1c, 0x04, 0, 0, 0, b'A'], "UniversalString 00:00:00:41"),
+            (
+                &[0x17, 0x03, b'a', b'b', b'c'],
+                "UTCTime (invalid) 61:62:63",
+            ),
+            (&[0x0f, 0x00], "[UNIVERSAL 15] (empty)"),
+            (&[0x41, 0x01, b'A'], "[APPLICATION 1] \"A\""),
+            (&[0xc2, 0x01, 0x00], "[PRIVATE 2] 00"),
+            (&[0xa0, 0x02, 0x02, 0x05], "[0] (malformed)"),
+            (&[0x30, 0x00], "SEQUENCE (empty)"),
+        ];
+        let encoding = der::sequence(
+            &elements
+                .iter()
+                .flat_map(|(raw, _)| *raw)
+                .copied()
+                .collect::<Vec<_>>(),
+        );
+        let text = joined(&dump(&encoding, false));
+        for (_, expected) in elements {
+            assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+        }
+        assert!(text.contains("Could not decode 2 bytes: truncated 02:05"));
+    }
+
+    #[test]
     fn deep_nesting_and_huge_values_are_bounded() {
         let mut nested = der::null();
         for _ in 0..200 {
