@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "keystore-tui"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "crown",
  "ratatui",

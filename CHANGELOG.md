@@ -3,7 +3,7 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.0.4
 
 - Press `a` in the detail view to show the ASN.1 structure of the selected
   certificate or certificate request, with byte offsets, named OIDs, decoded
