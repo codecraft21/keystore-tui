@@ -29,14 +29,14 @@ cargo test --locked
 ```
 
 On Linux, macOS, or WSL, `cargo test` also runs the PTY smoke tests in
-`tests/terminal_smoke.rs` against the built binary. To test another build, run:
+`tests/terminal_smoke/` against the built binary. To test another build, run:
 
 ```sh
 KEYSTORE_TUI_BINARY=/absolute/path/to/keystore-tui cargo test --locked --test terminal_smoke
 ```
 
-The module documentation lists what the smoke tests cover; keep it current when
-adding or changing them. For TUI
+Each test module's documentation there lists what its tests cover; keep it
+current when adding or changing them. For TUI
 changes, also check rendering, input, and terminal restoration by hand in an
 interactive terminal. CI (`.github/workflows/rust.yml`) runs these automated
 checks on Linux for pushes to `main` and PRs, builds with the minimum supported

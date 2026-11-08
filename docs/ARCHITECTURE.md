@@ -28,7 +28,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/asn1_dump.rs` | The ASN.1 structure dump of a certificate or request, hiding challenge passwords |
 | `src/export.rs` | The export name prompt and writing PEM/DER certificate and request files |
 | `src/test_support.rs`, `src/tests.rs` | Unit-test helpers, synthetic keystores, and tests |
-| `tests/terminal_smoke.rs` | Unix PTY smoke tests against the built binary |
+| `tests/terminal_smoke/` | Unix PTY smoke tests against the built binary: the harness (`pty.rs`, `screen.rs`, `fixtures.rs`) and tests grouped by feature |
 | `tests/fixtures/` | Generated keystore fixtures; see its `README.md` for how they were made |
 | `dist-workspace.toml`, `.github/workflows/release.yml` | Release configuration for [`dist`](https://github.com/axodotdev/cargo-dist) and the workflow it generates |
 | `.github/workflows/publish-crates.yml` | The crates.io publish job that `release.yml` calls |
