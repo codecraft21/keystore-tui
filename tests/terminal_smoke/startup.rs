@@ -39,7 +39,7 @@ fn startup_password() {
 #[test]
 fn startup_password_failure() {
     let path = fixture("trusted-cert.jks");
-    for keys in [&b"wrong-secret\r"[..], b"\x03", b"\x1b"] {
+    for keys in [&b"wrong-secret\r"[..], b"\x03", b"\x04", b"\x1b"] {
         let mut app = PtyApp::spawn(Path::new(ROOT), &[path.as_os_str()]);
         app.expect(&["Keystore password:"]);
         app.send(keys);
@@ -135,9 +135,12 @@ fn startup_certificate_bundle_opens_on_the_list() {
 /// SPEC: [Command-line startup](../../docs/SPEC.md#command-line-startup).
 #[test]
 fn startup_extra_arguments() {
-    let result = Command::new(binary()).args(["a", "b"]).output().unwrap();
-    assert_eq!(result.status.code(), Some(2));
-    assert!(contains(&result.stderr, b"Usage:"));
+    for args in [["a", "b"], ["--help", "a"], ["a", "-V"]] {
+        let result = Command::new(binary()).args(args).output().unwrap();
+        assert_eq!(result.status.code(), Some(2), "{args:?}");
+        assert!(contains(&result.stderr, b"Usage:"), "{args:?}");
+        assert!(result.stdout.is_empty(), "{args:?}");
+    }
 }
 
 /// SPEC: [Command-line startup](../../docs/SPEC.md#command-line-startup).
