@@ -1,5 +1,6 @@
 //! Exporting certificates and certificate requests.
 
+use std::ffi::OsStr;
 use std::fs;
 
 use crate::fixtures::{TempDir, certificate_pem, fixture, fixture_certificate, pem_der};
@@ -68,4 +69,19 @@ fn certificate_request_export_then_quit_restores_terminal() {
     assert_eq!(pem_der(&saved), pem_der(&request));
     app.send(b"q");
     app.assert_restored();
+}
+
+/// SPEC: [Exporting](../../docs/SPEC.md#exporting),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn ctrl_c_in_export_prompt_restores_terminal() {
+    let directory = TempDir::new();
+    fs::write(directory.join("certificate.der"), fixture_certificate()).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("certificate.der")]);
+    app.expect(&["Certificate details", "x Export certificate"]);
+    app.send(b"x");
+    app.expect(&["Save certificate to:"]);
+    app.send(b"\x03"); // Quits instead of being typed into the name.
+    app.assert_restored();
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
 }
