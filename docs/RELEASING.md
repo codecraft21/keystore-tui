@@ -51,11 +51,10 @@ for this; it is not a build or test dependency.
 Dependabot leaves `release.yml` out of its GitHub Actions updates for the same
 reason; its actions are updated by upgrading `dist`.
 
-`dist` picks the build runners when the release runs. `dist-workspace.toml`
-overrides the Apple Silicon runner under `[dist.github-custom-runners]`, because
-GitHub retired the `macos-14` runner that `dist` 0.33.1 uses by default. If a
-build job is cancelled at once without a runner, check whether GitHub has
-retired its runner image, and override that target there. A rerun uses the
+`dist` picks the build runners when the release runs. If a build job is
+cancelled at once without a runner, check whether GitHub has retired its runner
+image. Upgrade `dist` if a newer version uses a current runner, or override that
+target under `[dist.github-custom-runners]` in `dist-workspace.toml`. A rerun uses the
 workflow and configuration at the tagged commit, so a fix needs a new version.
 
 The workflows need two repository secrets:
