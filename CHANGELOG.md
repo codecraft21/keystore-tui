@@ -3,6 +3,11 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.0.5
+
+- Use the environment's default temporary directory for Cargo builds and tests,
+  avoiding rust-analyzer temporary folders in the repository root.
+
 ## 1.0.4
 
 - Press `a` in the detail view to show the ASN.1 structure of the selected
