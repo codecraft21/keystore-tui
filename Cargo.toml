@@ -13,7 +13,7 @@ categories = ["command-line-utilities", "cryptography"]
 include = [
     "/src",
     "/tests/fixtures",
-    "/tests/terminal_smoke.rs",
+    "/tests/terminal_smoke",
     "/docs/SPEC.md",
     "/docs/REFERENCE.md",
     "/Cargo.toml",
@@ -29,7 +29,7 @@ sha1 = { version = "0.11.0", default-features = false }
 zeroize = "1"
 crown = { version = "0.31.1", default-features = false, features = ["alloc"] }
 
-# The PTY smoke tests (tests/terminal_smoke.rs); already a crossterm dependency.
+# The PTY smoke tests (tests/terminal_smoke/); already a crossterm dependency.
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1.1.5", default-features = false, features = ["std", "event", "process", "pty", "termios"] }
 
