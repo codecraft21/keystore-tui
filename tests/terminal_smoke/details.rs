@@ -1,11 +1,4 @@
 //! The entry detail view and its panes.
-//!
-//! - Opening a public-certificate fixture with an empty password: detail
-//!   navigation, scrolling, signature checks, fingerprints, extensions, the file
-//!   path, resizing, and returning to the list.
-//! - The chain diagnostics view opens and closes.
-//! - A certificate's ASN.1 and PEM panes open with `a` and `p`, and `p` again
-//!   returns to its details.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -13,6 +6,7 @@ use std::fs;
 use crate::fixtures::{TempDir, empty_password_fixture, fixture_certificate};
 use crate::pty::PtyApp;
 
+/// SPEC: [Offline chain diagnostics](../../docs/SPEC.md#offline-chain-diagnostics).
 #[test]
 fn chain_diagnostics_navigation() {
     let directory = TempDir::new();
@@ -37,6 +31,7 @@ fn chain_diagnostics_navigation() {
     app.assert_restored();
 }
 
+/// SPEC: [ASN.1 and PEM views](../../docs/SPEC.md#asn1-and-pem-views).
 #[test]
 fn asn1_and_pem_panes() {
     let directory = TempDir::new();
@@ -92,11 +87,21 @@ fn exercise(exit_key: &[u8]) {
     app.assert_restored();
 }
 
+/// SPEC: [Entry details](../../docs/SPEC.md#entry-details),
+/// [Extensions](../../docs/SPEC.md#extensions),
+/// [Signature checks](../../docs/SPEC.md#signature-checks),
+/// [Small terminals](../../docs/SPEC.md#small-terminals),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
 #[test]
 fn quit_restores_terminal() {
     exercise(b"q");
 }
 
+/// SPEC: [Entry details](../../docs/SPEC.md#entry-details),
+/// [Extensions](../../docs/SPEC.md#extensions),
+/// [Signature checks](../../docs/SPEC.md#signature-checks),
+/// [Small terminals](../../docs/SPEC.md#small-terminals),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
 #[test]
 fn ctrl_c_restores_terminal() {
     exercise(b"\x03");

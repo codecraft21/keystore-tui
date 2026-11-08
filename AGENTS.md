@@ -35,8 +35,8 @@ On Linux, macOS, or WSL, `cargo test` also runs the PTY smoke tests in
 KEYSTORE_TUI_BINARY=/absolute/path/to/keystore-tui cargo test --locked --test terminal_smoke
 ```
 
-Each test module's documentation there lists what its tests cover; keep it
-current when adding or changing them. For TUI
+Give each smoke test a `SPEC:` doc line linking the [SPEC](docs/SPEC.md)
+sections it checks; `spec.rs` fails on a missing link or a renamed heading. For TUI
 changes, also check rendering, input, and terminal restoration by hand in an
 interactive terminal. CI (`.github/workflows/rust.yml`) runs these automated
 checks on Linux for pushes to `main` and PRs, builds with the minimum supported

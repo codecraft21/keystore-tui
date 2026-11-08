@@ -1,16 +1,4 @@
-//! Starting the app with and without a path.
-//!
-//! - The hidden startup password prompt for JKS, JCEKS, and PKCS12 fixtures,
-//!   including the no-MAC `encrypted-no-mac.p12`; a wrong password, `Ctrl+C`, or
-//!   `Esc` there exits without starting the app.
-//! - `empty-password.p12` and the no-MAC `passwordless.p12` open without a prompt.
-//! - A missing, invalid, or malformed path shows a warning, a path with spaces
-//!   opens, and extra arguments print usage.
-//! - The committed single-certificate PEM and DER (`.crt`) fixtures and the
-//!   request fixture given at startup open straight into their details, and
-//!   `Esc` returns to the list; the two-certificate `bundle.pem` opens on the
-//!   list.
-//! - `--version` and `--help` print and exit without starting the app.
+//! Starting the app: arguments, the password prompt, and files given at startup.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -22,6 +10,9 @@ use crate::fixtures::{ROOT, TempDir, empty_password_fixture, fixture};
 use crate::pty::{PtyApp, binary};
 use crate::screen::contains;
 
+/// SPEC: [Command-line startup](../../docs/SPEC.md#command-line-startup),
+/// [Password prompt](../../docs/SPEC.md#password-prompt),
+/// [PKCS12 compatibility](../../docs/SPEC.md#pkcs12-compatibility).
 #[test]
 fn startup_password() {
     for name in [
@@ -43,6 +34,8 @@ fn startup_password() {
     }
 }
 
+/// SPEC: [Command-line startup](../../docs/SPEC.md#command-line-startup),
+/// [Password prompt](../../docs/SPEC.md#password-prompt).
 #[test]
 fn startup_password_failure() {
     let path = fixture("trusted-cert.jks");
@@ -58,6 +51,7 @@ fn startup_password_failure() {
     }
 }
 
+/// SPEC: [Command-line startup](../../docs/SPEC.md#command-line-startup).
 #[test]
 fn startup_invalid_path() {
     for path in ["missing.jks", "README.md", "tests"] {
@@ -70,6 +64,8 @@ fn startup_invalid_path() {
     }
 }
 
+/// SPEC: [Command-line startup](../../docs/SPEC.md#command-line-startup),
+/// [Loading and validation](../../docs/SPEC.md#loading-and-validation).
 #[test]
 fn startup_spaces_and_malformed() {
     let directory = TempDir::new();
@@ -90,6 +86,10 @@ fn startup_spaces_and_malformed() {
     app.assert_restored();
 }
 
+/// SPEC: [Command-line startup](../../docs/SPEC.md#command-line-startup),
+/// [Certificate files](../../docs/SPEC.md#certificate-files),
+/// [Certificate requests](../../docs/SPEC.md#certificate-requests),
+/// [Signature checks](../../docs/SPEC.md#signature-checks).
 #[test]
 fn startup_certificate_details() {
     let directory = TempDir::new();
@@ -117,6 +117,7 @@ fn startup_certificate_details() {
     }
 }
 
+/// SPEC: [Certificate files](../../docs/SPEC.md#certificate-files).
 #[test]
 fn startup_certificate_bundle_opens_on_the_list() {
     let directory = TempDir::new();
@@ -131,6 +132,7 @@ fn startup_certificate_bundle_opens_on_the_list() {
     app.assert_restored();
 }
 
+/// SPEC: [Command-line startup](../../docs/SPEC.md#command-line-startup).
 #[test]
 fn startup_extra_arguments() {
     let result = Command::new(binary()).args(["a", "b"]).output().unwrap();
@@ -138,6 +140,7 @@ fn startup_extra_arguments() {
     assert!(contains(&result.stderr, b"Usage:"));
 }
 
+/// SPEC: [Command-line startup](../../docs/SPEC.md#command-line-startup).
 #[test]
 fn version_and_help() {
     for (flag, expected) in [
@@ -153,6 +156,8 @@ fn version_and_help() {
     }
 }
 
+/// SPEC: [Loading and validation](../../docs/SPEC.md#loading-and-validation),
+/// [PKCS12 compatibility](../../docs/SPEC.md#pkcs12-compatibility).
 #[test]
 fn startup_empty_password() {
     for name in ["empty-password.p12", "passwordless.p12"] {
