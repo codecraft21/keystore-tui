@@ -52,9 +52,12 @@ auto-merge for all of them, so they merge once the required checks pass; the
 automated checks, including the PTY smoke tests, stand in for a manual TUI
 check. Merges made this way don't trigger the push workflows on `main`.
 
-Cargo sets the temporary directory (`TMPDIR`, and `TMP` and `TEMP` on Windows)
-to the repository root (`.cargo/config.toml`). Fixture
-regeneration tools are not build, test, or runtime dependencies. Before changing
+Use the environment's default temporary directory. If a sandbox cannot write
+there, create `target/tmp` and set `TMPDIR="$PWD/target/tmp"` for the affected
+command only (set `TMP` and `TEMP` on Windows). Keep this override local to the
+environment rather than committing Cargo configuration.
+
+Fixture regeneration tools are not build, test, or runtime dependencies. Before changing
 fixtures, read [their generation instructions](tests/fixtures/README.md).
 Tests needing private-key entries use synthetic bytes at runtime; never commit private keys.
 

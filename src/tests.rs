@@ -1630,7 +1630,7 @@ fn the_opened_file_directory_is_absolute() {
 
 #[test]
 fn the_opened_file_directory_resolves_parent_components() {
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::in_working_directory();
     let certs = directory.path().join("certs");
     fs::create_dir(&certs).unwrap();
     let relative = test_support::relative_to_working_directory(&certs);
@@ -1640,7 +1640,7 @@ fn the_opened_file_directory_resolves_parent_components() {
 
 #[test]
 fn details_opened_through_a_relative_path_export_to_the_suggested_folder() {
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::in_working_directory();
     let relative = test_support::relative_to_working_directory(directory.path());
     let path = relative.join("server.pem");
     fs::write(
@@ -1668,7 +1668,7 @@ fn details_opened_through_a_relative_path_export_to_the_suggested_folder() {
 
 #[test]
 fn the_file_browser_opens_in_the_directory_of_a_bare_or_relative_name() {
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::in_working_directory();
     let relative = test_support::relative_to_working_directory(directory.path());
     for path in [PathBuf::from("store.jks"), relative.join("store.jks")] {
         let mut app = App {

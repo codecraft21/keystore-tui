@@ -48,15 +48,23 @@ pub struct TestDirectory {
 
 impl TestDirectory {
     pub fn new() -> Self {
+        Self::in_directory(&std::env::temp_dir())
+    }
+
+    /// Keeps relative-path fixtures on the working directory's drive on Windows.
+    pub fn in_working_directory() -> Self {
+        Self::in_directory(&std::env::current_dir().unwrap())
+    }
+
+    fn in_directory(parent: &Path) -> Self {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
+        let path = parent.join(format!(
             "keystore-tui-test-{}-{}",
             std::process::id(),
             NEXT_ID.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
-        // Canonical, as the file browser shows it: Cargo's temporary
-        // directory ends in `.`, and Windows may give it as a short name.
+        // Canonical, as the file browser shows it; Windows may use a short name.
         let path = canonicalize(&path).unwrap();
         Self { path }
     }
@@ -72,9 +80,8 @@ impl Drop for TestDirectory {
     }
 }
 
-/// `path` relative to the working directory, which holds the test
-/// directories because Cargo sets the temporary directory (`TMPDIR`, and
-/// `TMP` and `TEMP` on Windows) to the repository root.
+/// `path` relative to the working directory, for fixtures created with
+/// `TestDirectory::in_working_directory`.
 pub fn relative_to_working_directory(path: &Path) -> PathBuf {
     let working_directory = canonicalize(&std::env::current_dir().unwrap()).unwrap();
     canonicalize(path)

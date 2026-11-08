@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn a_relative_directory_is_joined_once() {
-        let directory = TestDirectory::new();
+        let directory = TestDirectory::in_working_directory();
         let relative = relative_to_working_directory(directory.path());
         assert!(relative.is_relative());
         fs::write(relative.join("server.pem"), b"existing").unwrap();
