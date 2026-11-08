@@ -1,10 +1,4 @@
 //! Exporting certificates and certificate requests.
-//!
-//! - Exporting a PEM certificate file opened from the file browser, which goes
-//!   straight to its details: `q` is typed into the export name and `Esc`
-//!   cancels the prompt.
-//! - The `keytool` certificate request fixture: its signature is verified and it
-//!   exports as PEM.
 
 use std::fs;
 
@@ -37,16 +31,25 @@ fn certificate_file(exit_key: &[u8]) {
     app.assert_restored();
 }
 
+/// SPEC: [Exporting](../../docs/SPEC.md#exporting),
+/// [Certificate files](../../docs/SPEC.md#certificate-files),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
 #[test]
 fn certificate_file_export_then_quit_restores_terminal() {
     certificate_file(b"q");
 }
 
+/// SPEC: [Exporting](../../docs/SPEC.md#exporting),
+/// [Certificate files](../../docs/SPEC.md#certificate-files),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
 #[test]
 fn certificate_file_export_then_ctrl_c_restores_terminal() {
     certificate_file(b"\x03");
 }
 
+/// SPEC: [Exporting](../../docs/SPEC.md#exporting),
+/// [Certificate requests](../../docs/SPEC.md#certificate-requests),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
 #[test]
 fn certificate_request_export_then_quit_restores_terminal() {
     let request = fs::read_to_string(fixture("keytool-request.csr")).unwrap();
