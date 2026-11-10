@@ -2075,3 +2075,186 @@ fn rename_and_import_need_an_editable_keystore() {
         assert!(app.message.is_none() && app.file_picker.is_none());
     }
 }
+
+fn type_new_password(app: &mut App, first: &str, second: &str) {
+    type_password(app, first);
+    press(app, KeyCode::Enter);
+    type_password(app, second);
+    press(app, KeyCode::Enter);
+}
+
+#[test]
+fn changing_the_password_is_written_on_save() {
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    assert!(screen(&mut app, 120, 24).contains("W Save as | p Password"));
+    press(&mut app, KeyCode::Char('p'));
+    assert!(screen(&mut app, 120, 24).contains("New keystore password: _"));
+    // Letters are typed, masked, instead of quitting.
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains("New keystore password: *_"));
+    press(&mut app, KeyCode::Backspace);
+
+    type_new_password(&mut app, "new-päss", "new-pass");
+    assert!(red_text(&mut app).contains("The passwords do not match"));
+    assert!(!app.modified);
+    // The prompt starts over with the first entry.
+    assert!(screen(&mut app, 120, 24).contains("New keystore password: _"));
+    type_password(&mut app, "new-päss");
+    press(&mut app, KeyCode::Enter);
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains("Type the password again: _"));
+    assert!(!rendered.contains("new-päss"));
+    type_password(&mut app, "new-päss");
+    press(&mut app, KeyCode::Enter);
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains("Password changed"));
+    assert!(rendered.contains("[modified]"));
+    assert!(app.new_password.is_none());
+    assert_eq!(aliases(&path), ["root-cert", "server-key"]);
+
+    press(&mut app, KeyCode::Char('w'));
+    let saved = fs::read(&path).unwrap();
+    assert!(keystore::load_entries(&saved, "changeit").is_none());
+    assert_eq!(
+        keystore::load_entries(&saved, "new-päss").unwrap(),
+        app.entries
+    );
+    // Only the digest differs: entries, and so key protection, are untouched.
+    let original = mixed_keystore();
+    assert_eq!(saved[..saved.len() - 20], original[..original.len() - 20]);
+
+    // Esc cancels at either step.
+    for steps in [0, 1] {
+        press(&mut app, KeyCode::Char('p'));
+        for _ in 0..steps {
+            press(&mut app, KeyCode::Enter);
+        }
+        assert!(!press(&mut app, KeyCode::Esc));
+        assert!(app.new_password.is_none() && !app.modified);
+    }
+}
+
+#[test]
+fn creating_a_keystore_writes_an_empty_file_and_opens_it() {
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    fs::write(directory.path().join("keystore.jks"), b"existing").unwrap();
+    press(&mut app, KeyCode::Char('n'));
+    let suggested = directory.path().join("keystore-2.jks");
+    assert!(screen(&mut app, 200, 24).contains(&format!(
+        "New keystore file (.jks or .jceks): {}_",
+        suggested.display()
+    )));
+    for (name, error) in [
+        ("store.jks", "already exists"),
+        ("new.P12", "Only JKS and JCEKS keystores can be created"),
+    ] {
+        type_alias(&mut app, name);
+        assert!(red_text(&mut app).contains(error), "{name}");
+        assert!(
+            app.save_as.is_some() && app.new_password.is_none(),
+            "{name}"
+        );
+    }
+    type_alias(&mut app, "new.JCEKS");
+    assert!(screen(&mut app, 120, 24).contains("Password for the new keystore: _"));
+    let created = directory.path().join("new.JCEKS");
+    // Nothing is created before the password is confirmed.
+    assert!(!created.exists());
+    type_new_password(&mut app, "secret", "secret");
+
+    let created = canonical_path::canonicalize(&created).unwrap();
+    let rendered = screen(&mut app, 200, 24);
+    assert!(rendered.contains("Created the JCEKS keystore"));
+    assert!(rendered.contains("This keystore contains no entries."));
+    assert_eq!(app.keystore_path.as_deref(), Some(created.as_path()));
+    assert!(!app.modified && app.document.is_some());
+    let data = fs::read(&created).unwrap();
+    assert!(keystore::is_jceks(&data));
+    assert!(keystore::load_entries(&data, "secret").unwrap().is_empty());
+    assert_eq!(aliases(&path), ["root-cert", "server-key"]);
+
+    // The new keystore can be filled and saved with its password.
+    fs::write(
+        directory.path().join("ca.pem"),
+        test_support::TRUSTED_CERT_PEM,
+    )
+    .unwrap();
+    press(&mut app, KeyCode::Char('i'));
+    type_password(&mut app, "ca");
+    press(&mut app, KeyCode::Enter);
+    type_alias(&mut app, "ca");
+    press(&mut app, KeyCode::Char('w'));
+    let data = fs::read(&created).unwrap();
+    assert_eq!(
+        keystore::load_entries(&data, "secret").unwrap(),
+        app.entries
+    );
+    assert_eq!(app.entries.len(), 1);
+}
+
+#[test]
+fn a_keystore_can_be_created_before_any_file_is_open() {
+    let directory = TestDirectory::in_working_directory();
+    let mut app = App::default();
+    assert!(screen(&mut app, 120, 24).contains("Press n to create a JKS or JCEKS keystore."));
+    press(&mut app, KeyCode::Char('n'));
+    assert!(app.save_as.as_ref().is_some_and(|prompt| prompt.creating));
+    press(&mut app, KeyCode::Esc);
+    assert!(app.save_as.is_none() && app.keystore_path.is_none());
+
+    press(&mut app, KeyCode::Char('n'));
+    let path = directory.path().join("first.jks");
+    type_alias(&mut app, &path.to_string_lossy());
+    // Keys that are not text are ignored.
+    press(&mut app, KeyCode::Tab);
+    // An empty password is allowed, as for the stores the app opens.
+    type_new_password(&mut app, "", "");
+    let data = fs::read(&path).unwrap();
+    assert!(!keystore::is_jceks(&data));
+    assert_eq!(data, empty_keystore());
+    assert!(app.document.is_some());
+
+    // A file that cannot be created is reported, and the loaded file stays.
+    press(&mut app, KeyCode::Char('n'));
+    let missing = directory.path().join("missing").join("new.jks");
+    type_alias(&mut app, &missing.to_string_lossy());
+    type_new_password(&mut app, "secret", "secret");
+    assert!(red_text(&mut app).contains("Cannot create"));
+    assert!(app.new_password.is_none());
+    assert_eq!(
+        app.keystore_path.as_deref().map(fs::read).unwrap().unwrap(),
+        data
+    );
+}
+
+#[test]
+fn creating_a_keystore_asks_before_discarding_changes() {
+    let directory = TestDirectory::new();
+    let (mut app, _) = editing(&directory);
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('y'));
+    press(&mut app, KeyCode::Char('n'));
+    assert!(
+        screen(&mut app, 120, 24).contains("Creating a keystore discards the unsaved changes.")
+    );
+    press(&mut app, KeyCode::Char('x'));
+    assert!(app.save_as.is_none());
+    press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::Char('y'));
+    assert!(app.save_as.is_some());
+    // The changes are kept until the keystore is created.
+    press(&mut app, KeyCode::Esc);
+    assert!(app.modified);
+
+    // A PKCS12 keystore cannot have its password changed yet.
+    let path = directory.path().join("store.p12");
+    fs::write(&path, include_bytes!("../tests/fixtures/passwordless.p12")).unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    press(&mut app, KeyCode::Char('p'));
+    assert!(app.new_password.is_none());
+    assert!(red_text(&mut app).contains(NOT_EDITABLE));
+}

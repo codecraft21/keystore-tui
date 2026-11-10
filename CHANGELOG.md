@@ -13,8 +13,10 @@ All notable changes to keystore-tui are listed here. Versions follow
 - In a JKS or JCEKS keystore, press `r` to rename the selected entry, and `i`
   to import a file holding one certificate as a trusted certificate. Aliases
   are stored in lower case, as Java does.
+- Press `n` to create an empty JKS or JCEKS keystore, and `p` to change the
+  password of the open one. Private-key entries keep their own passwords.
 - With unsaved changes, `[modified]` is shown next to the app name, and `q`,
-  `Esc`, and `o` ask before discarding them. `Ctrl+C` still quits at once.
+  `Esc`, `o`, and `n` ask before discarding them. `Ctrl+C` still quits at once.
 - The keystore password now stays in memory while a JKS or JCEKS keystore is
   open, because saving needs it. It is wiped when the keystore is closed.
 

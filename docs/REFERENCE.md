@@ -116,11 +116,13 @@ certificates whose names match another certificate or key.
 | `/` | Type a filter, or edit the applied one |
 | `s` | Switch the sort order between alias and expiry date |
 | `o` | Open another keystore or certificate file |
+| `n` | Create a new, empty JKS or JCEKS keystore |
 | `i` | Import a certificate file as a trusted certificate (JKS and JCEKS) |
 | `r` | Rename the selected entry (JKS and JCEKS) |
 | `d` / `Delete` | Delete the selected entry (JKS and JCEKS) |
 | `w` | Save the changes to the opened file (JKS and JCEKS) |
 | `W` | Save the keystore to a new file (JKS and JCEKS) |
+| `p` | Change the keystore password (JKS and JCEKS) |
 
 Press `/` to filter by part of the alias or the certificate subject (such as
 `CN=example`), ignoring case. The list updates as you type, and every letter,
@@ -144,6 +146,15 @@ next to the app name, but nothing changes on disk until you save.
   certificate (PEM, DER, or PKCS#7) in the browser, then confirm or edit the
   suggested alias and press `Enter`.
 
+- **Change the password:** press `p`, then type the new password twice. Only
+  the keystore's own password changes; private-key and secret-key entries keep
+  the passwords they were protected with, as with `keytool -storepasswd`.
+
+To create a keystore, press `n`, edit the suggested file name, and type its
+password twice. A `.jceks` name creates a JCEKS keystore and any other name a
+JKS keystore; PKCS12 keystores cannot be created yet. The empty keystore is
+written at once and opened, ready for importing certificates.
+
 In an alias prompt every key, including `q`, is typed into the alias;
 `Backspace` deletes a character, `Ctrl+U` clears it, and `Esc` cancels. Aliases
 are stored in lower case, as Java does, and an alias another entry already has
@@ -159,7 +170,7 @@ and press `Enter`. The prompt works like the [export
 prompt](#exporting-certificates): existing files are never replaced, and `Esc`
 cancels. The new file becomes the opened one.
 
-With unsaved changes, `q`, `Esc`, and `o` ask before discarding them; press `y`
+With unsaved changes, `q`, `Esc`, `o`, and `n` ask before discarding them; press `y`
 to go on. `Ctrl+C` quits at once and discards them.
 
 The keystore password stays in memory while the keystore is open, because
