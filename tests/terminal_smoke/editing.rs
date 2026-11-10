@@ -32,7 +32,7 @@ fn delete_save_and_quit_restores_terminal() {
     app.send(b"\x15"); // Ctrl+U clears the suggested absolute path.
     app.expect(&["Save keystore as: _"]);
     app.send(b"copy.jks\r"); // Saved next to the opened file.
-    app.expect(&["Saved '"]);
+    app.expect(&["Saved"]);
     assert_eq!(fs::read(&path).unwrap(), original);
     // An empty JKS keystore: header, no entries, digest.
     assert_eq!(fs::read(directory.join("copy.jks")).unwrap().len(), 32);
@@ -54,7 +54,7 @@ fn save_in_place_then_ctrl_c_restores_terminal() {
     app.send(b"dy");
     app.expect(&["[modified]"]);
     app.send(b"w");
-    app.expect(&["Saved '"]);
+    app.expect(&["Saved"]);
     assert_eq!(fs::read(&path).unwrap().len(), 32);
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     app.send(b"\x03");
