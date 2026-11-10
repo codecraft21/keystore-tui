@@ -17,6 +17,7 @@ mod spec;
 
 mod browser;
 mod details;
+mod editing;
 mod entry_list;
 mod export;
 mod startup;

@@ -41,8 +41,10 @@ opens standalone certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`,
 - Opens PKCS12 files made by Java, OpenSSL, and other tools. Keys without a
   name are listed under their certificate's common name, and certificates that
   belong to no key are listed as `Certificate` entries.
-- Safe and self-contained: it never modifies existing files, never
-  decrypts or displays private keys, and does not need Java or `keytool`.
+- Deletes entries from JKS and JCEKS keystores. Nothing changes on disk until
+  you save, and saving replaces the file in one step.
+- Safe and self-contained: it never decrypts or displays private keys, and
+  does not need Java or `keytool`.
 
 ## Install
 
@@ -76,10 +78,10 @@ certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
 
 ## Limitations
 
-- Keystores cannot be changed yet: there is no import or editing. Only
-  certificates, certificate chains, and certificate signing requests can be
-  exported. Editing is planned for release 1.1; see the
-  [roadmap](docs/ROADMAP.md).
+- Editing is limited to deleting entries from JKS and JCEKS keystores. PKCS12
+  keystores cannot be changed yet, and there is no import. Only certificates,
+  certificate chains, and certificate signing requests can be exported. More
+  editing is planned for release 1.1; see the [roadmap](docs/ROADMAP.md).
 - Private keys are not decrypted, shown, or exported yet.
 - Clipboard actions are not available yet.
 - PKCS12 integrity checks do not support PBMAC1 MACs.

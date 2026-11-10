@@ -18,6 +18,8 @@ document and the usage reference, and also the README if its overview changes.
 - [Entry list](#entry-list)
   - [Filtering](#filtering)
   - [Sorting](#sorting)
+  - [Deleting entries](#deleting-entries)
+- [Saving](#saving)
 - [Entry details](#entry-details)
   - [Certificate requests](#certificate-requests)
   - [Weak cryptography](#weak-cryptography)
@@ -33,14 +35,15 @@ document and the usage reference, and also the README if its overview changes.
 ## Scope
 
 - The app reads Java KeyStore (JKS), JCEKS, and PKCS12 files, standalone
-  certificate files, and PKCS#10 certificate requests. It never writes or
-  modifies them.
-- The only files it writes are new certificate and request exports; see
+  certificate files, and PKCS#10 certificate requests. It changes a JKS or JCEKS
+  keystore file only when the user saves it; see [Saving](#saving). PKCS12
+  keystores, certificate files, and requests are never written or modified.
+- The other files it writes are new certificate and request exports; see
   [Exporting](#exporting).
 - It runs without Java or `keytool` installed.
 - Private keys are never decrypted, displayed, or exported.
-- The following are out of scope for now: import, keystore editing, and
-  clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
+- The following are out of scope for now: import, keystore editing other
+  than [deleting entries](#deleting-entries), and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
   features; each one updates this section when it ships.
 
 ## Command-line startup
@@ -288,6 +291,57 @@ any existing incomplete-entry warnings.
   otherwise the first listed entry is selected. The detail view always opens
   the selected entry, and returning from it restores the filtered list.
 
+### Deleting entries
+
+- Only JKS and JCEKS keystores can be changed. In the entry list of one, a
+  line above the shortcuts shows `d Delete entry | w Save | W Save as`.
+- `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
+  entry. `y` deletes it; any other key cancels and does nothing else. The
+  keys do nothing when no entry is selected.
+- Deleting changes only the list in memory, not the file. A green message
+  names the deleted entry, and the selection stays on the same row, or on the
+  last row when the last one was deleted.
+- While the list differs from the file, `[modified]` is shown in yellow after
+  the app name. Entries sharing an alias are deleted one at a time.
+- For a PKCS12 keystore or a certificate file, `d`, `Delete`, `w`, and `W`
+  show a red message that only JKS and JCEKS keystores can be changed. With no
+  file loaded they do nothing.
+- With unsaved changes, `o` first asks before opening the file browser; `y`
+  continues and any other key cancels. The changes are kept until another
+  file is loaded, so cancelling the browser or a password prompt keeps them.
+- Messages about deleting and saving clear on the next key.
+
+## Saving
+
+- `w` saves the changes to the opened file; without changes it only reports
+  `No changes to save.` `W` saves the keystore, changed or not, to a new file.
+- The saved keystore keeps its format, version, and password. Every remaining
+  entry is written byte for byte as it was read, in its stored order, with its
+  creation date; private and secret keys stay encrypted and are never
+  decrypted. Only the entry count and the integrity digest are recomputed. Data
+  after the digest, which Java ignores, is not kept.
+- The password is kept in memory while the keystore is open, to compute the
+  digest, and is wiped when the keystore is closed or replaced by another
+  file.
+- Before anything is written, the new content is read back and compared with
+  the entry list; on a mismatch nothing is written.
+- `w` replaces the file in one step: the content is written to a temporary
+  file in the same directory, which is then renamed over the opened file. A
+  symbolic link is followed and stays a link, and the file keeps its
+  permissions. If anything fails, the file keeps its old content, the
+  temporary file is removed, and the changes stay unsaved.
+- `W` opens a prompt in place of the shortcuts, suggesting
+  `<name>-copy.<extension>` next to the opened file as an absolute path,
+  numbered like `store-copy-2.jks` when that name exists. It takes keys like
+  the [export prompt](#exporting): characters are typed into the name,
+  `Backspace` deletes one, `Ctrl+U` clears the name, `Enter` saves, `Esc`
+  cancels, and a relative name is resolved against the opened file's
+  directory.
+- The "save as" file must not exist yet; it is never replaced. On failure a
+  red message explains why and the prompt stays open. On success the new file
+  becomes the opened file, so later saves go to it.
+- A green message names the saved file, and `[modified]` disappears.
+
 ## Entry details
 
 - The view is full-screen and read-only, and it does not change the entry list's
@@ -486,13 +540,18 @@ any existing incomplete-entry warnings.
 ## Quitting and terminal restoration
 
 - `q` quits from the entry list and the detail view, except while an export
-  name is being typed; see [Exporting](#exporting). In the file browser, `q` is
+  or "save as" name is being typed; see [Exporting](#exporting) and
+  [Saving](#saving). In the file browser, `q` is
   typed into the name filter; see [File selection](#file-selection).
 - `Esc` quits from the entry list.
 - While a filter is being typed, `q` and `Esc` edit the filter instead; see
   [Filtering](#filtering).
+- With unsaved changes, `q` and `Esc` first ask `Quit without saving the
+  changes?` on the main view, in yellow. `y` quits and discards the changes;
+  any other key cancels and returns to the view the question came from.
 - `Ctrl+C` quits from any view, including the password prompt and while typing
-  a filter or an export name.
+  a filter or a file name. It quits at once, even with unsaved changes, which
+  are discarded; the file on disk is left as it was last saved.
 - The terminal is restored on normal exit, on errors, and when initialization
   fails. Restoring means raw mode is turned off, the alternate screen is left,
   and the cursor is visible again.

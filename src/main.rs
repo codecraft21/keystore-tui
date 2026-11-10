@@ -11,6 +11,7 @@ mod java_serialization;
 mod keystore;
 mod path_bar;
 mod pkcs12;
+mod save;
 mod startup;
 
 #[cfg(test)]
@@ -105,7 +106,27 @@ struct App {
     startup_warning: Option<String>,
     /// Shown in yellow while the loaded file is displayed.
     warning: Option<&'static str>,
+    /// The loaded keystore's writable form, when it can be edited and saved.
+    document: Option<save::Document>,
+    /// Whether the entries differ from the file they were loaded from.
+    modified: bool,
+    /// A question waiting for `y`; any other key cancels it.
+    confirm: Option<Confirm>,
+    save_as: Option<save::SaveAsPrompt>,
+    /// The result of the last edit or save, and whether it failed. Cleared
+    /// on the next key.
+    message: Option<(String, bool)>,
 }
+
+enum Confirm {
+    /// Delete the entry at this index of `entries`.
+    Delete(usize),
+    Quit,
+    /// Open the file browser, to replace the modified keystore.
+    Open,
+}
+
+const NOT_EDITABLE: &str = "Only JKS and JCEKS keystores can be changed for now.";
 
 const INCOMPLETE_WARNING: &str = "Warning: this PKCS12 entry list is incomplete.";
 const SKIPPED_WARNING: &str = "Warning: PEM blocks other than certificates and certificate requests, such as private keys, were not read.";
@@ -120,18 +141,30 @@ enum Store {
     Pkcs12(pkcs12::Store),
 }
 
+/// A keystore whose password was verified.
+struct Opened {
+    verified: pkcs12::Verified,
+    document: Option<save::Document>,
+}
+
 impl Store {
-    fn verify(self, password: &str) -> Result<pkcs12::Verified, Box<(Self, Option<&'static str>)>> {
+    fn verify(self, password: &str) -> Result<Opened, Box<(Self, Option<&'static str>)>> {
         match self {
             Self::Jks(store) => store
-                .verify(password)
-                .map(|entries| pkcs12::Verified {
-                    entries,
-                    incomplete: false,
+                .open(password)
+                .map(|(entries, writable)| Opened {
+                    verified: pkcs12::Verified {
+                        entries,
+                        incomplete: false,
+                    },
+                    document: Some(save::Document::new(writable, password)),
                 })
                 .map_err(|store| Box::new((Self::Jks(store), None))),
             Self::Pkcs12(store) => match store.verify(password) {
-                Ok(verified) => Ok(verified),
+                Ok(verified) => Ok(Opened {
+                    verified,
+                    document: None,
+                }),
                 Err(pkcs12::VerifyError::Password) => Err(Box::new((Self::Pkcs12(store), None))),
                 Err(pkcs12::VerifyError::Invalid(message)) => {
                     Err(Box::new((Self::Pkcs12(store), Some(message))))
@@ -154,12 +187,19 @@ impl App {
             return false;
         }
 
-        if (key.code == KeyCode::Char('q') && !self.typing())
-            || (key.code == KeyCode::Char('c')
-                && key.modifiers.contains(KeyModifiers::CONTROL)
-                && !key.modifiers.contains(KeyModifiers::ALT))
+        self.message = None;
+        // Ctrl+C quits at once, even with unsaved changes.
+        if key.code == KeyCode::Char('c')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
         {
             return true;
+        }
+        if let Some(confirm) = self.confirm.take() {
+            return key.code == KeyCode::Char('y') && self.confirmed(confirm);
+        }
+        if key.code == KeyCode::Char('q') && !self.typing() {
+            return self.quit();
         }
 
         if self.password_prompt.is_some() {
@@ -177,18 +217,35 @@ impl App {
             if details.handle_event(key) {
                 self.entry_details = None;
             }
+        } else if let Some(prompt) = &mut self.save_as {
+            match prompt.handle_key(key) {
+                save::Outcome::Editing => {}
+                save::Outcome::Cancelled => self.save_as = None,
+                save::Outcome::Save(path) => self.save_new(path),
+            }
         } else if self.editing_filter {
             self.handle_filter(key);
         } else {
             match key.code {
                 KeyCode::Enter => self.show_selected_details(),
+                KeyCode::Char('o') if self.modified => self.confirm = Some(Confirm::Open),
                 KeyCode::Char('o') => self.open_picker(),
+                KeyCode::Delete => self.ask_delete(),
+                KeyCode::Char('d') if is_text_input(key.modifiers) => self.ask_delete(),
+                KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
+                KeyCode::Char('W') if is_text_input(key.modifiers) => {
+                    if self.editable()
+                        && let Some(path) = &self.keystore_path
+                    {
+                        self.save_as = Some(save::SaveAsPrompt::new(path));
+                    }
+                }
                 KeyCode::Char('/') if !self.entries.is_empty() => self.editing_filter = true,
                 KeyCode::Char('s') if !self.entries.is_empty() => {
                     self.sort = self.sort.next();
                     self.refresh_visible();
                 }
-                KeyCode::Esc => return true,
+                KeyCode::Esc => return self.quit(),
                 KeyCode::Down | KeyCode::Char('j') => self.move_entry_selection(Step::Next),
                 KeyCode::Up | KeyCode::Char('k') => self.move_entry_selection(Step::Previous),
                 _ => {}
@@ -198,11 +255,105 @@ impl App {
         false
     }
 
+    /// Asks whether to delete the selected entry.
+    fn ask_delete(&mut self) {
+        if let Some(index) = self.selected_entry()
+            && self.editable()
+        {
+            self.confirm = Some(Confirm::Delete(index));
+        }
+    }
+
+    /// Quits, or asks first when there are unsaved changes.
+    fn quit(&mut self) -> bool {
+        if self.modified {
+            self.confirm = Some(Confirm::Quit);
+        }
+        !self.modified
+    }
+
+    /// Carries out a confirmed question. Returns whether to quit.
+    fn confirmed(&mut self, confirm: Confirm) -> bool {
+        match confirm {
+            Confirm::Quit => return true,
+            Confirm::Open => self.open_picker(),
+            Confirm::Delete(index) => {
+                let Some(document) = &mut self.document else {
+                    return false;
+                };
+                document.remove(index);
+                let entry = self.entries.remove(index);
+                self.modified = true;
+                self.message = Some((format!("Deleted entry '{}'.", entry.alias), false));
+                // Indices after the deleted entry shifted, so keep the
+                // selection at the same row instead of following an entry.
+                let position = self.entries_state.selected();
+                self.visible = entry_list::visible_entries(&self.entries, &self.filter, self.sort);
+                self.entries_state.select(
+                    self.visible
+                        .len()
+                        .checked_sub(1)
+                        .map(|last| position.unwrap_or(0).min(last)),
+                );
+            }
+        }
+        false
+    }
+
+    /// Whether the loaded file can be changed and saved; explains when a
+    /// loaded file cannot.
+    fn editable(&mut self) -> bool {
+        if self.document.is_none() && self.keystore_path.is_some() {
+            self.message = Some((NOT_EDITABLE.into(), true));
+        }
+        self.document.is_some()
+    }
+
+    /// Replaces the opened file with the modified keystore.
+    fn save(&mut self) {
+        if !self.editable() {
+            return;
+        }
+        let (Some(document), Some(path)) = (&self.document, &self.keystore_path) else {
+            return;
+        };
+        self.message = Some(if !self.modified {
+            ("No changes to save.".into(), false)
+        } else {
+            match document.save(path, &self.entries) {
+                Ok(()) => {
+                    self.modified = false;
+                    (format!("Saved '{}'.", path.display()), false)
+                }
+                Err(error) => (error, true),
+            }
+        });
+    }
+
+    /// Writes the keystore to a new file, which becomes the opened file.
+    fn save_new(&mut self, path: PathBuf) {
+        let Some(document) = &self.document else {
+            return;
+        };
+        self.message = Some(match document.save_new(&path, &self.entries) {
+            Ok(()) => {
+                let path = canonical_path::canonicalize(&path).unwrap_or(path);
+                let message = format!("Saved '{}'.", path.display());
+                self.keystore_path = Some(path);
+                self.modified = false;
+                self.save_as = None;
+                (message, false)
+            }
+            Err(error) => (error, true),
+        });
+    }
+
     /// Whether letter keys are typed as text rather than used as shortcuts.
     fn typing(&self) -> bool {
         self.password_prompt.is_some()
             || self.file_picker.is_some()
             || self.editing_filter
+            || self.save_as.is_some()
             || self
                 .entry_details
                 .as_ref()
@@ -359,6 +510,12 @@ impl App {
         self.entry_details = None;
         self.error = None;
         self.warning = None;
+        // Dropping the previous document wipes its password.
+        self.document = None;
+        self.modified = false;
+        self.confirm = None;
+        self.save_as = None;
+        self.message = None;
     }
 
     /// Lists a standalone certificate file. A file with a single certificate
@@ -371,9 +528,10 @@ impl App {
         }
     }
 
-    fn show_verified(&mut self, path: PathBuf, verified: pkcs12::Verified) {
-        self.show_entries(path, verified.entries);
-        self.warning = verified.incomplete.then_some(INCOMPLETE_WARNING);
+    fn show_verified(&mut self, path: PathBuf, opened: Opened) {
+        self.show_entries(path, opened.verified.entries);
+        self.warning = opened.verified.incomplete.then_some(INCOMPLETE_WARNING);
+        self.document = opened.document;
     }
 
     fn open_picker(&mut self) {
@@ -392,18 +550,21 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
+        // A question is asked on the main view, even from the details.
         if self.password_prompt.is_none()
             && self.file_picker.is_none()
+            && self.confirm.is_none()
             && let Some(details) = &mut self.entry_details
         {
             details.draw(frame);
             return;
         }
+        let shortcuts = self.shortcuts();
         let [content, status, path_area, help] = Layout::vertical([
             Constraint::Min(3),
             Constraint::Length(2),
             Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(shortcuts.len() as u16),
         ])
         .areas(frame.area());
 
@@ -418,7 +579,11 @@ impl App {
                 content,
             );
         } else if self.keystore_path.is_some() {
-            let mut block = Block::bordered().title(" keystore-tui ".blue());
+            let mut title = vec![" keystore-tui ".blue()];
+            if self.modified {
+                title.push("[modified] ".yellow());
+            }
+            let mut block = Block::bordered().title(Line::from(title));
             if !self.entries.is_empty() {
                 block = block.title_bottom(Line::from(self.list_title()).right_aligned());
             }
@@ -528,7 +693,22 @@ impl App {
                 content,
             );
         }
-        if let Some(error) = &self.error {
+        if let Some(question) = self.question() {
+            frame.render_widget(
+                Paragraph::new(question)
+                    .style(Style::default().fg(Color::Yellow))
+                    .wrap(Wrap { trim: false }),
+                status,
+            );
+        } else if let Some((message, failed)) = &self.message {
+            let color = if *failed { Color::Red } else { Color::Green };
+            frame.render_widget(
+                Paragraph::new(message.as_str())
+                    .style(Style::default().fg(color))
+                    .wrap(Wrap { trim: false }),
+                status,
+            );
+        } else if let Some(error) = &self.error {
             frame.render_widget(
                 Paragraph::new(error.as_str())
                     .style(Style::default().fg(Color::Red))
@@ -556,15 +736,46 @@ impl App {
         if let Some(picker) = &mut self.file_picker {
             picker.draw(frame);
         } else {
-            let shortcuts = if self.password_prompt.is_some() {
-                "Enter Verify | Backspace Delete | Esc Cancel | Ctrl+C Quit"
-            } else if self.editing_filter {
-                "Type to filter | Enter Apply | Esc Clear | Up/Down Scroll | Ctrl+C Quit"
-            } else {
-                "o Open file | Enter Details | Up/Down j/k Scroll | / Filter | s Sort | q / Esc / Ctrl+C Quit"
-            };
             frame.render_widget(Paragraph::new(shortcuts), help);
         }
+    }
+
+    /// The bottom lines: the shortcuts, or the "save as" name being typed.
+    fn shortcuts(&self) -> Vec<Line<'static>> {
+        const LIST: &str = "o Open file | Enter Details | Up/Down j/k Scroll | / Filter | s Sort | q / Esc / Ctrl+C Quit";
+        if self.password_prompt.is_some() {
+            vec!["Enter Verify | Backspace Delete | Esc Cancel | Ctrl+C Quit".into()]
+        } else if let Some(prompt) = &self.save_as {
+            vec![
+                Line::from(vec![
+                    "Save keystore as: ".bold(),
+                    format!("{}_", prompt.path).into(),
+                ]),
+                "Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
+            ]
+        } else if self.editing_filter {
+            vec!["Type to filter | Enter Apply | Esc Clear | Up/Down Scroll | Ctrl+C Quit".into()]
+        } else if self.document.is_some() && self.file_picker.is_none() {
+            vec!["d Delete entry | w Save | W Save as".into(), LIST.into()]
+        } else {
+            vec![LIST.into()]
+        }
+    }
+
+    /// The question waiting for `y`, if any.
+    fn question(&self) -> Option<String> {
+        Some(match self.confirm.as_ref()? {
+            Confirm::Delete(index) => format!(
+                "Delete entry '{}'? Press y to delete, any other key to cancel.",
+                self.entries[*index].alias
+            ),
+            Confirm::Quit => {
+                "Quit without saving the changes? Press y to quit, any other key to cancel.".into()
+            }
+            Confirm::Open => {
+                "Opening another file discards the unsaved changes. Press y to continue, any other key to cancel.".into()
+            }
+        })
     }
 
     /// Describes the filter, shown entry count, and sort order.

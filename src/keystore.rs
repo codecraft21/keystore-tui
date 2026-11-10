@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, ops::Range};
 
 use sha1::{Digest, Sha1};
 use zeroize::Zeroize;
@@ -115,6 +115,41 @@ pub struct Keystore {
     data: Vec<u8>,
     body_len: usize,
     entries: Vec<KeystoreEntry>,
+    /// Where each of `entries` is stored in `data`, in the same order.
+    spans: Vec<Range<usize>>,
+}
+
+/// A verified keystore's entries as stored, for writing it back. Each entry
+/// keeps its original bytes, so protected keys, timestamps, and aliases are
+/// written exactly as they were read, and keys stay encrypted throughout.
+pub struct Writable {
+    /// The magic number and version.
+    header: [u8; 8],
+    /// Each listed entry's offset in the file it was read from, and its
+    /// bytes, in listing order.
+    entries: Vec<(usize, Vec<u8>)>,
+}
+
+impl Writable {
+    /// Removes the entry listed at `index`.
+    pub fn remove(&mut self, index: usize) {
+        self.entries.remove(index);
+    }
+
+    /// The keystore file: the entries in their stored order, followed by the
+    /// integrity digest for `password`.
+    pub fn encode(&self, password: &str) -> Vec<u8> {
+        let mut stored: Vec<_> = self.entries.iter().collect();
+        stored.sort_by_key(|(offset, _)| *offset);
+        let mut data = self.header.to_vec();
+        data.extend_from_slice(&(stored.len() as u32).to_be_bytes());
+        for (_, entry) in stored {
+            data.extend_from_slice(entry);
+        }
+        let digest = digest_of(password, &data);
+        data.extend_from_slice(&digest);
+        data
+    }
 }
 
 pub(crate) const DIGEST_LEN: usize = 20;
@@ -150,6 +185,7 @@ pub fn parse(mut data: Vec<u8>) -> Result<Keystore, Error> {
     let count = reader.count(18)?;
     let mut entries = Vec::new();
     for _ in 0..count {
+        let start = data.len() - reader.remaining.len();
         let tag = reader.u32()?;
         let alias = reader.string()?;
         reader.take(8)?; // Creation timestamp; listing does not need it.
@@ -192,12 +228,15 @@ pub fn parse(mut data: Vec<u8>) -> Result<Keystore, Error> {
             }
             _ => return Err(Error::UnknownEntryTag(tag)),
         };
-        entries.push(KeystoreEntry {
-            alias,
-            certificate,
-            content: Content::Certificates { kind, certificates },
-            chain_warning: None,
-        });
+        entries.push((
+            KeystoreEntry {
+                alias,
+                certificate,
+                content: Content::Certificates { kind, certificates },
+                chain_warning: None,
+            },
+            start..data.len() - reader.remaining.len(),
+        ));
     }
     let body_len = data.len() - reader.remaining.len();
     reader.take(DIGEST_LEN)?;
@@ -207,24 +246,39 @@ pub fn parse(mut data: Vec<u8>) -> Result<Keystore, Error> {
     data.shrink_to_fit();
 
     // Keep duplicate aliases visible instead of letting one entry hide another.
-    entries.sort_by(|a, b| a.alias.cmp(&b.alias));
+    entries.sort_by(|a, b| a.0.alias.cmp(&b.0.alias));
+    let (entries, spans) = entries.into_iter().unzip();
     Ok(Keystore {
         data,
         body_len,
         entries,
+        spans,
     })
 }
 
 impl Keystore {
-    /// Returns the entries if the password matches the integrity digest, or
-    /// the keystore back for another attempt if it does not.
-    pub fn verify(self, password: &str) -> Result<Vec<KeystoreEntry>, Self> {
+    /// Returns the entries, and what is needed to write them back, if the
+    /// password matches the integrity digest, or the keystore back for
+    /// another attempt if it does not.
+    pub fn open(self, password: &str) -> Result<(Vec<KeystoreEntry>, Writable), Self> {
         let (body, digest) = self.data.split_at(self.body_len);
-        if digest_of(password, body)[..] == *digest {
-            Ok(self.entries)
-        } else {
-            Err(self)
+        if digest_of(password, body)[..] != *digest {
+            return Err(self);
         }
+        let writable = Writable {
+            header: self.data[..8].try_into().unwrap(),
+            entries: self
+                .spans
+                .iter()
+                .map(|span| (span.start, self.data[span.clone()].to_vec()))
+                .collect(),
+        };
+        Ok((self.entries, writable))
+    }
+
+    #[cfg(test)]
+    pub fn verify(self, password: &str) -> Result<Vec<KeystoreEntry>, Self> {
+        self.open(password).map(|(entries, _)| entries)
     }
 }
 
@@ -728,6 +782,54 @@ mod tests {
         for end in 0..data.len() {
             assert!(parse(data[..end].to_vec()).is_err(), "prefix {end}");
         }
+    }
+
+    #[test]
+    fn writes_unchanged_keystores_back_byte_for_byte() {
+        let mut builder = Builder::jceks(VERSION_02, 4);
+        builder.entry(SECRET_KEY_TAG, b"aes", VERSION_02, 0);
+        builder.entry(PRIVATE_KEY_TAG, b"key", VERSION_02, 2);
+        builder.entry(TRUSTED_CERT_TAG, b"cert", VERSION_02, 1);
+        // Stored after `cert`, listed before it.
+        builder.entry(TRUSTED_CERT_TAG, b"a\xed\xb0\x80", VERSION_02, 1);
+        let mut v1 = Builder::new(VERSION_01, 2);
+        v1.entry(PRIVATE_KEY_TAG, b"key", VERSION_01, 1);
+        v1.entry(TRUSTED_CERT_TAG, b"cert", VERSION_01, 1);
+        for (data, password) in [
+            (KEYTOOL_JKS.to_vec(), "changeit"),
+            (KEYTOOL_JCEKS.to_vec(), "changeit"),
+            (UNICODE_ALIAS_JKS.to_vec(), "changeit"),
+            (UNICODE_PASSWORD_JKS.to_vec(), "pässwörd-😀"),
+            (builder.finish("changeit"), "changeit"),
+            (v1.finish(""), ""),
+            (empty_keystore(), ""),
+        ] {
+            let (_, writable) = parse(data.clone()).unwrap().open(password).ok().unwrap();
+            assert_eq!(writable.encode(password), data);
+        }
+    }
+
+    #[test]
+    fn removing_an_entry_keeps_the_others_as_stored() {
+        let mut builder = Builder::new(VERSION_02, 3);
+        builder.entry(TRUSTED_CERT_TAG, b"b", VERSION_02, 1);
+        builder.entry(PRIVATE_KEY_TAG, b"c", VERSION_02, 1);
+        builder.entry(TRUSTED_CERT_TAG, b"a", VERSION_02, 1);
+        let (mut entries, mut writable) = parse(builder.finish("changeit"))
+            .unwrap()
+            .open("changeit")
+            .ok()
+            .unwrap();
+        assert_eq!(entries, [cert("a"), cert("b"), key("c")]);
+        // The listed position, not the stored one, names the entry.
+        writable.remove(1);
+        entries.remove(1);
+        let mut expected = Builder::new(VERSION_02, 2);
+        expected.entry(PRIVATE_KEY_TAG, b"c", VERSION_02, 1);
+        expected.entry(TRUSTED_CERT_TAG, b"a", VERSION_02, 1);
+        let saved = writable.encode("changeit");
+        assert_eq!(saved, expected.finish("changeit"));
+        assert_eq!(load_entries(&saved, "changeit").unwrap(), entries);
     }
 
     #[test]

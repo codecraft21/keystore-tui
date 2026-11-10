@@ -3,6 +3,18 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.1.0
+
+- JKS and JCEKS keystores can now be changed. Press `d` or `Delete` to delete
+  the selected entry, `w` to save the changes to the opened file, and `W` to
+  save the keystore to a new file. Nothing changes on disk until you save, and
+  saving replaces the file in one step. The remaining entries are written
+  exactly as they were read, so private and secret keys stay encrypted.
+- With unsaved changes, `[modified]` is shown next to the app name, and `q`,
+  `Esc`, and `o` ask before discarding them. `Ctrl+C` still quits at once.
+- The keystore password now stays in memory while a JKS or JCEKS keystore is
+  open, because saving needs it. It is wiped when the keystore is closed.
+
 ## 1.0.5
 
 - Use the environment's default temporary directory for Cargo builds and tests,

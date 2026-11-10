@@ -575,17 +575,20 @@ fn partial_pkcs12_warning_persists_with_entries() {
     let mut app = App::default();
     app.show_verified(
         directory.path().join("partial.p12"),
-        pkcs12::Verified {
-            entries: vec![KeystoreEntry {
-                alias: "readable".into(),
-                certificate: None,
-                content: Content::Certificates {
-                    kind: Kind::SecretKey,
-                    certificates: vec![],
-                },
-                chain_warning: None,
-            }],
-            incomplete: true,
+        Opened {
+            verified: pkcs12::Verified {
+                entries: vec![KeystoreEntry {
+                    alias: "readable".into(),
+                    certificate: None,
+                    content: Content::Certificates {
+                        kind: Kind::SecretKey,
+                        certificates: vec![],
+                    },
+                    chain_warning: None,
+                }],
+                incomplete: true,
+            },
+            document: None,
         },
     );
     assert!(screen(&mut app, 100, 24).contains("readable"));
@@ -611,7 +614,7 @@ fn selecting_a_valid_empty_keystore_displays_its_absolute_path() {
     assert!(app.file_picker.is_none());
     let rendered = screen(&mut app, 200, 24);
     assert_eq!(
-        rendered.lines().nth(22).unwrap().trim_end(),
+        rendered.lines().nth(21).unwrap().trim_end(),
         format!("Path: '{}'", expected.display())
     );
     // Only the path itself is blue, not the label or the quotes.
@@ -623,7 +626,7 @@ fn selecting_a_valid_empty_keystore_displays_its_absolute_path() {
         } else {
             Color::Reset
         };
-        assert_eq!(path_bar[(x, 22)].fg, color, "column {x}");
+        assert_eq!(path_bar[(x, 21)].fg, color, "column {x}");
     }
     let title = rendered.lines().next().unwrap();
     assert!(title.contains(" keystore-tui "));
@@ -1737,4 +1740,189 @@ fn weak_certificates_are_flagged_in_the_list_details_and_hierarchy() {
     press(&mut app, KeyCode::Up);
     let issuer = screen(&mut app, 120, 50);
     assert!(!issuer.contains("Weak:"), "{issuer}");
+}
+
+/// Opens `mixed_keystore()`, saved as `store.jks`, with its password.
+fn editing(directory: &TestDirectory) -> (App, PathBuf) {
+    let path = directory.path().join("store.jks");
+    fs::write(&path, mixed_keystore()).unwrap();
+    let mut app = App::default();
+    app.open_file(path.clone());
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.entries.len(), 2);
+    (app, path)
+}
+
+fn aliases(path: &Path) -> Vec<String> {
+    keystore::load_entries(&fs::read(path).unwrap(), "changeit")
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.alias)
+        .collect()
+}
+
+#[test]
+fn deleting_an_entry_asks_first_and_changes_the_file_only_on_save() {
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    assert!(screen(&mut app, 120, 24).contains("d Delete entry | w Save | W Save as"));
+
+    press(&mut app, KeyCode::Char('d'));
+    assert!(screen(&mut app, 120, 24).contains("Delete entry 'root-cert'? Press y"));
+    // Any key other than `y` cancels, without acting as a shortcut.
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    assert_eq!(app.entries.len(), 2);
+    assert!(!app.modified);
+
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Delete);
+    press(&mut app, KeyCode::Char('y'));
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains("Deleted entry 'server-key'."));
+    assert!(rendered.contains(" keystore-tui [modified] "));
+    assert!(!rendered.contains("Private key"));
+    // The selection stays on a row that still exists.
+    assert_eq!(app.selected_entry(), Some(0));
+    assert_eq!(aliases(&path), ["root-cert", "server-key"]);
+
+    press(&mut app, KeyCode::Char('w'));
+    let rendered = screen(&mut app, 200, 24);
+    assert!(rendered.contains("Saved '"));
+    assert!(!rendered.contains("[modified]"));
+    assert_eq!(aliases(&path), ["root-cert"]);
+    press(&mut app, KeyCode::Char('w'));
+    assert!(screen(&mut app, 120, 24).contains("No changes to save."));
+    // The last entry can be deleted too, leaving an empty keystore.
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('y'));
+    assert_eq!(app.selected_entry(), None);
+    press(&mut app, KeyCode::Char('w'));
+    assert!(aliases(&path).is_empty());
+    assert!(press(&mut app, KeyCode::Char('q')));
+}
+
+#[test]
+fn deleting_a_filtered_entry_removes_that_entry() {
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    press(&mut app, KeyCode::Char('/'));
+    type_password(&mut app, "server");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('d'));
+    assert!(screen(&mut app, 120, 24).contains("Delete entry 'server-key'?"));
+    press(&mut app, KeyCode::Char('y'));
+    press(&mut app, KeyCode::Char('w'));
+    assert_eq!(aliases(&path), ["root-cert"]);
+}
+
+#[test]
+fn unsaved_changes_are_confirmed_before_quitting_or_opening_a_file() {
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('y'));
+
+    for key in [KeyCode::Char('q'), KeyCode::Esc] {
+        assert!(!press(&mut app, key));
+        assert!(screen(&mut app, 120, 24).contains("Quit without saving the changes?"));
+        assert!(!press(&mut app, KeyCode::Char('n')));
+        assert!(app.confirm.is_none());
+    }
+    // From the details, the question replaces the view until it is answered.
+    press(&mut app, KeyCode::Enter);
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    assert!(screen(&mut app, 120, 24).contains("Quit without saving the changes?"));
+    assert!(!press(&mut app, KeyCode::Esc));
+    assert!(app.entry_details.is_some());
+    press(&mut app, KeyCode::Esc);
+
+    press(&mut app, KeyCode::Char('o'));
+    assert!(screen(&mut app, 120, 24).contains("discards the unsaved changes"));
+    assert!(app.file_picker.is_none());
+    press(&mut app, KeyCode::Char('y'));
+    assert!(app.file_picker.is_some());
+    // Cancelling the browser keeps the changes.
+    press(&mut app, KeyCode::Esc);
+    assert!(app.modified);
+
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    assert!(press(&mut app, KeyCode::Char('y')));
+    assert_eq!(aliases(&path), ["root-cert", "server-key"]);
+
+    // Ctrl+C quits at once.
+    let (mut app, _) = editing(&directory);
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('y'));
+    assert!(app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+}
+
+#[test]
+fn save_as_writes_a_new_file_and_switches_to_it() {
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('y'));
+    press(&mut app, KeyCode::Char('W'));
+    let copy = directory.path().join("store-copy.jks");
+    assert!(screen(&mut app, 200, 24).contains(&format!("Save keystore as: {}_", copy.display())));
+    // Letters are typed into the name instead of quitting.
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    press(&mut app, KeyCode::Backspace);
+    // An existing file is never replaced.
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    type_password(&mut app, "store.jks");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("already exists"));
+    assert!(app.save_as.is_some());
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    type_password(&mut app, "store-copy.jks");
+    press(&mut app, KeyCode::Enter);
+
+    let copy = canonical_path::canonicalize(&copy).unwrap();
+    assert!(app.save_as.is_none());
+    assert!(!app.modified);
+    assert_eq!(app.keystore_path.as_deref(), Some(copy.as_path()));
+    assert_eq!(aliases(&copy), ["server-key"]);
+    assert_eq!(aliases(&path), ["root-cert", "server-key"]);
+    // Later saves go to the new file.
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('y'));
+    press(&mut app, KeyCode::Char('w'));
+    assert!(aliases(&copy).is_empty());
+    assert_eq!(aliases(&path), ["root-cert", "server-key"]);
+}
+
+#[test]
+fn files_other_than_jks_and_jceks_cannot_be_changed_yet() {
+    let directory = TestDirectory::new();
+    for (name, data) in [
+        (
+            "store.p12",
+            &include_bytes!("../tests/fixtures/passwordless.p12")[..],
+        ),
+        ("bundle.pem", test_support::BUNDLE_PEM),
+    ] {
+        let path = directory.path().join(name);
+        fs::write(&path, data).unwrap();
+        let mut app = App::default();
+        app.open_file(path.clone());
+        assert!(!app.entries.is_empty(), "{name}");
+        assert!(
+            !screen(&mut app, 120, 24).contains("d Delete entry"),
+            "{name}"
+        );
+        for key in ['d', 'w', 'W'] {
+            press(&mut app, KeyCode::Char(key));
+            assert!(app.confirm.is_none() && app.save_as.is_none(), "{name}");
+            assert!(red_text(&mut app).contains(NOT_EDITABLE), "{name} {key}");
+        }
+        assert_eq!(fs::read(&path).unwrap(), data, "{name}");
+    }
+    // Without a loaded file the keys do nothing.
+    let mut app = App::default();
+    for key in ['d', 'w', 'W'] {
+        press(&mut app, KeyCode::Char(key));
+        assert!(app.message.is_none());
+    }
 }
