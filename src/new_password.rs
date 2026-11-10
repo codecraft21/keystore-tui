@@ -55,16 +55,12 @@ impl App {
     }
 
     pub(crate) fn name_new_keystore(&mut self) {
-        let directory = self
+        // Without an opened file, a bare name stands for the working directory.
+        let current = self
             .keystore_path
             .as_deref()
-            .map_or_else(std::env::current_dir, |path| Ok(path_bar::directory(path)));
-        match directory {
-            Ok(directory) => self.save_as = Some(save::SaveAsPrompt::for_new(directory)),
-            Err(error) => {
-                self.message = Some((format!("Cannot find the working directory: {error}"), true));
-            }
-        }
+            .unwrap_or(Path::new("keystore.jks"));
+        self.save_as = Some(save::SaveAsPrompt::for_new(path_bar::directory(current)));
     }
 
     /// Checks the typed name, then asks for the new keystore's password.

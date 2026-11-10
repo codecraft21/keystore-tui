@@ -2208,12 +2208,26 @@ fn a_keystore_can_be_created_before_any_file_is_open() {
     press(&mut app, KeyCode::Char('n'));
     let path = directory.path().join("first.jks");
     type_alias(&mut app, &path.to_string_lossy());
+    // Keys that are not text are ignored.
+    press(&mut app, KeyCode::Tab);
     // An empty password is allowed, as for the stores the app opens.
     type_new_password(&mut app, "", "");
     let data = fs::read(&path).unwrap();
     assert!(!keystore::is_jceks(&data));
     assert_eq!(data, empty_keystore());
     assert!(app.document.is_some());
+
+    // A file that cannot be created is reported, and the loaded file stays.
+    press(&mut app, KeyCode::Char('n'));
+    let missing = directory.path().join("missing").join("new.jks");
+    type_alias(&mut app, &missing.to_string_lossy());
+    type_new_password(&mut app, "secret", "secret");
+    assert!(red_text(&mut app).contains("Cannot create"));
+    assert!(app.new_password.is_none());
+    assert_eq!(
+        app.keystore_path.as_deref().map(fs::read).unwrap().unwrap(),
+        data
+    );
 }
 
 #[test]
