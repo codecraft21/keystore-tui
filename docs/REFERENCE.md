@@ -7,6 +7,7 @@
 - [Opening a file from the command line](#opening-a-file-from-the-command-line)
 - [Opening a file with the browser](#opening-a-file-with-the-browser)
 - [Entry list](#entry-list)
+- [Deleting entries and saving](#deleting-entries-and-saving)
 - [Entry details](#entry-details)
 - [Offline chain diagnostics](#offline-chain-diagnostics)
 - [ASN.1 and PEM views](#asn1-and-pem-views)
@@ -115,6 +116,9 @@ certificates whose names match another certificate or key.
 | `/` | Type a filter, or edit the applied one |
 | `s` | Switch the sort order between alias and expiry date |
 | `o` | Open another keystore or certificate file |
+| `d` / `Delete` | Delete the selected entry (JKS and JCEKS) |
+| `w` | Save the changes to the opened file (JKS and JCEKS) |
+| `W` | Save the keystore to a new file (JKS and JCEKS) |
 
 Press `/` to filter by part of the alias or the certificate subject (such as
 `CN=example`), ignoring case. The list updates as you type, and every letter,
@@ -124,6 +128,29 @@ including `q` and `s`, goes into the filter. `Backspace` deletes a character,
 
 Press `s` to sort by expiry date, soonest first, and again to return to alias
 order.
+
+## Deleting entries and saving
+
+JKS and JCEKS keystores can be changed; PKCS12 keystores and certificate files
+cannot yet. Press `d` or `Delete` on an entry, then `y` to confirm; any other
+key cancels. The entry leaves the list, and `[modified]` appears next to the
+app name. Nothing changes on disk until you save.
+
+Press `w` to save the changes to the opened file. The file is replaced in one
+step, so it holds either the old or the new content, never a partial one. The
+other entries are written exactly as they were read: private and secret keys
+stay encrypted, and the keystore keeps its format and password.
+
+Press `W` to save the keystore under a new name, then edit the suggested name
+and press `Enter`. The prompt works like the [export
+prompt](#exporting-certificates): existing files are never replaced, and `Esc`
+cancels. The new file becomes the opened one.
+
+With unsaved changes, `q`, `Esc`, and `o` ask before discarding them; press `y`
+to go on. `Ctrl+C` quits at once and discards them.
+
+The keystore password stays in memory while the keystore is open, because
+saving needs it, and is wiped when the keystore is closed.
 
 ## Entry details
 
@@ -232,8 +259,8 @@ the save fails with a red message and you can choose another name.
 
 | Key | Quits from |
 | --- | --- |
-| `q` | The entry list (when not typing a filter) or detail view (when not typing an export name) |
-| `Esc` | The entry list, when not typing a filter |
-| `Ctrl+C` | Any view, including the file browser, the password prompt, and while typing a filter or export name |
+| `q` | The entry list (when not typing a filter or file name) or detail view (when not typing an export name); asks first with unsaved changes |
+| `Esc` | The entry list, when not typing a filter or file name; asks first with unsaved changes |
+| `Ctrl+C` | Any view, including the file browser, the password prompt, and while typing a filter or file name; discards unsaved changes without asking |
 
 The terminal is restored when the app exits.

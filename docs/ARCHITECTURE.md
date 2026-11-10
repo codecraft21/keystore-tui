@@ -6,13 +6,14 @@ Module responsibilities and dependencies for keystore-tui. See
 | Module | Responsibility |
 | --- | --- |
 | `src/startup.rs` | Command-line arguments (`--version`, `--help`), startup loading, and hidden terminal password input |
-| `src/main.rs` | App state, event loop, main view rendering, password prompt, file loading (size limit, format detection), terminal setup and restoration |
+| `src/main.rs` | App state, event loop, main view rendering, password prompt, deleting entries and confirmation questions, file loading (size limit, format detection), terminal setup and restoration |
 | `src/certificate_file.rs` | PEM, DER, and PKCS#7 certificate files (including requests), and chain linking within a file |
 | `src/certificate_request.rs` | PKCS#10 certificate requests: fields, requested extensions, and attributes |
 | `src/file_picker.rs` | The keystore file browser |
 | `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |
 | `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
-| `src/keystore.rs` | JKS and JCEKS parsing and integrity check (SHA-1); the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
+| `src/save.rs` | The open keystore's writable form and password, the "save as" name prompt, and replacing a file atomically |
+| `src/keystore.rs` | JKS and JCEKS parsing, integrity check (SHA-1), and writing entries back as stored; the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
 | `src/java_serialization.rs` | Skipping a serialized Java object (a JCEKS secret key) without deserializing it |
 | `src/pkcs12.rs` | PKCS12 parsing, MAC verification, and decryption of safe contents (AES and legacy PBE) |
 | `src/entry_list.rs` | Entry-list filtering, sorting, and expiry classification |
@@ -43,7 +44,7 @@ Dependencies are deliberately few:
 - `sha1` for the JKS and JCEKS integrity digest.
 - `crown` for ASN.1, PEM, X.509, PKCS#7, PKCS12 (MAC and PBE), and signature
   verification (certificates and requests).
-- `zeroize` for wiping passwords.
+- `zeroize` for wiping passwords, including the one kept for saving.
 
 The PTY smoke tests also use `rustix` (Unix only, a dev-dependency) for
 pseudo-terminals; crossterm already depends on it.

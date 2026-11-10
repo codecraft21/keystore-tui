@@ -15,10 +15,12 @@ and certificate signing requests. Release 1.1 adds write features; see the
   failure, on errors, and on normal exit. Keep every documented quit shortcut.
 - **Secrets:** use generated fixtures only. Keep passwords, private keys, and
   real keystores out of logs, test output, and commits. Wipe password buffers
-  after use.
-- **Writes:** today the app never writes keystores and never decrypts private
-  keys, and exports only ever create new files. Change this only by implementing
-  a [ROADMAP](docs/ROADMAP.md) feature, following the write rules listed there.
+  after use; the password of an open, editable keystore is kept for saving
+  and wiped when the keystore is closed.
+- **Writes:** the app changes a keystore file only on an explicit save, and
+  replaces it atomically. Exports and "save as" only ever create new files.
+  Private keys are never decrypted. Change this only by implementing a
+  [ROADMAP](docs/ROADMAP.md) feature, following the write rules listed there.
 
 ## Development
 
