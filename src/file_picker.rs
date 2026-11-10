@@ -215,11 +215,17 @@ impl FilePicker {
     }
 
     pub(crate) fn draw(&mut self, frame: &mut Frame) {
+        self.draw_titled(frame, " Open keystore or certificate file ");
+    }
+
+    /// Draws the browser under another title, when it picks a file for
+    /// something other than opening it.
+    pub(crate) fn draw_titled(&mut self, frame: &mut Frame, title: &'static str) {
         let area = frame.area().inner(Margin {
             horizontal: 2,
             vertical: 1,
         });
-        let block = Block::bordered().title(" Open keystore or certificate file ");
+        let block = Block::bordered().title(title);
         let inner = block.inner(area);
         frame.render_widget(Clear, area);
         frame.render_widget(block, area);

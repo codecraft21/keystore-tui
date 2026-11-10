@@ -12,8 +12,9 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/file_picker.rs` | The keystore file browser |
 | `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |
 | `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
+| `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate from a certificate file |
 | `src/save.rs` | The open keystore's writable form and password, the "save as" name prompt, and replacing a file atomically |
-| `src/keystore.rs` | JKS and JCEKS parsing, integrity check (SHA-1), and writing entries back as stored; the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
+| `src/keystore.rs` | JKS and JCEKS parsing, integrity check (SHA-1), and writing entries back as stored, renamed, or added; the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
 | `src/java_serialization.rs` | Skipping a serialized Java object (a JCEKS secret key) without deserializing it |
 | `src/pkcs12.rs` | PKCS12 parsing, MAC verification, and decryption of safe contents (AES and legacy PBE) |
 | `src/entry_list.rs` | Entry-list filtering, sorting, and expiry classification |

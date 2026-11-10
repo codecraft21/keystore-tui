@@ -3,6 +3,7 @@ mod canonical_path;
 mod certificate;
 mod certificate_file;
 mod certificate_request;
+mod editing;
 mod entry_details;
 mod entry_list;
 mod export;
@@ -113,6 +114,9 @@ struct App {
     /// A question waiting for `y`; any other key cancels it.
     confirm: Option<Confirm>,
     save_as: Option<save::SaveAsPrompt>,
+    alias_prompt: Option<editing::AliasPrompt>,
+    /// Whether the file browser is choosing a certificate to import.
+    importing: bool,
     /// The result of the last edit or save, and whether it failed. Cleared
     /// on the next key.
     message: Option<(String, bool)>,
@@ -208,15 +212,22 @@ impl App {
             if key.code == KeyCode::Esc {
                 if !picker.clear_filter() {
                     self.file_picker = None;
+                    self.importing = false;
                 }
             } else if let Some(path) = picker.handle_key(key) {
                 self.file_picker = None;
-                self.open_file(path);
+                if std::mem::take(&mut self.importing) {
+                    self.import_file(&path);
+                } else {
+                    self.open_file(path);
+                }
             }
         } else if let Some(details) = &mut self.entry_details {
             if details.handle_event(key) {
                 self.entry_details = None;
             }
+        } else if self.alias_prompt.is_some() {
+            self.handle_alias(key);
         } else if let Some(prompt) = &mut self.save_as {
             match prompt.handle_key(key) {
                 save::Outcome::Editing => {}
@@ -232,6 +243,8 @@ impl App {
                 KeyCode::Char('o') => self.open_picker(),
                 KeyCode::Delete => self.ask_delete(),
                 KeyCode::Char('d') if is_text_input(key.modifiers) => self.ask_delete(),
+                KeyCode::Char('r') if is_text_input(key.modifiers) => self.ask_rename(),
+                KeyCode::Char('i') if is_text_input(key.modifiers) => self.ask_import(),
                 KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
                 KeyCode::Char('W') if is_text_input(key.modifiers) => {
                     if self.editable()
@@ -354,6 +367,7 @@ impl App {
             || self.file_picker.is_some()
             || self.editing_filter
             || self.save_as.is_some()
+            || self.alias_prompt.is_some()
             || self
                 .entry_details
                 .as_ref()
@@ -515,6 +529,8 @@ impl App {
         self.modified = false;
         self.confirm = None;
         self.save_as = None;
+        self.alias_prompt = None;
+        self.importing = false;
         self.message = None;
     }
 
@@ -734,7 +750,11 @@ impl App {
             frame.render_widget(path_bar::line(path), path_area);
         }
         if let Some(picker) = &mut self.file_picker {
-            picker.draw(frame);
+            if self.importing {
+                picker.draw_titled(frame, " Import certificate from file ");
+            } else {
+                picker.draw(frame);
+            }
         } else {
             frame.render_widget(Paragraph::new(shortcuts), help);
         }
@@ -753,10 +773,24 @@ impl App {
                 ]),
                 "Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
             ]
+        } else if let Some(prompt) = &self.alias_prompt {
+            let label = match prompt.action {
+                editing::Action::Rename(index) => {
+                    format!("New alias for '{}': ", self.entries[index].alias)
+                }
+                editing::Action::Import(_) => "Alias for the imported certificate: ".into(),
+            };
+            vec![
+                Line::from(vec![label.bold(), format!("{}_", prompt.alias).into()]),
+                "Enter Confirm | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
+            ]
         } else if self.editing_filter {
             vec!["Type to filter | Enter Apply | Esc Clear | Up/Down Scroll | Ctrl+C Quit".into()]
         } else if self.document.is_some() && self.file_picker.is_none() {
-            vec!["d Delete entry | w Save | W Save as".into(), LIST.into()]
+            vec![
+                "i Import certificate | r Rename | d Delete entry | w Save | W Save as".into(),
+                LIST.into(),
+            ]
         } else {
             vec![LIST.into()]
         }

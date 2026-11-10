@@ -19,6 +19,8 @@ document and the usage reference, and also the README if its overview changes.
   - [Filtering](#filtering)
   - [Sorting](#sorting)
   - [Deleting entries](#deleting-entries)
+  - [Renaming entries](#renaming-entries)
+  - [Importing certificates](#importing-certificates)
 - [Saving](#saving)
 - [Entry details](#entry-details)
   - [Certificate requests](#certificate-requests)
@@ -42,8 +44,9 @@ document and the usage reference, and also the README if its overview changes.
   [Exporting](#exporting).
 - It runs without Java or `keytool` installed.
 - Private keys are never decrypted, displayed, or exported.
-- The following are out of scope for now: import, keystore editing other
-  than [deleting entries](#deleting-entries), and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
+- The following are out of scope for now: importing anything but a trusted
+  certificate, keystore editing other than [deleting](#deleting-entries) and
+  [renaming](#renaming-entries) entries, and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
   features; each one updates this section when it ships.
 
 ## Command-line startup
@@ -294,7 +297,8 @@ any existing incomplete-entry warnings.
 ### Deleting entries
 
 - Only JKS and JCEKS keystores can be changed. In the entry list of one, a
-  line above the shortcuts shows `d Delete entry | w Save | W Save as`.
+  line above the shortcuts shows `i Import certificate | r Rename | d Delete
+  entry | w Save | W Save as`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
   keys do nothing when no entry is selected.
@@ -303,13 +307,48 @@ any existing incomplete-entry warnings.
   last row when the last one was deleted.
 - While the list differs from the file, `[modified]` is shown in yellow after
   the app name. Entries sharing an alias are deleted one at a time.
-- For a PKCS12 keystore or a certificate file, `d`, `Delete`, `w`, and `W`
-  show a red message that only JKS and JCEKS keystores can be changed. With no
+- For a PKCS12 keystore or a certificate file, `d`, `Delete`, `r`, `i`, `w`,
+  and `W` show a red message that only JKS and JCEKS keystores can be changed. With no
   file loaded they do nothing.
 - With unsaved changes, `o` first asks before opening the file browser; `y`
   continues and any other key cancels. The changes are kept until another
   file is loaded, so cancelling the browser or a password prompt keeps them.
-- Messages about deleting and saving clear on the next key.
+- Messages about editing and saving clear on the next key.
+
+### Renaming entries
+
+- In a JKS or JCEKS keystore, `r` opens a prompt in place of the shortcuts,
+  `New alias for '<alias>':`, holding the selected entry's alias. It does
+  nothing when no entry is selected.
+- While the prompt is open, every character without `Ctrl` or `Alt` is typed
+  into the alias, including `q`. `Backspace` deletes a character, `Ctrl+U`
+  clears the alias, `Enter` confirms, and `Esc` cancels. `Ctrl+C` still quits.
+- The alias is stored in lower case, as Java stores aliases. Confirming the
+  entry's own alias changes nothing.
+- An empty alias, an alias another entry already has (ignoring case), or an
+  alias longer than 65,535 bytes in Java's string encoding is refused with a
+  red message, and the prompt stays open.
+- Renaming changes only the list in memory, like deleting. The entry moves to
+  its place in alias order and stays selected when the filter still shows it;
+  a green message names the old and new alias. On saving, only the alias
+  changes: the entry keeps its content, creation date, and place in the file.
+
+### Importing certificates
+
+- In a JKS or JCEKS keystore, `i` opens the file browser, titled `Import
+  certificate from file`, in the opened file's directory. `Esc` cancels.
+- The chosen file must hold exactly one certificate, as PEM, DER, or PKCS#7.
+  A file with several certificates, with none, or of another kind is refused
+  with a red message, and nothing is imported.
+- A prompt then asks `Alias for the imported certificate:`, suggesting the
+  certificate's subject name in lower case. It follows the same rules as the
+  [rename prompt](#renaming-entries).
+- The certificate is added as a trusted certificate, with the current time as
+  its creation date, listed in alias order and selected. A green message names
+  it. On saving it is stored after the existing entries, byte for byte as it
+  was in the file (PEM is decoded to its DER).
+- Whether the certificate is trusted, valid, or already in the keystore under
+  another alias is not checked.
 
 ## Saving
 

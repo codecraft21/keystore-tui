@@ -3,7 +3,7 @@
 use std::ffi::OsStr;
 use std::fs;
 
-use crate::fixtures::{TempDir, empty_password_fixture};
+use crate::fixtures::{TempDir, certificate_pem, empty_password_fixture, fixture_certificate};
 use crate::pty::PtyApp;
 
 /// SPEC: [Deleting entries](../../docs/SPEC.md#deleting-entries),
@@ -58,5 +58,50 @@ fn save_in_place_then_ctrl_c_restores_terminal() {
     assert_eq!(fs::read(&path).unwrap().len(), 32);
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     app.send(b"\x03");
+    app.assert_restored();
+}
+
+/// SPEC: [Renaming entries](../../docs/SPEC.md#renaming-entries),
+/// [Importing certificates](../../docs/SPEC.md#importing-certificates),
+/// [Saving](../../docs/SPEC.md#saving),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn rename_import_save_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    let original = empty_password_fixture();
+    fs::write(&path, &original).unwrap();
+    fs::write(
+        directory.join("ca.pem"),
+        certificate_pem(&fixture_certificate()),
+    )
+    .unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "i Import certificate | r Rename"]);
+    app.send(b"r");
+    app.expect(&["New alias for 'root-cert': root-cert_"]);
+    app.send(b"\x15q"); // Ctrl+U clears; `q` is typed, not a quit.
+    app.expect(&["New alias for 'root-cert': q_"]);
+    app.send(b"\x7fOld-Root\r");
+    app.expect(&["Renamed entry 'root-cert' to 'old-root'.", "[modified]"]);
+    app.send(b"i");
+    app.expect(&["Import certificate from file", "ca.pem"]);
+    app.send(b"ca\r");
+    app.expect(&["Alias for the imported certificate: jks tui test fixture_"]);
+    app.send(b"\x15new-root\r");
+    app.expect(&[
+        "Imported certificate as 'new-root'.",
+        "old-root",
+        "2 entries",
+    ]);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+    let saved = fs::read(&path).unwrap();
+    assert_eq!(&saved[8..12], &2_u32.to_be_bytes());
+    for alias in [&b"old-root"[..], b"new-root"] {
+        assert!(saved.windows(alias.len()).any(|window| window == alias));
+    }
+    app.send(b"q");
     app.assert_restored();
 }
