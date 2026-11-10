@@ -45,7 +45,7 @@ impl Drop for TempDir {
 }
 
 /// Append the JKS integrity digest for an empty password.
-fn with_empty_password_digest(mut body: Vec<u8>) -> Vec<u8> {
+pub fn with_empty_password_digest(mut body: Vec<u8>) -> Vec<u8> {
     let digest = Sha1::new()
         .chain_update(b"Mighty Aphrodite")
         .chain_update(&body)

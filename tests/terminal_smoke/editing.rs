@@ -3,7 +3,10 @@
 use std::ffi::OsStr;
 use std::fs;
 
-use crate::fixtures::{TempDir, certificate_pem, empty_password_fixture, fixture_certificate};
+use crate::fixtures::{
+    TempDir, certificate_pem, empty_password_fixture, fixture_certificate,
+    with_empty_password_digest,
+};
 use crate::pty::PtyApp;
 
 /// SPEC: [Deleting entries](../../docs/SPEC.md#deleting-entries),
@@ -102,6 +105,47 @@ fn rename_import_save_and_quit_restores_terminal() {
     for alias in [&b"old-root"[..], b"new-root"] {
         assert!(saved.windows(alias.len()).any(|window| window == alias));
     }
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Creating a keystore](../../docs/SPEC.md#creating-a-keystore),
+/// [Changing the password](../../docs/SPEC.md#changing-the-password),
+/// [Saving](../../docs/SPEC.md#saving),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn create_keystore_change_password_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let mut app = PtyApp::spawn(directory.path(), &[]);
+    app.expect(&["Press n to create a JKS or JCEKS keystore."]);
+    app.send(b"n");
+    app.expect(&["New keystore file (.jks or .jceks):"]);
+    app.send(b"\x15new.jks\r");
+    app.expect(&["Password for the new keystore: _"]);
+    app.send(b"qwerty"); // Typed, masked, into the password.
+    app.expect(&["Password for the new keystore: ******_"]);
+    assert!(!directory.join("new.jks").exists());
+    app.send(b"\r");
+    app.expect(&["Type the password again: _"]);
+    app.send(b"qwerty\r");
+    app.expect(&["Created the JKS keystore", "no entries", "p Password"]);
+    let created = fs::read(directory.join("new.jks")).unwrap();
+    assert_eq!(created.len(), 32);
+
+    app.send(b"p");
+    app.expect(&["New keystore password: _"]);
+    app.send(b"\r");
+    app.expect(&["Type the password again: _"]);
+    app.send(b"\r");
+    app.expect(&["Password changed", "[modified]"]);
+    assert_eq!(fs::read(directory.join("new.jks")).unwrap(), created);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+    // The empty password's digest replaces the old one.
+    assert_eq!(
+        fs::read(directory.join("new.jks")).unwrap(),
+        with_empty_password_digest(created[..12].to_vec())
+    );
     app.send(b"q");
     app.assert_restored();
 }

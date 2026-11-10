@@ -27,6 +27,11 @@ impl Document {
         }
     }
 
+    /// Saves under `password` from now on; the old one is wiped.
+    pub fn set_password(&mut self, password: &str) {
+        self.password = Zeroizing::new(password.to_owned());
+    }
+
     /// Removes the entry listed at `index`.
     pub fn remove(&mut self, index: usize) {
         self.writable.remove(index);
@@ -147,6 +152,8 @@ pub enum Outcome {
 pub struct SaveAsPrompt {
     pub path: String,
     directory: PathBuf,
+    /// Whether the name is for a new, empty keystore rather than a copy.
+    pub creating: bool,
 }
 
 impl SaveAsPrompt {
@@ -161,16 +168,27 @@ impl SaveAsPrompt {
             .extension()
             .map(|extension| format!(".{}", extension.to_string_lossy()))
             .unwrap_or_default();
+        Self::suggesting(directory, &format!("{stem}-copy"), &extension, false)
+    }
+
+    /// Suggests `keystore.jks` in `directory` for a new keystore, numbered
+    /// to avoid names that already exist.
+    pub fn for_new(directory: PathBuf) -> Self {
+        Self::suggesting(directory, "keystore", ".jks", true)
+    }
+
+    fn suggesting(directory: PathBuf, stem: &str, extension: &str, creating: bool) -> Self {
         let name = (1..100)
             .map(|n| match n {
-                1 => format!("{stem}-copy{extension}"),
-                n => format!("{stem}-copy-{n}{extension}"),
+                1 => format!("{stem}{extension}"),
+                n => format!("{stem}-{n}{extension}"),
             })
             .find(|name| !directory.join(name).exists())
-            .unwrap_or_else(|| format!("{stem}-copy{extension}"));
+            .unwrap_or_else(|| format!("{stem}{extension}"));
         Self {
             path: directory.join(name).to_string_lossy().into_owned(),
             directory,
+            creating,
         }
     }
 

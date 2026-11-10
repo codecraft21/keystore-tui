@@ -10,6 +10,7 @@ mod export;
 mod file_picker;
 mod java_serialization;
 mod keystore;
+mod new_password;
 mod path_bar;
 mod pkcs12;
 mod save;
@@ -115,6 +116,7 @@ struct App {
     confirm: Option<Confirm>,
     save_as: Option<save::SaveAsPrompt>,
     alias_prompt: Option<editing::AliasPrompt>,
+    new_password: Option<new_password::NewPasswordPrompt>,
     /// Whether the file browser is choosing a certificate to import.
     importing: bool,
     /// The result of the last edit or save, and whether it failed. Cleared
@@ -128,6 +130,8 @@ enum Confirm {
     Quit,
     /// Open the file browser, to replace the modified keystore.
     Open,
+    /// Create a keystore, which replaces the modified one.
+    New,
 }
 
 const NOT_EDITABLE: &str = "Only JKS and JCEKS keystores can be changed for now.";
@@ -228,10 +232,14 @@ impl App {
             }
         } else if self.alias_prompt.is_some() {
             self.handle_alias(key);
+        } else if self.new_password.is_some() {
+            self.handle_new_password(key);
         } else if let Some(prompt) = &mut self.save_as {
+            let creating = prompt.creating;
             match prompt.handle_key(key) {
                 save::Outcome::Editing => {}
                 save::Outcome::Cancelled => self.save_as = None,
+                save::Outcome::Save(path) if creating => self.password_new_keystore(path),
                 save::Outcome::Save(path) => self.save_new(path),
             }
         } else if self.editing_filter {
@@ -243,6 +251,8 @@ impl App {
                 KeyCode::Char('o') => self.open_picker(),
                 KeyCode::Delete => self.ask_delete(),
                 KeyCode::Char('d') if is_text_input(key.modifiers) => self.ask_delete(),
+                KeyCode::Char('n') if is_text_input(key.modifiers) => self.ask_new_keystore(),
+                KeyCode::Char('p') if is_text_input(key.modifiers) => self.ask_password_change(),
                 KeyCode::Char('r') if is_text_input(key.modifiers) => self.ask_rename(),
                 KeyCode::Char('i') if is_text_input(key.modifiers) => self.ask_import(),
                 KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
@@ -290,6 +300,7 @@ impl App {
         match confirm {
             Confirm::Quit => return true,
             Confirm::Open => self.open_picker(),
+            Confirm::New => self.name_new_keystore(),
             Confirm::Delete(index) => {
                 let Some(document) = &mut self.document else {
                     return false;
@@ -368,6 +379,7 @@ impl App {
             || self.editing_filter
             || self.save_as.is_some()
             || self.alias_prompt.is_some()
+            || self.new_password.is_some()
             || self
                 .entry_details
                 .as_ref()
@@ -530,6 +542,7 @@ impl App {
         self.confirm = None;
         self.save_as = None;
         self.alias_prompt = None;
+        self.new_password = None;
         self.importing = false;
         self.message = None;
     }
@@ -702,7 +715,7 @@ impl App {
         } else {
             frame.render_widget(
                 Paragraph::new(
-                    "No keystore selected.\n\nPress o to open a keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts) or a certificate or request file (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10).",
+                    "No keystore selected.\n\nPress n to create a JKS or JCEKS keystore.\n\nPress o to open a keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts) or a certificate or request file (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10).",
                 )
                 .block(Block::bordered().title(" keystore-tui ".blue()))
                 .wrap(Wrap { trim: false }),
@@ -768,10 +781,27 @@ impl App {
         } else if let Some(prompt) = &self.save_as {
             vec![
                 Line::from(vec![
-                    "Save keystore as: ".bold(),
+                    if prompt.creating {
+                        "New keystore file (.jks or .jceks): ".bold()
+                    } else {
+                        "Save keystore as: ".bold()
+                    },
                     format!("{}_", prompt.path).into(),
                 ]),
                 "Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
+            ]
+        } else if let Some(prompt) = &self.new_password {
+            let label = match (&prompt.purpose, prompt.repeating()) {
+                (_, true) => "Type the password again: ",
+                (new_password::Purpose::Create(_), false) => "Password for the new keystore: ",
+                (new_password::Purpose::Change, false) => "New keystore password: ",
+            };
+            vec![
+                Line::from(vec![
+                    label.bold(),
+                    format!("{}_", "*".repeat(prompt.current.0.chars().count())).into(),
+                ]),
+                "Enter Confirm | Backspace Delete | Esc Cancel | Ctrl+C Quit".into(),
             ]
         } else if let Some(prompt) = &self.alias_prompt {
             let label = match prompt.action {
@@ -788,7 +818,7 @@ impl App {
             vec!["Type to filter | Enter Apply | Esc Clear | Up/Down Scroll | Ctrl+C Quit".into()]
         } else if self.document.is_some() && self.file_picker.is_none() {
             vec![
-                "i Import certificate | r Rename | d Delete entry | w Save | W Save as".into(),
+                "n New | i Import certificate | r Rename | d Delete entry | w Save | W Save as | p Password".into(),
                 LIST.into(),
             ]
         } else {
@@ -805,6 +835,9 @@ impl App {
             ),
             Confirm::Quit => {
                 "Quit without saving the changes? Press y to quit, any other key to cancel.".into()
+            }
+            Confirm::New => {
+                "Creating a keystore discards the unsaved changes. Press y to continue, any other key to cancel.".into()
             }
             Confirm::Open => {
                 "Opening another file discards the unsaved changes. Press y to continue, any other key to cancel.".into()

@@ -23,9 +23,8 @@ Rules for every write feature:
 
 These need no private-key cryptography for JKS and PKCS12 truststores.
 
-Done so far, for JKS and JCEKS only: items 1 to 4 (Save, Save As, Delete,
-Rename, and Import trusted certificate). Still open for those items: PKCS12, which needs a source of randomness for its
-salts, and the optional backup.
+Done so far, for JKS and JCEKS only: all six items. Still open: PKCS12,
+which needs a source of randomness for its salts, and the optional backup.
 
 1. **Save and Save As:** write JKS, JCEKS, and PKCS12 files, with an optional
    backup, an unsaved-changes marker, and a confirmation before quitting with

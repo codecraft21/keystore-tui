@@ -21,6 +21,8 @@ document and the usage reference, and also the README if its overview changes.
   - [Deleting entries](#deleting-entries)
   - [Renaming entries](#renaming-entries)
   - [Importing certificates](#importing-certificates)
+  - [Changing the password](#changing-the-password)
+- [Creating a keystore](#creating-a-keystore)
 - [Saving](#saving)
 - [Entry details](#entry-details)
   - [Certificate requests](#certificate-requests)
@@ -297,8 +299,8 @@ any existing incomplete-entry warnings.
 ### Deleting entries
 
 - Only JKS and JCEKS keystores can be changed. In the entry list of one, a
-  line above the shortcuts shows `i Import certificate | r Rename | d Delete
-  entry | w Save | W Save as`.
+  line above the shortcuts shows `n New | i Import certificate | r Rename | d
+  Delete entry | w Save | W Save as | p Password`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
   keys do nothing when no entry is selected.
@@ -307,11 +309,11 @@ any existing incomplete-entry warnings.
   last row when the last one was deleted.
 - While the list differs from the file, `[modified]` is shown in yellow after
   the app name. Entries sharing an alias are deleted one at a time.
-- For a PKCS12 keystore or a certificate file, `d`, `Delete`, `r`, `i`, `w`,
-  and `W` show a red message that only JKS and JCEKS keystores can be changed. With no
+- For a PKCS12 keystore or a certificate file, `d`, `Delete`, `r`, `i`, `p`,
+  `w`, and `W` show a red message that only JKS and JCEKS keystores can be changed. With no
   file loaded they do nothing.
-- With unsaved changes, `o` first asks before opening the file browser; `y`
-  continues and any other key cancels. The changes are kept until another
+- With unsaved changes, `o` first asks before opening the file browser, and
+  `n` before asking for a new keystore's name; `y` continues and any other key cancels. The changes are kept until another
   file is loaded, so cancelling the browser or a password prompt keeps them.
 - Messages about editing and saving clear on the next key.
 
@@ -349,6 +351,37 @@ any existing incomplete-entry warnings.
   was in the file (PEM is decoded to its DER).
 - Whether the certificate is trusted, valid, or already in the keystore under
   another alias is not checked.
+
+### Changing the password
+
+- In a JKS or JCEKS keystore, `p` opens a prompt in place of the shortcuts,
+  `New keystore password:`, then `Type the password again:` after `Enter`.
+  Typed characters are shown as `*`, including `q`; `Backspace` deletes one,
+  `Esc` cancels at either step, and `Ctrl+C` still quits.
+- If the two entries differ, a red message says so and the prompt starts over.
+  An empty password is accepted.
+- The new password replaces the one kept in memory, the old one is wiped, and
+  the keystore counts as modified; a green message says the password is
+  written on saving. On saving, only the integrity digest changes.
+- Private-key and secret-key entries keep the passwords they were protected
+  with, as with `keytool -storepasswd`.
+
+## Creating a keystore
+
+- `n` in the entry list, with or without a file loaded, opens a prompt in
+  place of the shortcuts, `New keystore file (.jks or .jceks):`. It suggests
+  `keystore.jks` in the opened file's directory, or in the working directory
+  when no file is loaded, as an absolute path, numbered like `keystore-2.jks`
+  when that name exists. It takes keys like the "save as" prompt; see
+  [Saving](#saving).
+- A `.jceks` name (case-insensitive) creates a JCEKS keystore; any other name
+  creates a JKS keystore. A `.p12` or `.pfx` name, or the name of an existing
+  file, is refused with a red message and the prompt stays open.
+- The password is then asked for twice, as when [changing the
+  password](#changing-the-password). `Esc` cancels, and nothing is created.
+- Confirming the password writes an empty keystore, in the version Java
+  writes, to the new file and opens it. A green message names it. If the file
+  cannot be created, a red message explains why and the loaded file stays.
 
 ## Saving
 

@@ -131,6 +131,18 @@ pub struct Writable {
 }
 
 impl Writable {
+    /// A keystore without entries, in the version Java writes.
+    pub fn empty(jceks: bool) -> Self {
+        let magic = if jceks { JCEKS_MAGIC } else { MAGIC };
+        let mut header = [0; 8];
+        header[..4].copy_from_slice(&magic.to_be_bytes());
+        header[4..].copy_from_slice(&VERSION_02.to_be_bytes());
+        Self {
+            header,
+            entries: Vec::new(),
+        }
+    }
+
     /// Removes the entry listed at `index`.
     pub fn remove(&mut self, index: usize) {
         self.entries.remove(index);
@@ -968,6 +980,15 @@ mod tests {
         let saved = writable.encode("");
         assert_eq!(saved, expected.finish(""));
         assert_eq!(load_entries(&saved, "").unwrap(), [cert("a"), cert("z")]);
+    }
+
+    #[test]
+    fn new_keystores_are_empty_and_in_the_chosen_format() {
+        assert_eq!(Writable::empty(false).encode(""), empty_keystore());
+        let jceks = Writable::empty(true).encode("changeit");
+        assert!(is_jceks(&jceks));
+        assert!(load_entries(&jceks, "changeit").unwrap().is_empty());
+        assert!(load_entries(&jceks, "").is_none());
     }
 
     #[test]
