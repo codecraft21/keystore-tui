@@ -40,7 +40,8 @@ document and the usage reference, and also the README if its overview changes.
 - It runs without Java or `keytool` installed.
 - Private keys are never decrypted, displayed, or exported.
 - The following are out of scope for now: import, keystore editing, and
-  clipboard actions.
+  clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
+  features; each one updates this section when it ships.
 
 ## Command-line startup
 

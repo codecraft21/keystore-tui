@@ -41,7 +41,7 @@ opens standalone certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`,
 - Opens PKCS12 files made by Java, OpenSSL, and other tools. Keys without a
   name are listed under their certificate's common name, and certificates that
   belong to no key are listed as `Certificate` entries.
-- Read-only and self-contained: it never modifies existing files, never
+- Safe and self-contained: it never modifies existing files, never
   decrypts or displays private keys, and does not need Java or `keytool`.
 
 ## Install
@@ -76,9 +76,11 @@ certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
 
 ## Limitations
 
-- Keystores are read-only: there is no import or editing. Only certificates,
-  certificate chains, and certificate signing requests can be exported.
-- Private keys are never decrypted, shown, or exported.
+- Keystores cannot be changed yet: there is no import or editing. Only
+  certificates, certificate chains, and certificate signing requests can be
+  exported. Editing is planned for release 1.1; see the
+  [roadmap](docs/ROADMAP.md).
+- Private keys are not decrypted, shown, or exported yet.
 - Clipboard actions are not available yet.
 - PKCS12 integrity checks do not support PBMAC1 MACs.
 - Files larger than 64 MiB are refused.
@@ -87,6 +89,7 @@ certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
 
 - [`docs/REFERENCE.md`](docs/REFERENCE.md): usage and key bindings.
 - [`docs/SPEC.md`](docs/SPEC.md): the detailed behaviour specification.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md): planned features.
 - [`AGENTS.md`](AGENTS.md): development checks, conventions, and shipping workflow.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): module responsibilities and dependencies.
 - [`docs/RELEASING.md`](docs/RELEASING.md): version bumps and release procedures.
