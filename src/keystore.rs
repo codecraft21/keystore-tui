@@ -136,6 +136,47 @@ impl Writable {
         self.entries.remove(index);
     }
 
+    /// Gives the entry listed at `index` another alias and lists it at `to`.
+    /// The rest of the entry, and its place in the file, stay as they were.
+    pub fn rename(&mut self, index: usize, alias: &str, to: usize) -> Result<(), Error> {
+        let alias = encode_string(alias)?;
+        let (offset, entry) = self.entries.remove(index);
+        // An entry starts with its tag, then the alias and its length.
+        let old_len = usize::from(u16::from_be_bytes([entry[4], entry[5]]));
+        let renamed = [&entry[..4], &alias, &entry[6 + old_len..]].concat();
+        self.entries.insert(to, (offset, renamed));
+        Ok(())
+    }
+
+    /// Adds a trusted certificate, listed at `to` and stored after every
+    /// other entry. `created` is in milliseconds since the Unix epoch.
+    pub fn insert_trusted_certificate(
+        &mut self,
+        to: usize,
+        alias: &str,
+        certificate: &[u8],
+        created: u64,
+    ) -> Result<(), Error> {
+        let length = u32::try_from(certificate.len())
+            .map_err(|_| Error::Invalid("the certificate is too large for a keystore"))?;
+        let mut entry = TRUSTED_CERT_TAG.to_be_bytes().to_vec();
+        entry.extend(encode_string(alias)?);
+        entry.extend_from_slice(&created.to_be_bytes());
+        if self.header[4..] == VERSION_02.to_be_bytes() {
+            entry.extend(encode_string(CERTIFICATE_TYPE)?);
+        }
+        entry.extend_from_slice(&length.to_be_bytes());
+        entry.extend_from_slice(certificate);
+        let offset = self
+            .entries
+            .iter()
+            .map(|(offset, _)| offset + 1)
+            .max()
+            .unwrap_or(0);
+        self.entries.insert(to, (offset, entry));
+        Ok(())
+    }
+
     /// The keystore file: the entries in their stored order, followed by the
     /// integrity digest for `password`.
     pub fn encode(&self, password: &str) -> Vec<u8> {
@@ -299,6 +340,30 @@ fn hash_password(password: &str, mut update: impl FnMut(&[u8])) {
         bytes.zeroize();
     }
     update(WHITENER_MESSAGE);
+}
+
+/// A string as Java's `DataOutput.writeUTF` writes it: a two-byte length,
+/// then each UTF-16 unit in modified UTF-8, where NUL takes two bytes and a
+/// supplementary character is two three-byte surrogates.
+fn encode_string(text: &str) -> Result<Vec<u8>, Error> {
+    let mut bytes = vec![0, 0];
+    for unit in text.encode_utf16() {
+        match unit {
+            0x01..=0x7f => bytes.push(unit as u8),
+            0x00 | 0x80..=0x7ff => {
+                bytes.extend([0xc0 | (unit >> 6) as u8, 0x80 | (unit & 0x3f) as u8]);
+            }
+            _ => bytes.extend([
+                0xe0 | (unit >> 12) as u8,
+                0x80 | ((unit >> 6) & 0x3f) as u8,
+                0x80 | (unit & 0x3f) as u8,
+            ]),
+        }
+    }
+    let length = u16::try_from(bytes.len() - 2)
+        .map_err(|_| Error::Invalid("the alias is too long for a keystore"))?;
+    bytes[..2].copy_from_slice(&length.to_be_bytes());
+    Ok(bytes)
 }
 
 struct Reader<'a> {
@@ -830,6 +895,79 @@ mod tests {
         let saved = writable.encode("changeit");
         assert_eq!(saved, expected.finish("changeit"));
         assert_eq!(load_entries(&saved, "changeit").unwrap(), entries);
+    }
+
+    #[test]
+    fn encodes_strings_as_the_reader_decodes_them() {
+        for text in ["", "plain", "a\0é中😀", "certificate-😀"] {
+            let encoded = encode_string(text).unwrap();
+            let mut reader = Reader {
+                remaining: &encoded,
+            };
+            assert_eq!(reader.string().unwrap(), text);
+            assert!(reader.remaining.is_empty());
+        }
+        assert_eq!(
+            encode_string("a\0é中😀").unwrap(),
+            b"\x00\x0ea\xc0\x80\xc3\xa9\xe4\xb8\xad\xed\xa0\xbd\xed\xb8\x80"
+        );
+        assert!(encode_string(&"a".repeat(65_535)).is_ok());
+        assert!(encode_string(&"a".repeat(65_536)).is_err());
+        assert!(encode_string(&"é".repeat(32_768)).is_err());
+    }
+
+    #[test]
+    fn renaming_changes_only_the_alias_and_the_listed_position() {
+        for version in [VERSION_01, VERSION_02] {
+            let mut builder = Builder::jceks(version, 3);
+            builder.entry(PRIVATE_KEY_TAG, b"b", version, 1);
+            builder.entry(SECRET_KEY_TAG, b"c", version, 0);
+            builder.entry(TRUSTED_CERT_TAG, b"a", version, 1);
+            let (_, mut writable) = parse(builder.finish("changeit"))
+                .unwrap()
+                .open("changeit")
+                .ok()
+                .unwrap();
+            // Listed as a, b, c; `b` becomes `zoé-😀`, listed last.
+            writable.rename(1, "zoé-😀", 2).unwrap();
+            let saved = writable.encode("changeit");
+            assert_eq!(
+                load_entries(&saved, "changeit").unwrap(),
+                [cert("a"), secret("c"), key("zoé-😀")]
+            );
+            // A second rename back restores the original bytes.
+            writable.rename(2, "b", 1).unwrap();
+            assert_eq!(writable.encode("changeit"), builder.finish("changeit"));
+        }
+    }
+
+    #[test]
+    fn inserts_trusted_certificates_as_java_stores_them() {
+        // Rebuilding keytool's file from an empty keystore gives its bytes.
+        let created = u64::from_be_bytes(KEYTOOL_JKS[27..35].try_into().unwrap());
+        let (_, mut writable) = parse(Builder::new(VERSION_02, 0).finish("changeit"))
+            .unwrap()
+            .open("changeit")
+            .ok()
+            .unwrap();
+        writable
+            .insert_trusted_certificate(0, "root-cert", fixture_certificate_der(), created)
+            .unwrap();
+        assert_eq!(writable.encode("changeit"), KEYTOOL_JKS);
+
+        // Version 1 has no certificate type, and new entries are stored last.
+        let mut builder = Builder::new(VERSION_01, 1);
+        builder.entry(TRUSTED_CERT_TAG, b"z", VERSION_01, 1);
+        let (_, mut writable) = parse(builder.finish("")).unwrap().open("").ok().unwrap();
+        writable
+            .insert_trusted_certificate(0, "a", b"opaque synthetic certificate", 0)
+            .unwrap();
+        let mut expected = Builder::new(VERSION_01, 2);
+        expected.entry(TRUSTED_CERT_TAG, b"z", VERSION_01, 1);
+        expected.entry(TRUSTED_CERT_TAG, b"a", VERSION_01, 1);
+        let saved = writable.encode("");
+        assert_eq!(saved, expected.finish(""));
+        assert_eq!(load_entries(&saved, "").unwrap(), [cert("a"), cert("z")]);
     }
 
     #[test]

@@ -10,6 +10,9 @@ All notable changes to keystore-tui are listed here. Versions follow
   save the keystore to a new file. Nothing changes on disk until you save, and
   saving replaces the file in one step. The remaining entries are written
   exactly as they were read, so private and secret keys stay encrypted.
+- In a JKS or JCEKS keystore, press `r` to rename the selected entry, and `i`
+  to import a file holding one certificate as a trusted certificate. Aliases
+  are stored in lower case, as Java does.
 - With unsaved changes, `[modified]` is shown next to the app name, and `q`,
   `Esc`, and `o` ask before discarding them. `Ctrl+C` still quits at once.
 - The keystore password now stays in memory while a JKS or JCEKS keystore is

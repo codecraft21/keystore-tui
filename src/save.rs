@@ -32,6 +32,27 @@ impl Document {
         self.writable.remove(index);
     }
 
+    /// Gives the entry listed at `index` the alias `alias`, listed at `to`.
+    pub fn rename(&mut self, index: usize, alias: &str, to: usize) -> Result<(), String> {
+        self.writable
+            .rename(index, alias, to)
+            .map_err(|error| format!("Not renamed: {error}."))
+    }
+
+    /// Adds a trusted certificate, listed at `to`; see
+    /// `keystore::Writable::insert_trusted_certificate`.
+    pub fn insert_trusted_certificate(
+        &mut self,
+        to: usize,
+        alias: &str,
+        certificate: &[u8],
+        created: u64,
+    ) -> Result<(), String> {
+        self.writable
+            .insert_trusted_certificate(to, alias, certificate, created)
+            .map_err(|error| format!("Not imported: {error}."))
+    }
+
     /// The keystore file, after checking that it reads back as `entries`.
     fn encode(&self, entries: &[KeystoreEntry]) -> Result<Vec<u8>, String> {
         let data = self.writable.encode(&self.password);

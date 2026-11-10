@@ -7,7 +7,7 @@
 - [Opening a file from the command line](#opening-a-file-from-the-command-line)
 - [Opening a file with the browser](#opening-a-file-with-the-browser)
 - [Entry list](#entry-list)
-- [Deleting entries and saving](#deleting-entries-and-saving)
+- [Editing and saving](#editing-and-saving)
 - [Entry details](#entry-details)
 - [Offline chain diagnostics](#offline-chain-diagnostics)
 - [ASN.1 and PEM views](#asn1-and-pem-views)
@@ -116,6 +116,8 @@ certificates whose names match another certificate or key.
 | `/` | Type a filter, or edit the applied one |
 | `s` | Switch the sort order between alias and expiry date |
 | `o` | Open another keystore or certificate file |
+| `i` | Import a certificate file as a trusted certificate (JKS and JCEKS) |
+| `r` | Rename the selected entry (JKS and JCEKS) |
 | `d` / `Delete` | Delete the selected entry (JKS and JCEKS) |
 | `w` | Save the changes to the opened file (JKS and JCEKS) |
 | `W` | Save the keystore to a new file (JKS and JCEKS) |
@@ -129,12 +131,23 @@ including `q` and `s`, goes into the filter. `Backspace` deletes a character,
 Press `s` to sort by expiry date, soonest first, and again to return to alias
 order.
 
-## Deleting entries and saving
+## Editing and saving
 
 JKS and JCEKS keystores can be changed; PKCS12 keystores and certificate files
-cannot yet. Press `d` or `Delete` on an entry, then `y` to confirm; any other
-key cancels. The entry leaves the list, and `[modified]` appears next to the
-app name. Nothing changes on disk until you save.
+cannot yet. Every change appears in the list at once and puts `[modified]`
+next to the app name, but nothing changes on disk until you save.
+
+- **Delete:** press `d` or `Delete` on an entry, then `y` to confirm; any other
+  key cancels.
+- **Rename:** press `r` on an entry, edit its alias, and press `Enter`.
+- **Import a trusted certificate:** press `i`, choose a file holding one
+  certificate (PEM, DER, or PKCS#7) in the browser, then confirm or edit the
+  suggested alias and press `Enter`.
+
+In an alias prompt every key, including `q`, is typed into the alias;
+`Backspace` deletes a character, `Ctrl+U` clears it, and `Esc` cancels. Aliases
+are stored in lower case, as Java does, and an alias another entry already has
+is refused.
 
 Press `w` to save the changes to the opened file. The file is replaced in one
 step, so it holds either the old or the new content, never a partial one. The
@@ -259,8 +272,8 @@ the save fails with a red message and you can choose another name.
 
 | Key | Quits from |
 | --- | --- |
-| `q` | The entry list (when not typing a filter or file name) or detail view (when not typing an export name); asks first with unsaved changes |
-| `Esc` | The entry list, when not typing a filter or file name; asks first with unsaved changes |
+| `q` | The entry list (when not typing a filter, alias, or file name) or detail view (when not typing an export name); asks first with unsaved changes |
+| `Esc` | The entry list, when not typing a filter, alias, or file name; asks first with unsaved changes |
 | `Ctrl+C` | Any view, including the file browser, the password prompt, and while typing a filter or file name; discards unsaved changes without asking |
 
 The terminal is restored when the app exits.

@@ -1926,3 +1926,152 @@ fn files_other_than_jks_and_jceks_cannot_be_changed_yet() {
         assert!(app.message.is_none());
     }
 }
+
+fn type_alias(app: &mut App, alias: &str) {
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    type_password(app, alias);
+    press(app, KeyCode::Enter);
+}
+
+#[test]
+fn renaming_an_entry_keeps_alias_order_and_is_written_on_save() {
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    assert!(screen(&mut app, 120, 24).contains("i Import certificate | r Rename | d Delete entry"));
+    press(&mut app, KeyCode::Char('r'));
+    assert!(screen(&mut app, 120, 24).contains("New alias for 'root-cert': root-cert_"));
+    // Letters are typed into the alias instead of quitting.
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    assert!(screen(&mut app, 120, 24).contains("root-certq_"));
+    press(&mut app, KeyCode::Backspace);
+    // Confirming the unchanged alias changes nothing.
+    press(&mut app, KeyCode::Enter);
+    assert!(app.alias_prompt.is_none() && !app.modified);
+
+    press(&mut app, KeyCode::Char('r'));
+    for (alias, error) in [
+        ("", "Type an alias"),
+        ("SERVER-key", "An entry named 'server-key' already exists."),
+    ] {
+        type_alias(&mut app, alias);
+        assert!(red_text(&mut app).contains(error), "{alias}");
+        assert!(app.alias_prompt.is_some() && !app.modified);
+    }
+    // Aliases are stored in lower case, as Java does.
+    type_alias(&mut app, "Zulu-Ü");
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains("Renamed entry 'root-cert' to 'zulu-ü'."));
+    assert!(rendered.contains("[modified]"));
+    assert_eq!(app.entries[1].alias, "zulu-ü");
+    // The renamed entry stays selected in its new row.
+    assert_eq!(app.selected_entry(), Some(1));
+    assert_eq!(aliases(&path), ["root-cert", "server-key"]);
+    press(&mut app, KeyCode::Char('w'));
+    assert!(screen(&mut app, 200, 24).contains("Saved '"));
+    assert_eq!(aliases(&path), ["server-key", "zulu-ü"]);
+
+    // Esc cancels.
+    press(&mut app, KeyCode::Char('r'));
+    press(&mut app, KeyCode::Esc);
+    assert!(app.alias_prompt.is_none() && !app.modified);
+}
+
+#[test]
+fn importing_a_certificate_adds_a_trusted_entry() {
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    fs::write(
+        directory.path().join("ca.pem"),
+        test_support::TRUSTED_CERT_PEM,
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("bundle.pem"),
+        test_support::BUNDLE_PEM,
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("request.csr"),
+        test_support::KEYTOOL_REQUEST,
+    )
+    .unwrap();
+
+    // Files without exactly one certificate are refused.
+    for (name, error) in [
+        ("bundle", "holds 2 certificates"),
+        ("request", "holds no certificate"),
+        ("store", "is not a certificate file"),
+    ] {
+        press(&mut app, KeyCode::Char('i'));
+        assert!(screen(&mut app, 120, 24).contains(" Import certificate from file "));
+        type_password(&mut app, name);
+        press(&mut app, KeyCode::Enter);
+        assert!(red_text(&mut app).contains(error), "{name}");
+        assert!(
+            app.file_picker.is_none() && app.alias_prompt.is_none(),
+            "{name}"
+        );
+        assert!(!app.modified && !app.importing, "{name}");
+    }
+    // Cancelling the browser leaves the import.
+    press(&mut app, KeyCode::Char('i'));
+    press(&mut app, KeyCode::Esc);
+    assert!(!app.importing);
+    assert_eq!(app.keystore_path.as_deref(), Some(path.as_path()));
+
+    press(&mut app, KeyCode::Char('i'));
+    type_password(&mut app, "ca");
+    press(&mut app, KeyCode::Enter);
+    // The subject's common name, in lower case, is suggested.
+    assert!(
+        screen(&mut app, 120, 24)
+            .contains("Alias for the imported certificate: jks tui test fixture_")
+    );
+    type_alias(&mut app, "root-cert");
+    assert!(red_text(&mut app).contains("already exists"));
+    type_alias(&mut app, "New-CA");
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains("Imported certificate as 'new-ca'."));
+    assert!(rendered.contains("[modified]"));
+    assert_eq!(app.selected_entry(), Some(0));
+    assert_eq!(
+        app.entries[0],
+        KeystoreEntry {
+            alias: "new-ca".into(),
+            certificate: Some(fixture_summary()),
+            content: Content::Certificates {
+                kind: Kind::TrustedCertificate,
+                certificates: vec![test_support::fixture_certificate_der().to_vec()],
+            },
+            chain_warning: None,
+        }
+    );
+    // The imported entry opens in the details like any other.
+    press(&mut app, KeyCode::Enter);
+    assert!(app.entry_details.is_some());
+    press(&mut app, KeyCode::Esc);
+
+    press(&mut app, KeyCode::Char('w'));
+    assert_eq!(aliases(&path), ["new-ca", "root-cert", "server-key"]);
+    let saved = keystore::load_entries(&fs::read(&path).unwrap(), "changeit").unwrap();
+    assert_eq!(saved, app.entries);
+}
+
+#[test]
+fn rename_and_import_need_an_editable_keystore() {
+    let directory = TestDirectory::new();
+    let path = directory.path().join("store.p12");
+    fs::write(&path, include_bytes!("../tests/fixtures/passwordless.p12")).unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    for key in ['r', 'i'] {
+        press(&mut app, KeyCode::Char(key));
+        assert!(app.alias_prompt.is_none() && app.file_picker.is_none());
+        assert!(red_text(&mut app).contains(NOT_EDITABLE), "{key}");
+    }
+    let mut app = App::default();
+    for key in ['r', 'i'] {
+        press(&mut app, KeyCode::Char(key));
+        assert!(app.message.is_none() && app.file_picker.is_none());
+    }
+}
