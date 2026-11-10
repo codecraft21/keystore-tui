@@ -1,7 +1,8 @@
 # Agent and contributor guide
 
-keystore-tui is a read-only Rust and Ratatui TUI for inspecting keystores,
-certificates, and certificate signing requests.
+keystore-tui is a Rust and Ratatui TUI for inspecting keystores, certificates,
+and certificate signing requests. Release 1.1 adds write features; see the
+[ROADMAP](docs/ROADMAP.md).
 
 ## Conventions and constraints
 
@@ -15,8 +16,9 @@ certificates, and certificate signing requests.
 - **Secrets:** use generated fixtures only. Keep passwords, private keys, and
   real keystores out of logs, test output, and commits. Wipe password buffers
   after use.
-- **Read-only:** the app never writes keystores and never decrypts private keys.
-  Certificate exports only ever create new files.
+- **Writes:** today the app never writes keystores and never decrypts private
+  keys, and exports only ever create new files. Change this only by implementing
+  a [ROADMAP](docs/ROADMAP.md) feature, following the write rules listed there.
 
 ## Development
 
@@ -70,6 +72,8 @@ Tests needing private-key entries use synthetic bytes at runtime; never commit p
   including usage and key bindings.
 - Read the relevant [SPEC](docs/SPEC.md) contracts before changing behaviour;
   update them with every behaviour change.
+- Read [ROADMAP](docs/ROADMAP.md) before adding a write feature; update it when
+  plans change or a planned feature ships.
 - Add user-visible changes under the next version's heading in
   [CHANGELOG](CHANGELOG.md); its version section becomes the release notes.
 - Read [RELEASING](docs/RELEASING.md) before version bumps or release-workflow
