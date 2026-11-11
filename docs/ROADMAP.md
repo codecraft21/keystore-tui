@@ -24,8 +24,7 @@ Rules for every write feature:
 These need no private-key cryptography for JKS and PKCS12 truststores.
 
 Done for JKS, JCEKS, and PKCS12: all six items. Still open: the optional
-backup, and changing the password of a PKCS12 keystore that holds keys, which
-needs the key re-encryption of Tier 2.
+backup.
 
 1. **Save and Save As:** write JKS, JCEKS, and PKCS12 files, with an optional
    backup, an unsaved-changes marker, and a confirmation before quitting with
@@ -40,6 +39,10 @@ needs the key re-encryption of Tier 2.
 ### Tier 2: private-key handling
 
 From this tier on, the app decrypts private keys.
+
+Done so far, from item 7: PKCS12 keys are decrypted and re-encrypted when the
+keystore password changes. Still open for item 7: JKS and JCEKS key
+protection, and changing one entry's password.
 
 7. **Unlock entry, and set or change an entry password:** decrypt key entries
    (JKS and JCEKS key protection, PKCS12 shrouded key bags). Items 8 to 16
