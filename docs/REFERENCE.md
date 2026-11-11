@@ -116,13 +116,13 @@ certificates whose names match another certificate or key.
 | `/` | Type a filter, or edit the applied one |
 | `s` | Switch the sort order between alias and expiry date |
 | `o` | Open another keystore or certificate file |
-| `n` | Create a new, empty JKS or JCEKS keystore |
-| `i` | Import a certificate file as a trusted certificate (JKS and JCEKS) |
-| `r` | Rename the selected entry (JKS and JCEKS) |
-| `d` / `Delete` | Delete the selected entry (JKS and JCEKS) |
-| `w` | Save the changes to the opened file (JKS and JCEKS) |
-| `W` | Save the keystore to a new file (JKS and JCEKS) |
-| `p` | Change the keystore password (JKS and JCEKS) |
+| `n` | Create a new, empty JKS, JCEKS, or PKCS12 keystore |
+| `i` | Import a certificate file as a trusted certificate |
+| `r` | Rename the selected entry |
+| `d` / `Delete` | Delete the selected entry |
+| `w` | Save the changes to the opened file |
+| `W` | Save the keystore to a new file |
+| `p` | Change the keystore password |
 
 Press `/` to filter by part of the alias or the certificate subject (such as
 `CN=example`), ignoring case. The list updates as you type, and every letter,
@@ -135,25 +135,28 @@ order.
 
 ## Editing and saving
 
-JKS and JCEKS keystores can be changed; PKCS12 keystores and certificate files
-cannot yet. Every change appears in the list at once and puts `[modified]`
+JKS, JCEKS, and PKCS12 keystores can be changed; certificate files cannot,
+and neither can a PKCS12 keystore whose entry list is incomplete. Every change appears in the list at once and puts `[modified]`
 next to the app name, but nothing changes on disk until you save.
 
 - **Delete:** press `d` or `Delete` on an entry, then `y` to confirm; any other
-  key cancels.
+  key cancels. In PKCS12, a private key goes with its certificate and the
+  chain certificates no other entry uses.
 - **Rename:** press `r` on an entry, edit its alias, and press `Enter`.
 - **Import a trusted certificate:** press `i`, choose a file holding one
   certificate (PEM, DER, or PKCS#7) in the browser, then confirm or edit the
   suggested alias and press `Enter`.
-
-- **Change the password:** press `p`, then type the new password twice. Only
-  the keystore's own password changes; private-key and secret-key entries keep
-  the passwords they were protected with, as with `keytool -storepasswd`.
+- **Change the password:** press `p`, then type the new password twice. In JKS
+  and JCEKS only the keystore's own password changes; private-key and
+  secret-key entries keep the passwords they were protected with, as with
+  `keytool -storepasswd`. A PKCS12 keystore holding keys cannot change its
+  password yet, because its keys are encrypted with it.
 
 To create a keystore, press `n`, edit the suggested file name, and type its
-password twice. A `.jceks` name creates a JCEKS keystore and any other name a
-JKS keystore; PKCS12 keystores cannot be created yet. The empty keystore is
-written at once and opened, ready for importing certificates.
+password twice. A `.jceks` name creates a JCEKS keystore, a `.p12` or `.pfx`
+name a PKCS12 keystore, which needs a password, and any other name a JKS
+keystore. The empty keystore is written at once and opened, ready for
+importing certificates.
 
 In an alias prompt every key, including `q`, is typed into the alias;
 `Backspace` deletes a character, `Ctrl+U` clears it, and `Esc` cancels. Aliases
@@ -163,7 +166,10 @@ is refused.
 Press `w` to save the changes to the opened file. The file is replaced in one
 step, so it holds either the old or the new content, never a partial one. The
 other entries are written exactly as they were read: private and secret keys
-stay encrypted, and the keystore keeps its format and password.
+stay encrypted, and the keystore keeps its format and password. A PKCS12
+keystore is saved with AES-256 and HMAC-SHA256, whatever it used before, which
+Java 8u301, 11.0.12, and later, and OpenSSL 1.1 and later, read; one without a
+password stays without one.
 
 Press `W` to save the keystore under a new name, then edit the suggested name
 and press `Enter`. The prompt works like the [export

@@ -24,6 +24,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Changing the password](#changing-the-password)
 - [Creating a keystore](#creating-a-keystore)
 - [Saving](#saving)
+  - [Writing PKCS12 keystores](#writing-pkcs12-keystores)
 - [Entry details](#entry-details)
   - [Certificate requests](#certificate-requests)
   - [Weak cryptography](#weak-cryptography)
@@ -39,9 +40,9 @@ document and the usage reference, and also the README if its overview changes.
 ## Scope
 
 - The app reads Java KeyStore (JKS), JCEKS, and PKCS12 files, standalone
-  certificate files, and PKCS#10 certificate requests. It changes a JKS or JCEKS
-  keystore file only when the user saves it; see [Saving](#saving). PKCS12
-  keystores, certificate files, and requests are never written or modified.
+  certificate files, and PKCS#10 certificate requests. It changes a keystore
+  file only when the user saves it; see [Saving](#saving). Certificate files
+  and requests are never written or modified.
 - The other files it writes are new certificate and request exports; see
   [Exporting](#exporting).
 - It runs without Java or `keytool` installed.
@@ -298,8 +299,8 @@ any existing incomplete-entry warnings.
 
 ### Deleting entries
 
-- Only JKS and JCEKS keystores can be changed. In the entry list of one, a
-  line above the shortcuts shows `n New | i Import certificate | r Rename | d
+- JKS, JCEKS, and PKCS12 keystores can be changed. In the entry list of one,
+  a line above the shortcuts shows `n New | i Import certificate | r Rename | d
   Delete entry | w Save | W Save as | p Password`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
@@ -309,23 +310,30 @@ any existing incomplete-entry warnings.
   last row when the last one was deleted.
 - While the list differs from the file, `[modified]` is shown in yellow after
   the app name. Entries sharing an alias are deleted one at a time.
-- For a PKCS12 keystore or a certificate file, `d`, `Delete`, `r`, `i`, `p`,
-  `w`, and `W` show a red message that only JKS and JCEKS keystores can be changed. With no
-  file loaded they do nothing.
+- In PKCS12, deleting a private key also removes its certificate and the
+  chain certificates that no other entry uses, which would otherwise be
+  listed as entries of their own. Certificates another key's chain needs, and
+  trusted certificates, stay.
+- For a certificate file, `d`, `Delete`, `r`, `i`, `p`, `w`, and `W` show a
+  red message that only keystores can be changed. A PKCS12 keystore whose
+  entry list is incomplete (see [PKCS12
+  compatibility](#pkcs12-compatibility)) cannot be changed either, because
+  saving it would lose what was not read; the message says so. With no file
+  loaded the keys do nothing.
 - With unsaved changes, `o` first asks before opening the file browser, and
-  `n` before asking for a new keystore's name; `y` continues and any other key cancels. The changes are kept until another
-  file is loaded, so cancelling the browser or a password prompt keeps them.
+  `n` before asking for a new keystore's name; `y` continues and any other key
+  cancels. The changes are kept until another file is loaded, so cancelling the browser or a password prompt keeps them.
 - Messages about editing and saving clear on the next key.
 
 ### Renaming entries
 
-- In a JKS or JCEKS keystore, `r` opens a prompt in place of the shortcuts,
+- In a keystore, `r` opens a prompt in place of the shortcuts,
   `New alias for '<alias>':`, holding the selected entry's alias. It does
   nothing when no entry is selected.
 - While the prompt is open, every character without `Ctrl` or `Alt` is typed
   into the alias, including `q`. `Backspace` deletes a character, `Ctrl+U`
   clears the alias, `Enter` confirms, and `Esc` cancels. `Ctrl+C` still quits.
-- The alias is stored in lower case, as Java stores aliases. Confirming the
+- The alias is stored in lower case, as Java looks aliases up. Confirming the
   entry's own alias changes nothing.
 - An empty alias, an alias another entry already has (ignoring case), or an
   alias longer than 65,535 bytes in Java's string encoding is refused with a
@@ -334,10 +342,14 @@ any existing incomplete-entry warnings.
   its place in alias order and stays selected when the filter still shows it;
   a green message names the old and new alias. On saving, only the alias
   changes: the entry keeps its content, creation date, and place in the file.
+- In PKCS12 the alias is the `friendlyName` attribute, written as a
+  BMPString. A private key's name is set on its key bag and on its
+  certificate's bag; an entry without a name gets one. The bags' values and
+  other attributes keep their bytes.
 
 ### Importing certificates
 
-- In a JKS or JCEKS keystore, `i` opens the file browser, titled `Import
+- In a keystore, `i` opens the file browser, titled `Import
   certificate from file`, in the opened file's directory. `Esc` cancels.
 - The chosen file must hold exactly one certificate, as PEM, DER, or PKCS#7.
   A file with several certificates, with none, or of another kind is refused
@@ -351,34 +363,46 @@ any existing incomplete-entry warnings.
   was in the file (PEM is decoded to its DER).
 - Whether the certificate is trusted, valid, or already in the keystore under
   another alias is not checked.
+- In PKCS12 the certificate is stored with Java's trusted-key-usage
+  attribute, so Java lists it as a trusted certificate. It joins the
+  encrypted certificates when the keystore has any; in a keystore that stores
+  its certificates unencrypted, it is unencrypted too.
 
 ### Changing the password
 
-- In a JKS or JCEKS keystore, `p` opens a prompt in place of the shortcuts,
+- In a keystore, `p` opens a prompt in place of the shortcuts,
   `New keystore password:`, then `Type the password again:` after `Enter`.
   Typed characters are shown as `*`, including `q`; `Backspace` deletes one,
   `Esc` cancels at either step, and `Ctrl+C` still quits.
 - If the two entries differ, a red message says so and the prompt starts over.
-  An empty password is accepted.
+  An empty password is accepted for JKS and JCEKS.
 - The new password replaces the one kept in memory, the old one is wiped, and
   the keystore counts as modified; a green message says the password is
   written on saving. On saving, only the integrity digest changes.
-- Private-key and secret-key entries keep the passwords they were protected
-  with, as with `keytool -storepasswd`.
+- In JKS and JCEKS, private-key and secret-key entries keep the passwords
+  they were protected with, as with `keytool -storepasswd`.
+- In PKCS12, keys are encrypted with the keystore's password and are never
+  decrypted, so a keystore holding private or secret keys cannot change its
+  password yet. Neither can a keystore that no password protects, and the new
+  password cannot be empty. Each is refused with a red message after the
+  password is typed, and nothing changes.
 
 ## Creating a keystore
 
 - `n` in the entry list, with or without a file loaded, opens a prompt in
-  place of the shortcuts, `New keystore file (.jks or .jceks):`. It suggests
+  place of the shortcuts, `New keystore file (.jks, .jceks, or .p12):`. It suggests
   `keystore.jks` in the opened file's directory, or in the working directory
   when no file is loaded, as an absolute path, numbered like `keystore-2.jks`
   when that name exists. It takes keys like the "save as" prompt; see
   [Saving](#saving).
-- A `.jceks` name (case-insensitive) creates a JCEKS keystore; any other name
-  creates a JKS keystore. A `.p12` or `.pfx` name, or the name of an existing
-  file, is refused with a red message and the prompt stays open.
+- A `.jceks` name (case-insensitive) creates a JCEKS keystore, a `.p12` or
+  `.pfx` name a PKCS12 keystore, and any other name a JKS keystore. The name
+  of an existing file is refused with a red message and the prompt stays
+  open.
 - The password is then asked for twice, as when [changing the
   password](#changing-the-password). `Esc` cancels, and nothing is created.
+- A PKCS12 keystore needs a password that is not empty; with an empty one a
+  red message says so and nothing is created.
 - Confirming the password writes an empty keystore, in the version Java
   writes, to the new file and opens it. A green message names it. If the file
   cannot be created, a red message explains why and the loaded file stays.
@@ -387,13 +411,15 @@ any existing incomplete-entry warnings.
 
 - `w` saves the changes to the opened file; without changes it only reports
   `No changes to save.` `W` saves the keystore, changed or not, to a new file.
-- The saved keystore keeps its format, version, and password. Every remaining
+- The saved keystore keeps its format and password. For PKCS12, see [Writing
+  PKCS12 keystores](#writing-pkcs12-keystores). A JKS or JCEKS keystore also
+  keeps its version, and every remaining
   entry is written byte for byte as it was read, in its stored order, with its
   creation date; private and secret keys stay encrypted and are never
   decrypted. Only the entry count and the integrity digest are recomputed. Data
   after the digest, which Java ignores, is not kept.
-- The password is kept in memory while the keystore is open, to compute the
-  digest, and is wiped when the keystore is closed or replaced by another
+- The password is kept in memory while the keystore is open, to protect the
+  saved file with, and is wiped when the keystore is closed or replaced by another
   file.
 - Before anything is written, the new content is read back and compared with
   the entry list; on a mismatch nothing is written.
@@ -413,6 +439,29 @@ any existing incomplete-entry warnings.
   red message explains why and the prompt stays open. On success the new file
   becomes the opened file, so later saves go to it.
 - A green message names the saved file, and `[modified]` disappears.
+
+### Writing PKCS12 keystores
+
+- Every bag is written byte for byte as it was read, except the bags of a
+  renamed entry. Private and secret keys stay encrypted as they were and are
+  never decrypted.
+- Bags stay in their safes, in order. A safe that was encrypted is encrypted
+  again, and one that was not stays unencrypted; a safe left without bags is
+  dropped.
+- Encrypted safes are written with PBES2: AES-256-CBC with a key from PBKDF2
+  with HMAC-SHA256, 10,000 iterations, and a new random 20-byte salt and IV on
+  every save. This replaces older encryption, such as RC2 or Triple DES.
+- A keystore that had an integrity MAC gets a new one: HMAC-SHA256 with 10,000
+  iterations and a new random 20-byte salt. A keystore without a MAC stays
+  without one, so a passwordless Java truststore stays passwordless.
+- An empty password keeps the encoding it was read with, empty or a NUL
+  character.
+- A new keystore has a MAC and encrypts its certificates.
+- Saved keystores are read by Java 8u301, 11.0.12, and later, and by OpenSSL
+  1.1 and later. Older Java 8 builds cannot read HMAC-SHA256 or PBES2
+  keystores.
+- If the system provides no random numbers, saving fails and nothing is
+  written.
 
 ## Entry details
 

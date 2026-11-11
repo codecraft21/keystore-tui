@@ -1,12 +1,19 @@
 use crown::{
-    asn1::{der::Reader, oid},
+    asn1::{
+        der::{self, Reader},
+        oid::{self, ObjectIdentifier},
+    },
+    core::CoreWrite,
+    envelope::EvpHash,
     error::CryptoError,
+    kdf::pkcs12kdf,
     pkcs7::ContentInfo,
-    pkcs12::{Bag, Pfx, SafeBag},
+    pkcs12::{Bag, MacData, Pfx, SafeBag},
+    rng::Rng,
     x509::{
-        algorithm::AlgorithmIdentifier,
+        algorithm::{AlgorithmIdentifier, Hash},
         attribute::parse_attributes,
-        pbe::{LegacyPbe, LegacyPbeKind, Pbes2, Pbes2Cipher},
+        pbe::{LegacyPbe, LegacyPbeKind, Pbes2, Pbes2Cipher, pkcs12_password},
     },
 };
 use zeroize::Zeroizing;
@@ -53,6 +60,12 @@ pub fn parse(data: &[u8]) -> Result<Store, &'static str> {
 
 impl Store {
     pub fn verify(&self, password: &str) -> Result<Verified, VerifyError> {
+        self.open(password).map(|(verified, _)| verified)
+    }
+
+    /// Verifies the password and lists the entries. A store that was read
+    /// completely also comes in its writable form.
+    pub fn open(&self, password: &str) -> Result<(Verified, Option<Writable>), VerifyError> {
         let mut password_bytes = password.as_bytes();
         // PKCS12 stores can omit MacData even when their contents are encrypted.
         // When a MAC is present, it must still verify before reading any entries.
@@ -74,157 +87,36 @@ impl Store {
             })?;
         }
 
-        let (bags, mut incomplete) = match self.read_bags(password_bytes) {
+        let (contents, password_bytes) = match self.read_bags(password_bytes) {
             // Without a MAC, only decryption can tell whether an empty password
             // was stored in Java's NUL encoding.
-            Err(VerifyError::Password) if password.is_empty() => self.read_bags(b"\0")?,
-            result => result?,
+            Err(VerifyError::Password) if password.is_empty() => {
+                (self.read_bags(b"\0")?, &b"\0"[..])
+            }
+            result => (result?, password_bytes),
         };
-
-        let pool: Vec<_> = bags
-            .iter()
-            .filter_map(|bag| bag.certificate_der.as_deref())
-            .collect();
-        let mut entries = Vec::new();
-        let mut unnamed_keys = 0;
-        for bag in &bags {
-            if matches!(bag.bag, Bag::ShroudedKey(_)) {
-                // Java and OpenSSL give the key and its end-entity certificate
-                // the same local key ID.
-                let leaf = bag
-                    .local_key_id()
-                    .and_then(|id| {
-                        bags.iter().find(|other| {
-                            other.certificate_der.is_some()
-                                && other.local_key_id().as_ref() == Some(&id)
-                        })
-                    })
-                    .and_then(|bag| bag.certificate_der.as_deref());
-                // OpenSSL only stores a friendly name when given one.
-                let alias = bag
-                    .friendly_name()
-                    .or_else(|| leaf.and_then(certificate_file::subject_name))
-                    .unwrap_or_else(|| {
-                        unnamed_keys += 1;
-                        format!("Private key {unnamed_keys}")
-                    });
-                let (certificates, chain_warning) = leaf.map_or_else(
-                    || (vec![], None),
-                    |leaf| certificate::details::chain(leaf, &pool),
-                );
-                entries.push(KeystoreEntry {
-                    alias,
-                    certificate: leaf.and_then(certificate::summarize),
-                    content: Content::Certificates {
-                        kind: Kind::PrivateKey,
-                        certificates,
-                    },
-                    chain_warning,
-                });
-            }
-        }
-        let mut unnamed_certificates = 0;
-        for bag in &bags {
-            match &bag.bag {
-                Bag::Secret { .. } => {
-                    if let Some(alias) = bag.friendly_name() {
-                        entries.push(KeystoreEntry {
-                            alias,
-                            certificate: None,
-                            content: Content::Certificates {
-                                kind: Kind::SecretKey,
-                                certificates: vec![],
-                            },
-                            chain_warning: None,
-                        });
-                    } else {
-                        incomplete = true;
-                    }
-                }
-                _ if bag.certificate_der.is_some() => {
-                    let der = bag.certificate_der.as_deref().unwrap();
-                    // Java identifies trusted entries with its trustedKeyUsage
-                    // attribute. Other tools store plain certificates, which
-                    // are listed unless they belong to a key's chain.
-                    if !bag
-                        .attributes
-                        .iter()
-                        .any(|attr| attr.oid.matches(TRUSTED_KEY_USAGE))
-                    {
-                        if entries.iter().any(|entry| {
-                            matches!(
-                                entry.content,
-                                Content::Certificates {
-                                    kind: Kind::PrivateKey,
-                                    ..
-                                }
-                            ) && entry.certificates().iter().any(|stored| stored == der)
-                        }) {
-                            continue;
-                        }
-                        let alias = bag
-                            .friendly_name()
-                            .or_else(|| certificate_file::subject_name(der))
-                            .unwrap_or_else(|| {
-                                unnamed_certificates += 1;
-                                format!("Certificate {unnamed_certificates}")
-                            });
-                        let (certificates, chain_warning) = certificate::details::chain(der, &pool);
-                        entries.push(KeystoreEntry {
-                            alias,
-                            certificate: certificate::summarize(der),
-                            content: Content::Certificates {
-                                kind: Kind::Certificate,
-                                certificates,
-                            },
-                            chain_warning,
-                        });
-                        continue;
-                    }
-                    if let Some(alias) = bag.friendly_name() {
-                        // An identical copy of a trusted certificate already
-                        // listed under the same name adds nothing.
-                        if entries.iter().any(|entry| {
-                            entry.alias == alias
-                                && matches!(
-                                    entry.content,
-                                    Content::Certificates {
-                                        kind: Kind::TrustedCertificate,
-                                        ..
-                                    }
-                                )
-                                && entry.certificates().first().map(Vec::as_slice) == Some(der)
-                        }) {
-                            continue;
-                        }
-                        let (certificates, chain_warning) = certificate::details::chain(der, &pool);
-                        entries.push(KeystoreEntry {
-                            alias,
-                            certificate: certificate::summarize(der),
-                            content: Content::Certificates {
-                                kind: Kind::TrustedCertificate,
-                                certificates,
-                            },
-                            chain_warning,
-                        });
-                    } else {
-                        incomplete = true;
-                    }
-                }
-                Bag::ShroudedKey(_) => {}
-                _ => incomplete = true,
-            }
-        }
-        entries.sort_by(|a, b| a.alias.cmp(&b.alias));
-        Ok(Verified {
-            entries,
-            incomplete,
-        })
+        let (listed, unlisted) = list(&contents.bags);
+        let incomplete = contents.incomplete || unlisted;
+        let (entries, sources) = listed.into_iter().unzip();
+        // Saving a store that was not read completely would lose the rest.
+        let writable = (!incomplete).then(|| Writable {
+            bags: contents.bags,
+            safes: contents.safes,
+            mac: self.0.mac.is_some(),
+            password: Zeroizing::new(password_bytes.to_vec()),
+            sources,
+        });
+        Ok((
+            Verified {
+                entries,
+                incomplete,
+            },
+            writable,
+        ))
     }
 
-    /// Reads every safe's bags, decrypting with `password`, and whether any
-    /// part could not be read.
-    fn read_bags(&self, password: &[u8]) -> Result<(Vec<MetadataBag>, bool), VerifyError> {
+    /// Reads every safe's bags, decrypting with `password`.
+    fn read_bags(&self, password: &[u8]) -> Result<Contents, VerifyError> {
         let safe = self
             .0
             .authenticated_safe()
@@ -234,6 +126,7 @@ impl Store {
             .read_sequence()
             .map_err(|_| VerifyError::Invalid("invalid PKCS12 content"))?;
         let mut bags = Vec::new();
+        let mut safes = Vec::new();
         let mut incomplete = false;
         while !sequence.is_empty() {
             let info = match ContentInfo::parse_reader(&mut sequence) {
@@ -243,12 +136,13 @@ impl Store {
                     break;
                 }
             };
+            let encrypted = info.content_type.matches(oid::OID_PKCS7_ENCRYPTED_DATA);
             let content = if info.content_type.matches(oid::OID_PKCS7_DATA) {
                 Reader::new(&info.content)
                     .read_octet_string_owned()
                     .map(Zeroizing::new)
                     .ok()
-            } else if info.content_type.matches(oid::OID_PKCS7_ENCRYPTED_DATA) {
+            } else if encrypted {
                 // Without a MAC, only decryption shows whether the password
                 // is right. Most wrong keys fail CBC padding, but about 1 in
                 // 256 pass it and RC4 has no padding, so plaintext that is
@@ -271,7 +165,10 @@ impl Store {
                     while !sequence.is_empty() {
                         match sequence.read_raw_tlv() {
                             Ok(raw) => match parse_metadata_bag(raw) {
-                                Ok(Some(bag)) => bags.push(bag),
+                                Ok(Some(mut bag)) => {
+                                    bag.safe = safes.len();
+                                    bags.push(bag);
+                                }
                                 Ok(None) | Err(_) => incomplete = true,
                             },
                             Err(_) => {
@@ -286,14 +183,488 @@ impl Store {
             } else {
                 incomplete = true;
             }
+            safes.push(encrypted);
         }
-        Ok((bags, incomplete))
+        Ok(Contents {
+            bags,
+            safes,
+            incomplete,
+        })
     }
+}
+
+/// What the safes of a store hold.
+struct Contents {
+    bags: Vec<MetadataBag>,
+    /// Whether each safe, in file order, is encrypted.
+    safes: Vec<bool>,
+    /// Whether any part could not be read.
+    incomplete: bool,
+}
+
+/// Lists the entries that `bags` hold, sorted by alias, each with the indices
+/// of the bags it comes from, and whether any bag could not be listed.
+fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, bool) {
+    let pool: Vec<_> = bags
+        .iter()
+        .filter_map(|bag| bag.certificate_der.as_deref())
+        .collect();
+    let is_key = |entry: &KeystoreEntry| {
+        matches!(
+            entry.content,
+            Content::Certificates {
+                kind: Kind::PrivateKey,
+                ..
+            }
+        )
+    };
+    let mut incomplete = false;
+    let mut entries: Vec<(KeystoreEntry, Vec<usize>)> = Vec::new();
+    let mut unnamed_keys = 0;
+    for (index, bag) in bags.iter().enumerate() {
+        if matches!(bag.bag, Bag::ShroudedKey(_)) {
+            // Java and OpenSSL give the key and its end-entity certificate
+            // the same local key ID.
+            let leaf_index = bag.local_key_id().and_then(|id| {
+                bags.iter().position(|other| {
+                    other.certificate_der.is_some() && other.local_key_id().as_ref() == Some(&id)
+                })
+            });
+            let leaf = leaf_index.and_then(|leaf| bags[leaf].certificate_der.as_deref());
+            // OpenSSL only stores a friendly name when given one.
+            let alias = bag
+                .friendly_name()
+                .or_else(|| leaf.and_then(certificate_file::subject_name))
+                .unwrap_or_else(|| {
+                    unnamed_keys += 1;
+                    format!("Private key {unnamed_keys}")
+                });
+            let (certificates, chain_warning) = leaf.map_or_else(
+                || (vec![], None),
+                |leaf| certificate::details::chain(leaf, &pool),
+            );
+            entries.push((
+                KeystoreEntry {
+                    alias,
+                    certificate: leaf.and_then(certificate::summarize),
+                    content: Content::Certificates {
+                        kind: Kind::PrivateKey,
+                        certificates,
+                    },
+                    chain_warning,
+                },
+                std::iter::once(index).chain(leaf_index).collect(),
+            ));
+        }
+    }
+    let mut unnamed_certificates = 0;
+    for (index, bag) in bags.iter().enumerate() {
+        match &bag.bag {
+            Bag::Secret { .. } => {
+                if let Some(alias) = bag.friendly_name() {
+                    entries.push((
+                        KeystoreEntry {
+                            alias,
+                            certificate: None,
+                            content: Content::Certificates {
+                                kind: Kind::SecretKey,
+                                certificates: vec![],
+                            },
+                            chain_warning: None,
+                        },
+                        vec![index],
+                    ));
+                } else {
+                    incomplete = true;
+                }
+            }
+            _ if bag.certificate_der.is_some() => {
+                let der = bag.certificate_der.as_deref().unwrap();
+                // Java identifies trusted entries with its trustedKeyUsage
+                // attribute. Other tools store plain certificates, which
+                // are listed unless they belong to a key's chain.
+                if !bag
+                    .attributes
+                    .iter()
+                    .any(|attr| attr.oid.matches(TRUSTED_KEY_USAGE))
+                {
+                    if entries.iter().any(|(entry, _)| {
+                        is_key(entry) && entry.certificates().iter().any(|stored| stored == der)
+                    }) {
+                        continue;
+                    }
+                    let alias = bag
+                        .friendly_name()
+                        .or_else(|| certificate_file::subject_name(der))
+                        .unwrap_or_else(|| {
+                            unnamed_certificates += 1;
+                            format!("Certificate {unnamed_certificates}")
+                        });
+                    let (certificates, chain_warning) = certificate::details::chain(der, &pool);
+                    entries.push((
+                        KeystoreEntry {
+                            alias,
+                            certificate: certificate::summarize(der),
+                            content: Content::Certificates {
+                                kind: Kind::Certificate,
+                                certificates,
+                            },
+                            chain_warning,
+                        },
+                        vec![index],
+                    ));
+                    continue;
+                }
+                if let Some(alias) = bag.friendly_name() {
+                    // An identical copy of a trusted certificate already
+                    // listed under the same name adds nothing.
+                    if let Some((_, sources)) = entries.iter_mut().find(|(entry, _)| {
+                        entry.alias == alias
+                            && matches!(
+                                entry.content,
+                                Content::Certificates {
+                                    kind: Kind::TrustedCertificate,
+                                    ..
+                                }
+                            )
+                            && entry.certificates().first().map(Vec::as_slice) == Some(der)
+                    }) {
+                        sources.push(index);
+                        continue;
+                    }
+                    let (certificates, chain_warning) = certificate::details::chain(der, &pool);
+                    entries.push((
+                        KeystoreEntry {
+                            alias,
+                            certificate: certificate::summarize(der),
+                            content: Content::Certificates {
+                                kind: Kind::TrustedCertificate,
+                                certificates,
+                            },
+                            chain_warning,
+                        },
+                        vec![index],
+                    ));
+                } else {
+                    incomplete = true;
+                }
+            }
+            Bag::ShroudedKey(_) => {}
+            _ => incomplete = true,
+        }
+    }
+    entries.sort_by(|a, b| a.0.alias.cmp(&b.0.alias));
+    (entries, incomplete)
+}
+
+/// Why a PKCS12 keystore could not be changed or written.
+pub type WriteError = &'static str;
+
+const PBE_ITERATIONS: u32 = 10_000;
+const SALT_SIZE: usize = 20;
+const ANY_EXTENDED_KEY_USAGE: &[u64] = &[2, 5, 29, 37, 0];
+
+/// A verified store's bags, for writing it back. Each bag keeps its original
+/// bytes, so encrypted keys are written exactly as they were read and are
+/// never decrypted. Only bags whose alias changes are rebuilt.
+pub struct Writable {
+    bags: Vec<MetadataBag>,
+    /// Whether each safe, by a bag's `safe` index, is written encrypted.
+    safes: Vec<bool>,
+    /// Whether the store gets an integrity MAC.
+    mac: bool,
+    /// The password as the store encodes it, which for an empty password
+    /// may be a NUL character.
+    password: Zeroizing<Vec<u8>>,
+    /// The bags each listed entry comes from, in listing order.
+    sources: Vec<Vec<usize>>,
+}
+
+impl Writable {
+    /// A store without entries, protected by `password`.
+    pub fn empty(password: &str) -> Self {
+        Self {
+            bags: Vec::new(),
+            safes: Vec::new(),
+            mac: true,
+            password: Zeroizing::new(password.as_bytes().to_vec()),
+            sources: Vec::new(),
+        }
+    }
+
+    /// The password to verify the written store with.
+    pub fn password(&self) -> &str {
+        std::str::from_utf8(&self.password).unwrap_or_default()
+    }
+
+    fn relist(&mut self) -> Vec<KeystoreEntry> {
+        let (entries, sources) = list(&self.bags).0.into_iter().unzip();
+        self.sources = sources;
+        entries
+    }
+
+    /// Keeps the bags at these indices, in order.
+    fn keep(&mut self, indices: &[usize]) {
+        let mut bags: Vec<_> = std::mem::take(&mut self.bags)
+            .into_iter()
+            .map(Some)
+            .collect();
+        self.bags = indices
+            .iter()
+            .filter_map(|&index| bags[index].take())
+            .collect();
+    }
+
+    /// Removes the entry listed at `index` and returns the new listing. A
+    /// private key goes with its certificate, and with the chain
+    /// certificates no other entry uses, which would otherwise turn into
+    /// entries of their own.
+    pub fn remove(&mut self, index: usize) -> Vec<KeystoreEntry> {
+        let listed: Vec<usize> = self.sources.iter().flatten().copied().collect();
+        let removed = &self.sources[index];
+        let kept: Vec<usize> = (0..self.bags.len())
+            .filter(|bag| !removed.contains(bag))
+            .collect();
+        self.keep(&kept);
+        // A bag that was in no entry before and is in one now was only
+        // there as part of the removed key's chain.
+        let orphans: Vec<usize> = list(&self.bags)
+            .0
+            .into_iter()
+            .filter(|(_, sources)| sources.iter().any(|&bag| !listed.contains(&kept[bag])))
+            .flat_map(|(_, sources)| sources)
+            .collect();
+        let kept: Vec<usize> = (0..self.bags.len())
+            .filter(|bag| !orphans.contains(bag))
+            .collect();
+        self.keep(&kept);
+        self.relist()
+    }
+
+    /// Gives the entry listed at `index` the friendly name `alias`, on its
+    /// key and certificate bags, and returns the new listing.
+    pub fn rename(&mut self, index: usize, alias: &str) -> Result<Vec<KeystoreEntry>, WriteError> {
+        let renamed = self.sources[index]
+            .iter()
+            .map(|&source| {
+                let bag = &self.bags[source];
+                let raw = with_friendly_name(&bag.raw, alias).ok()?;
+                let mut renamed = parse_metadata_bag(&raw).ok()??;
+                renamed.safe = bag.safe;
+                Some((source, renamed))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or("the entry could not be rebuilt")?;
+        for (source, bag) in renamed {
+            self.bags[source] = bag;
+        }
+        Ok(self.relist())
+    }
+
+    /// Adds a certificate bag that Java reads as a trusted certificate, and
+    /// returns the new listing. It joins the encrypted certificates when the
+    /// store has any, and is stored as openly as the others otherwise.
+    pub fn insert_trusted_certificate(
+        &mut self,
+        alias: &str,
+        certificate: &[u8],
+    ) -> Result<Vec<KeystoreEntry>, WriteError> {
+        let mut attributes = [
+            friendly_name_attribute(alias),
+            attribute(
+                TRUSTED_KEY_USAGE,
+                &der::oid(&object_id(ANY_EXTENDED_KEY_USAGE)),
+            ),
+        ];
+        attributes.sort();
+        let certificate_bag = der::sequence(
+            &[
+                der::oid(&object_id(oid::OID_X509_CERTIFICATE)),
+                der::explicit(0, &der::octet_string(certificate)),
+            ]
+            .concat(),
+        );
+        let raw = der::sequence(
+            &[
+                der::oid(&object_id(oid::OID_PKCS12_CERT_BAG)),
+                der::explicit(0, &certificate_bag),
+                der::set(&attributes.concat()),
+            ]
+            .concat(),
+        );
+        let mut bag = parse_metadata_bag(&raw)
+            .ok()
+            .flatten()
+            .ok_or("the certificate could not be stored")?;
+        bag.safe = match self.safes.iter().position(|&encrypted| encrypted) {
+            Some(safe) => safe,
+            None if !self.safes.is_empty() => 0,
+            None => {
+                self.safes.push(self.mac);
+                0
+            }
+        };
+        self.bags.push(bag);
+        Ok(self.relist())
+    }
+
+    /// Protects the store with `password` from now on. Keys are encrypted
+    /// with the password they were stored under, which Java expects to be
+    /// the store's, so a store holding keys keeps its password.
+    pub fn set_password(&mut self, password: &str) -> Result<(), WriteError> {
+        if password.is_empty() {
+            return Err("A PKCS12 keystore needs a password that is not empty.");
+        }
+        if !self.mac && !self.safes.contains(&true) {
+            return Err("This PKCS12 keystore is not protected by a password.");
+        }
+        if self
+            .bags
+            .iter()
+            .any(|bag| matches!(bag.bag, Bag::ShroudedKey(_) | Bag::Secret { .. }))
+        {
+            return Err(
+                "The password cannot be changed yet while the PKCS12 keystore holds keys, which are encrypted with it.",
+            );
+        }
+        self.password = Zeroizing::new(password.as_bytes().to_vec());
+        Ok(())
+    }
+
+    /// The store file. Encrypted safes and the MAC get fresh salts from
+    /// `rng` and use AES-256-CBC with PBKDF2 and HMAC-SHA256, whatever the
+    /// store used before; safes that were not encrypted stay so.
+    pub fn encode(&self, rng: &mut impl Rng) -> Result<Vec<u8>, WriteError> {
+        let failed = |_| "the PKCS12 keystore could not be encrypted";
+        let mut safes = Vec::new();
+        for (safe, &encrypted) in self.safes.iter().enumerate() {
+            let bags: Vec<u8> = self
+                .bags
+                .iter()
+                .filter(|bag| bag.safe == safe)
+                .flat_map(|bag| bag.raw.iter().copied())
+                .collect();
+            if bags.is_empty() {
+                continue;
+            }
+            let contents = Zeroizing::new(der::sequence(&bags));
+            let info = if encrypted {
+                let mut salt = vec![0; SALT_SIZE];
+                rng.fill_bytes(&mut salt);
+                let mut iv = vec![0; 16];
+                rng.fill_bytes(&mut iv);
+                let pbe = Pbes2 {
+                    salt,
+                    iterations: PBE_ITERATIONS,
+                    key_length: None,
+                    prf: Hash::Sha256,
+                    cipher: Pbes2Cipher::Aes256Cbc { iv },
+                };
+                let ciphertext = pbe.encrypt(&contents, &self.password).map_err(failed)?;
+                let encrypted_content = der::sequence(
+                    &[
+                        der::oid(&object_id(oid::OID_PKCS7_DATA)),
+                        pbe.to_algorithm().encode(),
+                        der::implicit(0, false, &ciphertext),
+                    ]
+                    .concat(),
+                );
+                ContentInfo {
+                    content_type: object_id(oid::OID_PKCS7_ENCRYPTED_DATA),
+                    content: der::sequence(&[der::integer(&[0]), encrypted_content].concat()),
+                }
+            } else {
+                ContentInfo::data(&contents)
+            };
+            safes.extend(info.encode());
+        }
+        let authenticated_safe = der::sequence(&safes);
+        let mac = if self.mac {
+            let mut salt = vec![0; SALT_SIZE];
+            rng.fill_bytes(&mut salt);
+            let key = pkcs12kdf::derive(
+                Hash::Sha256.factory(),
+                &pkcs12_password(&self.password),
+                &salt,
+                3,
+                u64::from(PBE_ITERATIONS),
+                32,
+            )
+            .map(Zeroizing::new)
+            .map_err(failed)?;
+            let mut hmac = EvpHash::new_sha256_hmac(&key).map_err(failed)?;
+            hmac.write_all(&authenticated_safe).map_err(failed)?;
+            Some(MacData {
+                digest_algorithm: AlgorithmIdentifier::with_null(object_id(Hash::Sha256.oid())),
+                digest: hmac.sum(),
+                salt,
+                iterations: PBE_ITERATIONS,
+            })
+        } else {
+            None
+        };
+        Ok(Pfx {
+            version: 3,
+            auth_safe: ContentInfo::data(&authenticated_safe),
+            mac,
+        }
+        .encode())
+    }
+}
+
+fn object_id(arcs: &[u64]) -> ObjectIdentifier {
+    ObjectIdentifier::new(arcs).expect("static oid")
+}
+
+/// An `Attribute` with a single value.
+fn attribute(arcs: &[u64], value: &[u8]) -> Vec<u8> {
+    der::sequence(&[der::oid(&object_id(arcs)), der::set(value)].concat())
+}
+
+/// The `friendlyName` attribute, a BMPString as PKCS #9 requires.
+fn friendly_name_attribute(alias: &str) -> Vec<u8> {
+    let name: Vec<u8> = alias.encode_utf16().flat_map(u16::to_be_bytes).collect();
+    let mut value = vec![0x1e];
+    der::write_length(&mut value, name.len());
+    value.extend(name);
+    attribute(oid::OID_PKCS9_FRIENDLY_NAME, &value)
+}
+
+/// The bag `raw` with `alias` as its only friendly name. The bag's value
+/// and other attributes keep their bytes.
+fn with_friendly_name(raw: &[u8], alias: &str) -> Result<Vec<u8>, CryptoError> {
+    let mut reader = Reader::new(raw);
+    let mut bag = reader.read_sequence()?;
+    let id = bag.read_raw_tlv()?;
+    let value = bag.read_raw_tlv()?;
+    let mut attributes = vec![friendly_name_attribute(alias)];
+    if !bag.is_empty() {
+        let mut set = bag.read_set()?;
+        while !set.is_empty() {
+            let attribute = set.read_raw_tlv()?;
+            let is_name = Reader::new(attribute)
+                .read_sequence()?
+                .read_oid()?
+                .matches(oid::OID_PKCS9_FRIENDLY_NAME);
+            if !is_name {
+                attributes.push(attribute.to_vec());
+            }
+        }
+    }
+    // DER orders the elements of a SET OF by their encoding.
+    attributes.sort();
+    Ok(der::sequence(
+        &[id, value, &der::set(&attributes.concat())].concat(),
+    ))
 }
 
 struct MetadataBag {
     metadata: SafeBag,
     certificate_der: Option<Vec<u8>>,
+    /// The bag as stored.
+    raw: Vec<u8>,
+    /// The index of the safe the bag is stored in.
+    safe: usize,
 }
 
 impl std::ops::Deref for MetadataBag {
@@ -340,6 +711,8 @@ fn parse_metadata_bag(raw: &[u8]) -> Result<Option<MetadataBag>, CryptoError> {
                 attributes,
             },
             certificate_der: Some(certificate_der),
+            raw: raw.to_vec(),
+            safe: 0,
         }));
     }
     let mut reader = Reader::new(raw);
@@ -348,6 +721,8 @@ fn parse_metadata_bag(raw: &[u8]) -> Result<Option<MetadataBag>, CryptoError> {
     Ok(Some(MetadataBag {
         metadata: bag,
         certificate_der: None,
+        raw: raw.to_vec(),
+        safe: 0,
     }))
 }
 
@@ -1201,5 +1576,260 @@ mod tests {
                 .serial_decimal,
             "-1"
         );
+    }
+
+    fn open(data: &[u8], password: &str) -> (Vec<KeystoreEntry>, Writable) {
+        let (verified, writable) = parse(data).unwrap().open(password).unwrap();
+        (verified.entries, writable.unwrap())
+    }
+
+    fn contains(data: &[u8], needle: &[u8]) -> bool {
+        data.windows(needle.len()).any(|window| window == needle)
+    }
+
+    fn shrouded_key(attributes: Vec<crown::x509::attribute::Attribute>) -> SafeBag {
+        SafeBag {
+            bag: Bag::ShroudedKey(EncryptedPrivateKeyInfo {
+                algorithm: AlgorithmIdentifier::with_null(
+                    ObjectIdentifier::new(oid::OID_PBES2).unwrap(),
+                ),
+                encrypted_data: b"synthetic, not a private key".to_vec(),
+            }),
+            attributes,
+        }
+    }
+
+    #[test]
+    fn written_stores_read_back_with_the_same_entries_and_protection() {
+        let passwordless = include_bytes!("../tests/fixtures/passwordless.p12");
+        for (name, data, password) in [
+            ("modern", MODERN, "changeit"),
+            ("legacy", LEGACY, "changeit"),
+            ("unicode alias", UNICODE_ALIAS, "changeit"),
+            ("openssl", OPENSSL, "changeit"),
+            ("openssl legacy", OPENSSL_LEGACY, "changeit"),
+            ("openssl no mac", OPENSSL_NO_MAC_AES, "changeit"),
+            ("empty password", EMPTY_PASSWORD, ""),
+            ("nul password", NUL_PASSWORD, ""),
+            ("empty password no mac", EMPTY_PASSWORD_NO_MAC, ""),
+            ("passwordless", &passwordless[..], ""),
+        ] {
+            let original = parse(data).unwrap();
+            let (entries, writable) = open(data, password);
+            let saved = writable.encode(&mut TestRng(0)).unwrap();
+            let store = parse(&saved).unwrap();
+            let verified = store.verify(password).unwrap();
+            assert_eq!(verified.entries, entries, "{name}");
+            assert!(!verified.incomplete, "{name}");
+            // A store keeps its MAC, or its lack of one, and certificates
+            // that were encrypted stay hidden.
+            assert_eq!(store.0.mac.is_some(), original.0.mac.is_some(), "{name}");
+            assert_eq!(
+                contains(&saved, fixture_certificate_der()),
+                contains(data, fixture_certificate_der()),
+                "{name}"
+            );
+            if original.0.mac.is_some() || !contains(data, fixture_certificate_der()) {
+                assert!(
+                    matches!(store.verify("wrong"), Err(VerifyError::Password)),
+                    "{name}"
+                );
+                // Fresh salts make every protected save differ.
+                assert_ne!(saved, writable.encode(&mut TestRng(7)).unwrap(), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn stores_that_were_not_read_completely_are_not_writable() {
+        let unknown = SafeBag {
+            bag: Bag::Other {
+                oid: ObjectIdentifier::new(&[1, 2, 3, 4]).unwrap(),
+                value: der::null(),
+            },
+            attributes: vec![friendly_name("other")],
+        };
+        let data = synthetic(vec![shrouded_key(vec![friendly_name("key")]), unknown]);
+        let (verified, writable) = parse(&data).unwrap().open("changeit").unwrap();
+        assert!(verified.incomplete);
+        assert!(writable.is_none());
+    }
+
+    #[test]
+    fn removing_a_key_takes_its_certificate_and_unshared_chain() {
+        use crate::test_support::metadata_certificate;
+        let leaf = metadata_certificate("leaf", "intermediate", &[1], &[]);
+        let other_leaf = metadata_certificate("other-leaf", "root", &[5], &[]);
+        let intermediate = metadata_certificate("intermediate", "root", &[2], &[]);
+        let root = metadata_certificate("root", "root", &[3], &[]);
+        let loose = metadata_certificate("loose", "loose", &[4], &[]);
+        let data = synthetic(vec![
+            shrouded_key(vec![friendly_name("a-key"), local_key_id(&[1])]),
+            shrouded_key(vec![friendly_name("b-key"), local_key_id(&[2])]),
+            raw_certificate(&leaf, vec![local_key_id(&[1])]),
+            raw_certificate(&other_leaf, vec![local_key_id(&[2])]),
+            raw_certificate(&intermediate, vec![]),
+            raw_certificate(&root, vec![]),
+            raw_certificate(&loose, vec![friendly_name("loose")]),
+        ]);
+        let aliases = |entries: &[KeystoreEntry]| -> Vec<String> {
+            entries.iter().map(|entry| entry.alias.clone()).collect()
+        };
+        let (entries, mut writable) = open(&data, "changeit");
+        assert_eq!(aliases(&entries), ["a-key", "b-key", "loose"]);
+        assert_eq!(entries[0].certificates().len(), 3);
+
+        // The intermediate goes with its key; the root is still b-key's.
+        let entries = writable.remove(0);
+        assert_eq!(aliases(&entries), ["b-key", "loose"]);
+        assert_eq!(entries[1].kind(), "Certificate");
+        assert_eq!(
+            entries[0].certificates(),
+            [other_leaf.clone(), root.clone()]
+        );
+        let saved = writable.encode(&mut TestRng(0)).unwrap();
+        assert_eq!(
+            parse(&saved).unwrap().verify("changeit").unwrap().entries,
+            entries
+        );
+        assert!(!contains(&saved, &leaf) && !contains(&saved, &intermediate));
+        assert!(contains(&saved, &root) && contains(&saved, &loose));
+
+        // Then a plain certificate, then the last key with its root.
+        let entries = writable.remove(1);
+        assert_eq!(aliases(&entries), ["b-key"]);
+        assert!(writable.remove(0).is_empty());
+        let saved = writable.encode(&mut TestRng(0)).unwrap();
+        let verified = parse(&saved).unwrap().verify("changeit").unwrap();
+        assert!(verified.entries.is_empty() && !verified.incomplete);
+        assert!(!contains(&saved, &root));
+    }
+
+    #[test]
+    fn renaming_names_the_key_and_its_certificate_and_keeps_the_rest() {
+        use crate::test_support::metadata_certificate;
+        let leaf = metadata_certificate("leaf", "leaf", &[1], &[]);
+        let data = synthetic(vec![
+            shrouded_key(vec![friendly_name("old"), local_key_id(&[7, 7])]),
+            raw_certificate(&leaf, vec![friendly_name("old"), local_key_id(&[7, 7])]),
+            shrouded_key(vec![local_key_id(&[9])]),
+        ]);
+        let (entries, mut writable) = open(&data, "changeit");
+        assert_eq!(entries[0].alias, "Private key 1");
+        assert_eq!(entries[1].alias, "old");
+
+        let entries = writable.rename(1, "new-ü😀").unwrap();
+        assert_eq!(entries[1].alias, "new-ü😀");
+        assert_eq!(entries[1].certificates(), std::slice::from_ref(&leaf));
+        // A key without a name gets one.
+        let entries = writable.rename(0, "named").unwrap();
+        assert_eq!(entries[0].alias, "named");
+        assert_eq!(entries[0].kind(), "Private key");
+
+        let saved = writable.encode(&mut TestRng(0)).unwrap();
+        let store = parse(&saved).unwrap();
+        assert_eq!(store.verify("changeit").unwrap().entries, entries);
+        let bags = store.read_bags(b"changeit").unwrap().bags;
+        // Both bags of the entry carry the name once, as a BMPString, and
+        // still share their key ID; the key itself is untouched.
+        for bag in &bags[..2] {
+            assert_eq!(bag.friendly_name().as_deref(), Some("new-ü😀"));
+            assert_eq!(bag.local_key_id(), Some(vec![7, 7]));
+            assert_eq!(bag.attributes.len(), 2);
+            assert!(contains(&bag.raw, &[0x1e, 14, 0, b'n', 0, b'e', 0, b'w']));
+        }
+        for bag in [&bags[0], &bags[2]] {
+            let Bag::ShroudedKey(key) = &bag.bag else {
+                panic!("a key bag");
+            };
+            assert_eq!(key.encrypted_data, b"synthetic, not a private key");
+        }
+    }
+
+    #[test]
+    fn inserted_certificates_are_trusted_entries_stored_like_the_others() {
+        use crate::test_support::metadata_certificate;
+        let added = metadata_certificate("added", "added", &[9], &[]);
+        // Java's store encrypts certificates, so the new one is encrypted.
+        let (_, mut writable) = open(MODERN, "changeit");
+        let entries = writable
+            .insert_trusted_certificate("added", &added)
+            .unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0],
+            KeystoreEntry {
+                alias: "added".into(),
+                certificate: certificate::summarize(&added),
+                content: Content::Certificates {
+                    kind: Kind::TrustedCertificate,
+                    certificates: vec![added.clone()],
+                },
+                chain_warning: None,
+            }
+        );
+        let saved = writable.encode(&mut TestRng(0)).unwrap();
+        assert!(!contains(&saved, &added));
+        assert_eq!(
+            parse(&saved).unwrap().verify("changeit").unwrap().entries,
+            entries
+        );
+
+        // A passwordless truststore stays readable without a password.
+        let passwordless = include_bytes!("../tests/fixtures/passwordless.p12");
+        let (_, mut writable) = open(passwordless, "");
+        let entries = writable
+            .insert_trusted_certificate("added", &added)
+            .unwrap();
+        let saved = writable.encode(&mut TestRng(0)).unwrap();
+        assert!(contains(&saved, &added));
+        let store = parse(&saved).unwrap();
+        assert!(store.0.mac.is_none());
+        assert_eq!(store.verify("").unwrap().entries, entries);
+
+        // A new store has a MAC and encrypts its certificates.
+        let mut writable = Writable::empty("secret");
+        let empty = writable.encode(&mut TestRng(0)).unwrap();
+        let verified = parse(&empty).unwrap().verify("secret").unwrap();
+        assert!(verified.entries.is_empty() && !verified.incomplete);
+        assert!(matches!(
+            parse(&empty).unwrap().verify("wrong"),
+            Err(VerifyError::Password)
+        ));
+        let entries = writable
+            .insert_trusted_certificate("added", &added)
+            .unwrap();
+        let saved = writable.encode(&mut TestRng(0)).unwrap();
+        assert!(!contains(&saved, &added));
+        assert_eq!(
+            parse(&saved).unwrap().verify("secret").unwrap().entries,
+            entries
+        );
+    }
+
+    #[test]
+    fn the_password_changes_only_where_nothing_else_depends_on_it() {
+        let (entries, mut writable) = open(MODERN, "changeit");
+        assert!(writable.set_password("").unwrap_err().contains("not empty"));
+        writable.set_password("new-päss").unwrap();
+        let saved = writable.encode(&mut TestRng(0)).unwrap();
+        let store = parse(&saved).unwrap();
+        assert!(matches!(
+            store.verify("changeit"),
+            Err(VerifyError::Password)
+        ));
+        assert_eq!(store.verify("new-päss").unwrap().entries, entries);
+
+        let passwordless = include_bytes!("../tests/fixtures/passwordless.p12");
+        let (_, mut writable) = open(passwordless, "");
+        let error = writable.set_password("secret").unwrap_err();
+        assert!(error.contains("not protected by a password"), "{error}");
+
+        let data = synthetic(vec![shrouded_key(vec![friendly_name("key")])]);
+        let (_, mut writable) = open(&data, "changeit");
+        let error = writable.set_password("secret").unwrap_err();
+        assert!(error.contains("holds keys"), "{error}");
+        let saved = writable.encode(&mut TestRng(0)).unwrap();
+        assert!(parse(&saved).unwrap().verify("changeit").is_ok());
     }
 }

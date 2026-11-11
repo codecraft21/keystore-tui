@@ -5,20 +5,24 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## 1.1.0
 
-- JKS and JCEKS keystores can now be changed. Press `d` or `Delete` to delete
+- JKS, JCEKS, and PKCS12 keystores can now be changed. Press `d` or `Delete` to delete
   the selected entry, `w` to save the changes to the opened file, and `W` to
   save the keystore to a new file. Nothing changes on disk until you save, and
   saving replaces the file in one step. The remaining entries are written
   exactly as they were read, so private and secret keys stay encrypted.
-- In a JKS or JCEKS keystore, press `r` to rename the selected entry, and `i`
+- Press `r` to rename the selected entry, and `i`
   to import a file holding one certificate as a trusted certificate. Aliases
   are stored in lower case, as Java does.
-- Press `n` to create an empty JKS or JCEKS keystore, and `p` to change the
-  password of the open one. Private-key entries keep their own passwords.
+- Press `n` to create an empty JKS, JCEKS, or PKCS12 keystore, and `p` to
+  change the password of the open one. In JKS and JCEKS, private-key entries
+  keep their own passwords; a PKCS12 keystore holding keys cannot change its
+  password yet.
+- PKCS12 keystores are saved with AES-256-CBC and HMAC-SHA256, whatever they
+  used before. Java 8u301, 11.0.12, and later, and OpenSSL 1.1 and later, read
+  them. A passwordless Java truststore stays passwordless.
 - With unsaved changes, `[modified]` is shown next to the app name, and `q`,
   `Esc`, `o`, and `n` ask before discarding them. `Ctrl+C` still quits at once.
-- The keystore password now stays in memory while a JKS or JCEKS keystore is
-  open, because saving needs it. It is wiped when the keystore is closed.
+- The keystore password now stays in memory while a keystore is open, because saving needs it. It is wiped when the keystore is closed.
 
 ## 1.0.5
 

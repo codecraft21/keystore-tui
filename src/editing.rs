@@ -1,17 +1,10 @@
 //! Changing the open keystore's entries: the alias prompt, renaming an
 //! entry, and importing a trusted certificate from a certificate file.
-use std::{
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::path::Path;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::{
-    App, MAX_KEYSTORE_SIZE, certificate, certificate_file,
-    keystore::{Content, KeystoreEntry, Kind},
-    read_limited,
-};
+use crate::{App, MAX_KEYSTORE_SIZE, certificate_file, keystore::Content, read_limited};
 
 /// What the alias being typed is for.
 pub enum Action {
@@ -90,7 +83,7 @@ impl App {
     }
 
     /// Renames or imports under the typed alias, in lower case as Java
-    /// stores aliases, keeping the entries in alias order.
+    /// looks aliases up.
     fn apply(&mut self, prompt: &AliasPrompt) -> Result<(), String> {
         let alias = prompt.alias.to_lowercase();
         let renamed = match prompt.action {
@@ -116,46 +109,23 @@ impl App {
         let Some(document) = &mut self.document else {
             return Ok(());
         };
-        let position = |entries: &[KeystoreEntry]| {
-            entries.partition_point(|entry| entry.alias.as_str() < alias.as_str())
-        };
-        let (to, message) = match &prompt.action {
+        let (result, message) = match &prompt.action {
             Action::Rename(index) => {
-                let mut entry = self.entries.remove(*index);
-                let to = position(&self.entries);
-                let result = document.rename(*index, &alias, to);
-                let message = format!("Renamed entry '{}' to '{alias}'.", entry.alias);
-                if result.is_ok() {
-                    entry.alias = alias;
-                }
-                // On failure the entry returns to where it was.
-                let at = if result.is_ok() { to } else { *index };
-                self.entries.insert(at, entry);
-                result?;
-                (to, message)
+                let message = format!(
+                    "Renamed entry '{}' to '{alias}'.",
+                    self.entries[*index].alias
+                );
+                (document.rename(&mut self.entries, *index, alias), message)
             }
             Action::Import(certificate) => {
-                let to = position(&self.entries);
-                let created = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_or(0, |elapsed| elapsed.as_millis() as u64);
-                document.insert_trusted_certificate(to, &alias, certificate, created)?;
                 let message = format!("Imported certificate as '{alias}'.");
-                self.entries.insert(
-                    to,
-                    KeystoreEntry {
-                        alias,
-                        certificate: certificate::summarize(certificate),
-                        content: Content::Certificates {
-                            kind: Kind::TrustedCertificate,
-                            certificates: vec![certificate.clone()],
-                        },
-                        chain_warning: None,
-                    },
-                );
-                (to, message)
+                (
+                    document.import_certificate(&mut self.entries, alias, certificate),
+                    message,
+                )
             }
         };
+        let to = result?;
         self.modified = true;
         self.message = Some((message, false));
         // Select the changed entry when the filter still shows it.

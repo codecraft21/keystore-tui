@@ -117,9 +117,9 @@ fn rename_import_save_and_quit_restores_terminal() {
 fn create_keystore_change_password_and_quit_restores_terminal() {
     let directory = TempDir::new();
     let mut app = PtyApp::spawn(directory.path(), &[]);
-    app.expect(&["Press n to create a JKS or JCEKS keystore."]);
+    app.expect(&["Press n to create a JKS, JCEKS, or PKCS12 keystore."]);
     app.send(b"n");
-    app.expect(&["New keystore file (.jks or .jceks):"]);
+    app.expect(&["New keystore file (.jks, .jceks, or .p12):"]);
     app.send(b"\x15new.jks\r");
     app.expect(&["Password for the new keystore: _"]);
     app.send(b"qwerty"); // Typed, masked, into the password.
@@ -146,6 +146,55 @@ fn create_keystore_change_password_and_quit_restores_terminal() {
         fs::read(directory.join("new.jks")).unwrap(),
         with_empty_password_digest(created[..12].to_vec())
     );
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Creating a keystore](../../docs/SPEC.md#creating-a-keystore),
+/// [Importing certificates](../../docs/SPEC.md#importing-certificates),
+/// [Writing PKCS12 keystores](../../docs/SPEC.md#writing-pkcs12-keystores),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn create_pkcs12_import_save_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let certificate = fixture_certificate();
+    fs::write(directory.join("ca.pem"), certificate_pem(&certificate)).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[]);
+    app.expect(&["No keystore selected"]);
+    app.send(b"n");
+    app.expect(&["New keystore file (.jks, .jceks, or .p12):"]);
+    app.send(b"\x15new.p12\r");
+    app.expect(&["Password for the new keystore: _"]);
+    app.send(b"secret\r");
+    app.expect(&["Type the password again: _"]);
+    app.send(b"secret\r");
+    app.expect(&["Created the PKCS12 keystore", "no entries"]);
+    let empty = fs::read(directory.join("new.p12")).unwrap();
+    app.send(b"i");
+    app.expect(&["Import certificate from file", "ca.pem"]);
+    app.send(b"ca\r");
+    app.expect(&["Alias for the imported certificate:"]);
+    app.send(b"\x15root\r");
+    app.expect(&["Imported certificate as 'root'.", "Trusted certificate"]);
+    assert_eq!(fs::read(directory.join("new.p12")).unwrap(), empty);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+    // The certificate is stored encrypted.
+    let saved = fs::read(directory.join("new.p12")).unwrap();
+    assert!(saved.len() > empty.len() + certificate.len());
+    assert!(
+        !saved
+            .windows(certificate.len())
+            .any(|window| window == certificate)
+    );
+    app.send(b"q");
+    app.assert_restored();
+
+    // The saved keystore opens again with its password.
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("new.p12")]);
+    app.expect(&["Keystore password:"]);
+    app.send(b"secret\r");
+    app.expect(&["root", "Trusted certificate", "1 entries"]);
     app.send(b"q");
     app.assert_restored();
 }

@@ -134,7 +134,9 @@ enum Confirm {
     New,
 }
 
-const NOT_EDITABLE: &str = "Only JKS and JCEKS keystores can be changed for now.";
+const NOT_EDITABLE: &str = "Only keystores can be changed, not certificate files.";
+const INCOMPLETE_NOT_EDITABLE: &str =
+    "This PKCS12 keystore was not read completely, so it cannot be changed.";
 
 const INCOMPLETE_WARNING: &str = "Warning: this PKCS12 entry list is incomplete.";
 const SKIPPED_WARNING: &str = "Warning: PEM blocks other than certificates and certificate requests, such as private keys, were not read.";
@@ -165,13 +167,13 @@ impl Store {
                         entries,
                         incomplete: false,
                     },
-                    document: Some(save::Document::new(writable, password)),
+                    document: Some(save::Document::jks(writable, password)),
                 })
                 .map_err(|store| Box::new((Self::Jks(store), None))),
-            Self::Pkcs12(store) => match store.verify(password) {
-                Ok(verified) => Ok(Opened {
+            Self::Pkcs12(store) => match store.open(password) {
+                Ok((verified, writable)) => Ok(Opened {
                     verified,
-                    document: None,
+                    document: writable.map(save::Document::Pkcs12),
                 }),
                 Err(pkcs12::VerifyError::Password) => Err(Box::new((Self::Pkcs12(store), None))),
                 Err(pkcs12::VerifyError::Invalid(message)) => {
@@ -305,10 +307,10 @@ impl App {
                 let Some(document) = &mut self.document else {
                     return false;
                 };
-                document.remove(index);
-                let entry = self.entries.remove(index);
+                let message = format!("Deleted entry '{}'.", self.entries[index].alias);
+                document.remove(&mut self.entries, index);
                 self.modified = true;
-                self.message = Some((format!("Deleted entry '{}'.", entry.alias), false));
+                self.message = Some((message, false));
                 // Indices after the deleted entry shifted, so keep the
                 // selection at the same row instead of following an entry.
                 let position = self.entries_state.selected();
@@ -328,7 +330,12 @@ impl App {
     /// loaded file cannot.
     fn editable(&mut self) -> bool {
         if self.document.is_none() && self.keystore_path.is_some() {
-            self.message = Some((NOT_EDITABLE.into(), true));
+            let reason = if self.warning == Some(INCOMPLETE_WARNING) {
+                INCOMPLETE_NOT_EDITABLE
+            } else {
+                NOT_EDITABLE
+            };
+            self.message = Some((reason.into(), true));
         }
         self.document.is_some()
     }
@@ -715,7 +722,7 @@ impl App {
         } else {
             frame.render_widget(
                 Paragraph::new(
-                    "No keystore selected.\n\nPress n to create a JKS or JCEKS keystore.\n\nPress o to open a keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts) or a certificate or request file (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10).",
+                    "No keystore selected.\n\nPress n to create a JKS, JCEKS, or PKCS12 keystore.\n\nPress o to open a keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts) or a certificate or request file (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10).",
                 )
                 .block(Block::bordered().title(" keystore-tui ".blue()))
                 .wrap(Wrap { trim: false }),
@@ -782,7 +789,7 @@ impl App {
             vec![
                 Line::from(vec![
                     if prompt.creating {
-                        "New keystore file (.jks or .jceks): ".bold()
+                        "New keystore file (.jks, .jceks, or .p12): ".bold()
                     } else {
                         "Save keystore as: ".bold()
                     },

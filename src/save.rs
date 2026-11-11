@@ -4,68 +4,176 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
+use crown::rng::Rng;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use zeroize::Zeroizing;
 
-use crate::keystore::{self, KeystoreEntry};
+use crate::{
+    certificate,
+    keystore::{self, Content, KeystoreEntry, Kind},
+    pkcs12,
+};
 
-/// An open JKS or JCEKS keystore that can be edited and saved. The password
-/// is kept, to compute the integrity digest on saving, until the keystore is
-/// closed; dropping the document wipes it.
-pub struct Document {
-    writable: keystore::Writable,
-    password: Zeroizing<String>,
+/// An open keystore that can be edited and saved. Its password is kept, to
+/// protect the saved file with, until the keystore is closed; dropping the
+/// document wipes it.
+///
+/// Every edit takes the entry list as shown and leaves it matching what
+/// would be saved, in alias order.
+pub enum Document {
+    Jks {
+        writable: keystore::Writable,
+        password: Zeroizing<String>,
+    },
+    Pkcs12(pkcs12::Writable),
+}
+
+/// The operating system's random numbers, for PKCS12 salts.
+#[derive(Default)]
+struct OsRng {
+    failed: bool,
+}
+
+impl Rng for OsRng {
+    fn fill_bytes(&mut self, out: &mut [u8]) {
+        self.failed |= getrandom::fill(out).is_err();
+    }
 }
 
 impl Document {
-    pub fn new(writable: keystore::Writable, password: &str) -> Self {
-        Self {
+    pub fn jks(writable: keystore::Writable, password: &str) -> Self {
+        Self::Jks {
             writable,
             password: Zeroizing::new(password.to_owned()),
         }
     }
 
     /// Saves under `password` from now on; the old one is wiped.
-    pub fn set_password(&mut self, password: &str) {
-        self.password = Zeroizing::new(password.to_owned());
+    pub fn set_password(&mut self, new: &str) -> Result<(), String> {
+        match self {
+            Self::Jks { password, .. } => *password = Zeroizing::new(new.to_owned()),
+            Self::Pkcs12(writable) => writable.set_password(new)?,
+        }
+        Ok(())
     }
 
     /// Removes the entry listed at `index`.
-    pub fn remove(&mut self, index: usize) {
-        self.writable.remove(index);
+    pub fn remove(&mut self, entries: &mut Vec<KeystoreEntry>, index: usize) {
+        match self {
+            Self::Jks { writable, .. } => {
+                writable.remove(index);
+                entries.remove(index);
+            }
+            Self::Pkcs12(writable) => *entries = writable.remove(index),
+        }
     }
 
-    /// Gives the entry listed at `index` the alias `alias`, listed at `to`.
-    pub fn rename(&mut self, index: usize, alias: &str, to: usize) -> Result<(), String> {
-        self.writable
-            .rename(index, alias, to)
-            .map_err(|error| format!("Not renamed: {error}."))
-    }
-
-    /// Adds a trusted certificate, listed at `to`; see
-    /// `keystore::Writable::insert_trusted_certificate`.
-    pub fn insert_trusted_certificate(
+    /// Gives the entry listed at `index` the alias `alias`, and returns
+    /// where it is listed now.
+    pub fn rename(
         &mut self,
-        to: usize,
-        alias: &str,
+        entries: &mut Vec<KeystoreEntry>,
+        index: usize,
+        alias: String,
+    ) -> Result<usize, String> {
+        let failed = |error: String| format!("Not renamed: {error}.");
+        match self {
+            Self::Jks { writable, .. } => {
+                let mut entry = entries.remove(index);
+                let to = entries.partition_point(|other| other.alias < alias);
+                let result = writable.rename(index, &alias, to);
+                // On failure the entry returns to where it was.
+                let at = if result.is_ok() { to } else { index };
+                if result.is_ok() {
+                    entry.alias = alias;
+                }
+                entries.insert(at, entry);
+                result
+                    .map(|()| to)
+                    .map_err(|error| failed(error.to_string()))
+            }
+            Self::Pkcs12(writable) => {
+                *entries = writable
+                    .rename(index, &alias)
+                    .map_err(|error| failed(error.to_owned()))?;
+                Ok(listed_at(entries, &alias))
+            }
+        }
+    }
+
+    /// Adds `certificate` as a trusted certificate named `alias`, and
+    /// returns where it is listed.
+    pub fn import_certificate(
+        &mut self,
+        entries: &mut Vec<KeystoreEntry>,
+        alias: String,
         certificate: &[u8],
-        created: u64,
-    ) -> Result<(), String> {
-        self.writable
-            .insert_trusted_certificate(to, alias, certificate, created)
-            .map_err(|error| format!("Not imported: {error}."))
+    ) -> Result<usize, String> {
+        let failed = |error: String| format!("Not imported: {error}.");
+        match self {
+            Self::Jks { writable, .. } => {
+                let to = entries.partition_point(|other| other.alias < alias);
+                let created = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |elapsed| elapsed.as_millis() as u64);
+                writable
+                    .insert_trusted_certificate(to, &alias, certificate, created)
+                    .map_err(|error| failed(error.to_string()))?;
+                entries.insert(
+                    to,
+                    KeystoreEntry {
+                        alias,
+                        certificate: certificate::summarize(certificate),
+                        content: Content::Certificates {
+                            kind: Kind::TrustedCertificate,
+                            certificates: vec![certificate.to_vec()],
+                        },
+                        chain_warning: None,
+                    },
+                );
+                Ok(to)
+            }
+            Self::Pkcs12(writable) => {
+                *entries = writable
+                    .insert_trusted_certificate(&alias, certificate)
+                    .map_err(|error| failed(error.to_owned()))?;
+                Ok(listed_at(entries, &alias))
+            }
+        }
     }
 
     /// The keystore file, after checking that it reads back as `entries`.
     fn encode(&self, entries: &[KeystoreEntry]) -> Result<Vec<u8>, String> {
-        let data = self.writable.encode(&self.password);
-        let read_back = keystore::parse(data.clone())
-            .ok()
-            .and_then(|keystore| keystore.open(&self.password).ok());
+        let (data, read_back) = match self {
+            Self::Jks { writable, password } => {
+                let data = writable.encode(password);
+                let read_back = keystore::parse(data.clone())
+                    .ok()
+                    .and_then(|keystore| keystore.open(password).ok())
+                    .map(|(read, _)| read);
+                (data, read_back)
+            }
+            Self::Pkcs12(writable) => {
+                let mut rng = OsRng::default();
+                let data = writable
+                    .encode(&mut rng)
+                    .map_err(|error| format!("Cannot save: {error}."))?;
+                if rng.failed {
+                    return Err("Cannot save: the system provided no random numbers.".into());
+                }
+                let read_back = pkcs12::parse(&data)
+                    .ok()
+                    .and_then(|store| store.verify(writable.password()).ok())
+                    .filter(|verified| !verified.incomplete)
+                    .map(|verified| verified.entries);
+                (data, read_back)
+            }
+        };
         match read_back {
-            Some((read, _)) if read == entries => Ok(data),
+            Some(read) if read == entries => Ok(data),
             _ => Err(
                 "The keystore to save does not read back as listed; nothing was written.".into(),
             ),
@@ -99,6 +207,14 @@ impl Document {
                 format!("Cannot write '{}': {error}", path.display())
             })
     }
+}
+
+/// Where the entry named `alias` is listed.
+fn listed_at(entries: &[KeystoreEntry], alias: &str) -> usize {
+    entries
+        .iter()
+        .position(|entry| entry.alias == alias)
+        .unwrap_or(0)
 }
 
 /// Replaces `path` with `data` in one step: the data is written to a
@@ -223,7 +339,7 @@ mod tests {
             .open(password)
             .ok()
             .unwrap();
-        (entries, Document::new(writable, password))
+        (entries, Document::jks(writable, password))
     }
 
     #[test]
@@ -232,8 +348,7 @@ mod tests {
         let path = directory.path().join("store.jks");
         fs::write(&path, mixed_keystore()).unwrap();
         let (mut entries, mut document) = open(&mixed_keystore(), "changeit");
-        document.remove(0);
-        entries.remove(0);
+        document.remove(&mut entries, 0);
         document.save(&path, &entries).unwrap();
         let saved = fs::read(&path).unwrap();
         assert_eq!(keystore::load_entries(&saved, "changeit").unwrap(), entries);
@@ -251,8 +366,7 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         std::os::unix::fs::symlink(&path, &link).unwrap();
         let (mut entries, mut document) = open(KEYTOOL_JKS, "changeit");
-        document.remove(0);
-        entries.remove(0);
+        document.remove(&mut entries, 0);
         document.save(&link, &entries).unwrap();
         assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
         assert_eq!(
