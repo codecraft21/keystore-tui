@@ -149,8 +149,9 @@ next to the app name, but nothing changes on disk until you save.
 - **Change the password:** press `p`, then type the new password twice. In JKS
   and JCEKS only the keystore's own password changes; private-key and
   secret-key entries keep the passwords they were protected with, as with
-  `keytool -storepasswd`. A PKCS12 keystore holding keys cannot change its
-  password yet, because its keys are encrypted with it.
+  `keytool -storepasswd`. In PKCS12, the private and secret keys are re-encrypted
+  with the new password too, as Java expects; if a key is protected by another
+  password, nothing is changed.
 
 To create a keystore, press `n`, edit the suggested file name, and type its
 password twice. A `.jceks` name creates a JCEKS keystore, a `.p12` or `.pfx`

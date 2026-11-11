@@ -13,7 +13,8 @@ use crown::{
     x509::{
         algorithm::{AlgorithmIdentifier, Hash},
         attribute::parse_attributes,
-        pbe::{LegacyPbe, LegacyPbeKind, Pbes2, Pbes2Cipher, pkcs12_password},
+        keys::EncryptedPrivateKeyInfo,
+        pbe::{LegacyPbe, LegacyPbeKind, Pbes2, Pbes2Cipher, encrypt_private_key, pkcs12_password},
     },
 };
 use zeroize::Zeroizing;
@@ -508,24 +509,37 @@ impl Writable {
         Ok(self.relist())
     }
 
-    /// Protects the store with `password` from now on. Keys are encrypted
-    /// with the password they were stored under, which Java expects to be
-    /// the store's, so a store holding keys keeps its password.
-    pub fn set_password(&mut self, password: &str) -> Result<(), WriteError> {
+    /// Protects the store with `password` from now on. Java expects keys to
+    /// be encrypted with the store's password, so each key is decrypted in
+    /// memory with the current password and encrypted again with the new
+    /// one, with a fresh salt from `rng`. Nothing changes unless every key
+    /// can be re-encrypted.
+    pub fn set_password(&mut self, password: &str, rng: &mut impl Rng) -> Result<(), WriteError> {
         if password.is_empty() {
             return Err("A PKCS12 keystore needs a password that is not empty.");
         }
-        if !self.mac && !self.safes.contains(&true) {
+        let is_key =
+            |bag: &MetadataBag| matches!(bag.bag, Bag::ShroudedKey(_) | Bag::Secret { .. });
+        if !self.mac && !self.safes.contains(&true) && !self.bags.iter().any(is_key) {
             return Err("This PKCS12 keystore is not protected by a password.");
         }
-        if self
-            .bags
-            .iter()
-            .any(|bag| matches!(bag.bag, Bag::ShroudedKey(_) | Bag::Secret { .. }))
-        {
-            return Err(
-                "The password cannot be changed yet while the PKCS12 keystore holds keys, which are encrypted with it.",
-            );
+        let mut rebuilt = Vec::new();
+        for (index, bag) in self.bags.iter().enumerate() {
+            if !is_key(bag) {
+                continue;
+            }
+            let value = reencrypt_key(&bag.bag, &self.password, password.as_bytes(), rng)?;
+            let rebuilt_bag = with_value(&bag.raw, &value)
+                .ok()
+                .and_then(|raw| parse_metadata_bag(&raw).ok().flatten())
+                .ok_or(
+                    "A key in this keystore could not be rebuilt; the password was not changed.",
+                )?;
+            rebuilt.push((index, bag.safe, rebuilt_bag));
+        }
+        for (index, safe, mut bag) in rebuilt {
+            bag.safe = safe;
+            self.bags[index] = bag;
         }
         self.password = Zeroizing::new(password.as_bytes().to_vec());
         Ok(())
@@ -743,6 +757,16 @@ fn decrypt_safe(content: &[u8], password: &[u8]) -> Result<Vec<u8>, SafeError> {
     let _content_type = info.read_oid().map_err(unreadable)?;
     let algorithm = AlgorithmIdentifier::parse(&mut info).map_err(unreadable)?;
     let ciphertext = info.read_implicit(0, false).map_err(unreadable)?;
+    pbe_decrypt(&algorithm, ciphertext, password)
+}
+
+/// Decrypts `ciphertext` as its password-based encryption `algorithm` says.
+fn pbe_decrypt(
+    algorithm: &AlgorithmIdentifier,
+    ciphertext: &[u8],
+    password: &[u8],
+) -> Result<Vec<u8>, SafeError> {
+    let unreadable = |_| SafeError::Unreadable;
     let check = |iterations, salt: &[u8], block_size| {
         if iterations == 0
             || iterations > MAX_ITERATIONS
@@ -756,7 +780,7 @@ fn decrypt_safe(content: &[u8], password: &[u8]) -> Result<Vec<u8>, SafeError> {
         }
     };
     let decrypted = if algorithm.oid.matches(oid::OID_PBES2) {
-        let pbe = Pbes2::parse(&algorithm).map_err(unreadable)?;
+        let pbe = Pbes2::parse(algorithm).map_err(unreadable)?;
         let block_size = match pbe.cipher {
             Pbes2Cipher::Aes128Cbc { .. }
             | Pbes2Cipher::Aes192Cbc { .. }
@@ -766,7 +790,7 @@ fn decrypt_safe(content: &[u8], password: &[u8]) -> Result<Vec<u8>, SafeError> {
         check(pbe.iterations, &pbe.salt, block_size)?;
         pbe.decrypt(ciphertext, password)
     } else {
-        let mut pbe = LegacyPbe::parse(&algorithm).map_err(unreadable)?;
+        let mut pbe = LegacyPbe::parse(algorithm).map_err(unreadable)?;
         if algorithm.oid.matches(PBE_SHA1_128BIT_RC4) {
             pbe.kind = LegacyPbeKind::Rc4_128;
         } else if algorithm.oid.matches(PBE_SHA1_40BIT_RC4) {
@@ -784,6 +808,95 @@ fn decrypt_safe(content: &[u8], password: &[u8]) -> Result<Vec<u8>, SafeError> {
         CryptoError::UnsupportedOperation(_) => SafeError::Unreadable,
         _ => SafeError::Decryption,
     })
+}
+
+const OTHER_KEY_PASSWORD: WriteError = "A key in this keystore is protected by another password, so the keystore password was not changed.";
+const UNSUPPORTED_KEY: WriteError = "A key in this keystore uses encryption that is not supported, so the keystore password was not changed.";
+
+/// The value of a key bag, as its `[0]` element, with the key decrypted
+/// with `old` and encrypted again with `new`. The decrypted key exists only
+/// in memory and is wiped. A secret key is handled as Java stores it: an
+/// encrypted PKCS #8 structure inside the secret bag.
+fn reencrypt_key(
+    bag: &Bag,
+    old: &[u8],
+    new: &[u8],
+    rng: &mut impl Rng,
+) -> Result<Vec<u8>, WriteError> {
+    let secret;
+    let (info, is_secret) = match bag {
+        Bag::ShroudedKey(info) => (info, false),
+        Bag::Secret { oid: kind, value } if kind.matches(oid::OID_PKCS12_SHROUDED_KEY_BAG) => {
+            secret = Reader::new(value)
+                .read_explicit(0)
+                .and_then(|mut value| value.read_octet_string_owned())
+                .and_then(|der| EncryptedPrivateKeyInfo::parse(&der))
+                .map_err(|_| UNSUPPORTED_KEY)?;
+            (&secret, true)
+        }
+        _ => return Err(UNSUPPORTED_KEY),
+    };
+    let key = pbe_decrypt(&info.algorithm, &info.encrypted_data, old)
+        .map(Zeroizing::new)
+        .map_err(|error| match error {
+            SafeError::Unreadable => UNSUPPORTED_KEY,
+            SafeError::Decryption => OTHER_KEY_PASSWORD,
+        })?;
+    // About 1 wrong password in 256 leaves valid padding, and RC4 has none.
+    if !is_private_key_info(&key) {
+        return Err(OTHER_KEY_PASSWORD);
+    }
+    let encrypted = encrypt_private_key(
+        &key,
+        new,
+        Pbes2Cipher::Aes256Cbc { iv: Vec::new() },
+        PBE_ITERATIONS,
+        rng,
+    )
+    .map_err(|_| UNSUPPORTED_KEY)?
+    .encode();
+    Ok(if is_secret {
+        der::explicit(
+            0,
+            &der::sequence(
+                &[
+                    der::oid(&object_id(oid::OID_PKCS12_SHROUDED_KEY_BAG)),
+                    der::explicit(0, &der::octet_string(&encrypted)),
+                ]
+                .concat(),
+            ),
+        )
+    } else {
+        der::explicit(0, &encrypted)
+    })
+}
+
+/// Whether `content` has the shape of a PKCS #8 `PrivateKeyInfo`: a version,
+/// an algorithm, and the key octets, with optional fields after them.
+fn is_private_key_info(content: &[u8]) -> bool {
+    let mut reader = Reader::new(content);
+    let Ok(mut info) = reader.read_sequence() else {
+        return false;
+    };
+    info.read_integer().is_ok()
+        && info.read_sequence().is_ok()
+        && info.read_octet_string().is_ok()
+        && reader.expect_end().is_ok()
+}
+
+/// The bag `raw` with `value` as its `[0]` value element. The bag's type and
+/// attributes keep their bytes.
+fn with_value(raw: &[u8], value: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let mut reader = Reader::new(raw);
+    let mut bag = reader.read_sequence()?;
+    let id = bag.read_raw_tlv()?;
+    bag.read_raw_tlv()?;
+    let attributes = if bag.is_empty() {
+        &[][..]
+    } else {
+        bag.read_raw_tlv()?
+    };
+    Ok(der::sequence(&[id, value, attributes].concat()))
 }
 
 /// Whether `content` is a single SafeContents sequence of bags.
@@ -1810,8 +1923,13 @@ mod tests {
     #[test]
     fn the_password_changes_only_where_nothing_else_depends_on_it() {
         let (entries, mut writable) = open(MODERN, "changeit");
-        assert!(writable.set_password("").unwrap_err().contains("not empty"));
-        writable.set_password("new-päss").unwrap();
+        assert!(
+            writable
+                .set_password("", &mut TestRng(0))
+                .unwrap_err()
+                .contains("not empty")
+        );
+        writable.set_password("new-päss", &mut TestRng(0)).unwrap();
         let saved = writable.encode(&mut TestRng(0)).unwrap();
         let store = parse(&saved).unwrap();
         assert!(matches!(
@@ -1822,14 +1940,217 @@ mod tests {
 
         let passwordless = include_bytes!("../tests/fixtures/passwordless.p12");
         let (_, mut writable) = open(passwordless, "");
-        let error = writable.set_password("secret").unwrap_err();
+        let error = writable
+            .set_password("secret", &mut TestRng(0))
+            .unwrap_err();
         assert!(error.contains("not protected by a password"), "{error}");
 
+        // A key that is not really encrypted cannot be re-encrypted.
         let data = synthetic(vec![shrouded_key(vec![friendly_name("key")])]);
         let (_, mut writable) = open(&data, "changeit");
-        let error = writable.set_password("secret").unwrap_err();
-        assert!(error.contains("holds keys"), "{error}");
+        let error = writable
+            .set_password("secret", &mut TestRng(0))
+            .unwrap_err();
+        assert!(error.contains("not supported"), "{error}");
         let saved = writable.encode(&mut TestRng(0)).unwrap();
         assert!(parse(&saved).unwrap().verify("changeit").is_ok());
+    }
+
+    /// A PKCS #8 structure around synthetic bytes, not a private key.
+    fn synthetic_pkcs8(content: &[u8]) -> Vec<u8> {
+        der::sequence(
+            &[
+                der::integer(&[0]),
+                der::sequence(&der::oid(&ObjectIdentifier::new(&[1, 2, 3, 4]).unwrap())),
+                der::octet_string(content),
+            ]
+            .concat(),
+        )
+    }
+
+    fn encrypted_key(pkcs8: &[u8], password: &[u8], legacy: bool) -> EncryptedPrivateKeyInfo {
+        if legacy {
+            let pbe = LegacyPbe {
+                salt: vec![7; 8],
+                iterations: 50,
+                kind: LegacyPbeKind::DesEde3,
+            };
+            EncryptedPrivateKeyInfo {
+                algorithm: pbe.to_algorithm(),
+                encrypted_data: pbe.encrypt(pkcs8, password).unwrap(),
+            }
+        } else {
+            encrypt_private_key(
+                pkcs8,
+                password,
+                Pbes2Cipher::Aes256Cbc { iv: Vec::new() },
+                50,
+                &mut TestRng(3),
+            )
+            .unwrap()
+        }
+    }
+
+    /// The content of every key and secret bag that `password` decrypts,
+    /// in bag order.
+    fn decrypted_keys(data: &[u8], password: &str) -> Vec<Vec<u8>> {
+        let bags = parse(data)
+            .unwrap()
+            .read_bags(password.as_bytes())
+            .unwrap()
+            .bags;
+        bags.iter()
+            .filter_map(|bag| match &bag.bag {
+                Bag::ShroudedKey(info) => Some(info.clone()),
+                Bag::Secret { value, .. } => {
+                    let der = Reader::new(value)
+                        .read_explicit(0)
+                        .unwrap()
+                        .read_octet_string_owned()
+                        .unwrap();
+                    Some(EncryptedPrivateKeyInfo::parse(&der).unwrap())
+                }
+                _ => None,
+            })
+            .filter_map(|info| {
+                pbe_decrypt(&info.algorithm, &info.encrypted_data, password.as_bytes()).ok()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn changing_the_password_re_encrypts_keys_without_changing_them() {
+        use crate::test_support::metadata_certificate;
+        let leaf = metadata_certificate("leaf", "leaf", &[1], &[]);
+        let modern = synthetic_pkcs8(b"first synthetic key");
+        let legacy = synthetic_pkcs8(b"second synthetic key");
+        let secret = synthetic_pkcs8(b"synthetic secret");
+        let secret_bag = |password: &[u8]| SafeBag {
+            bag: Bag::Secret {
+                oid: ObjectIdentifier::new(oid::OID_PKCS12_SHROUDED_KEY_BAG).unwrap(),
+                value: der::explicit(
+                    0,
+                    &der::octet_string(&encrypted_key(&secret, password, false).encode()),
+                ),
+            },
+            attributes: vec![friendly_name("secret")],
+        };
+        let bags = |other_password: &[u8]| {
+            vec![
+                SafeBag {
+                    bag: Bag::ShroudedKey(encrypted_key(&modern, b"changeit", false)),
+                    attributes: vec![friendly_name("modern"), local_key_id(&[1])],
+                },
+                raw_certificate(&leaf, vec![local_key_id(&[1])]),
+                SafeBag {
+                    bag: Bag::ShroudedKey(encrypted_key(&legacy, b"changeit", true)),
+                    attributes: vec![friendly_name("legacy")],
+                },
+                secret_bag(other_password),
+            ]
+        };
+        let data = synthetic(bags(b"changeit"));
+        let (entries, mut writable) = open(&data, "changeit");
+        assert_eq!(entries.len(), 3);
+        writable.set_password("new-päss", &mut TestRng(0)).unwrap();
+        let saved = writable.encode(&mut TestRng(0)).unwrap();
+        let store = parse(&saved).unwrap();
+        assert!(matches!(
+            store.verify("changeit"),
+            Err(VerifyError::Password)
+        ));
+        // The listing, names, and key IDs are as before.
+        assert_eq!(store.verify("new-päss").unwrap().entries, entries);
+        // Each key decrypts with the new password to the same bytes, and
+        // is now encrypted with PBES2.
+        assert_eq!(
+            decrypted_keys(&saved, "new-päss"),
+            [modern.clone(), legacy.clone(), secret.clone()]
+        );
+        for bag in store.read_bags("new-päss".as_bytes()).unwrap().bags {
+            if let Bag::ShroudedKey(info) = &bag.bag {
+                assert!(info.algorithm.oid.matches(oid::OID_PBES2));
+                assert!(
+                    pbe_decrypt(&info.algorithm, &info.encrypted_data, b"changeit")
+                        .ok()
+                        .is_none_or(|key| !is_private_key_info(&key))
+                );
+            }
+        }
+        // The keys are not left in the file unencrypted.
+        for key in [&modern, &legacy, &secret] {
+            assert!(!contains(&saved, key));
+        }
+
+        // One key under another password stops the change, and nothing moves.
+        let data = synthetic(bags(b"other"));
+        let (_, mut writable) = open(&data, "changeit");
+        let error = writable
+            .set_password("new-päss", &mut TestRng(0))
+            .unwrap_err();
+        assert!(error.contains("another password"), "{error}");
+        let saved = writable.encode(&mut TestRng(0)).unwrap();
+        assert_eq!(decrypted_keys(&saved, "changeit"), [modern, legacy]);
+    }
+
+    #[test]
+    fn keys_that_cannot_be_re_encrypted_stop_the_password_change() {
+        let secret = |kind: &[u64], value: Vec<u8>| SafeBag {
+            bag: Bag::Secret {
+                oid: ObjectIdentifier::new(kind).unwrap(),
+                value,
+            },
+            attributes: vec![friendly_name("secret")],
+        };
+        let not_a_key = encrypted_key(b"decrypts, but is not a key", b"changeit", false);
+        for (bag, reason) in [
+            // A secret that is not an encrypted PKCS #8 structure.
+            (
+                secret(&[1, 2, 3, 4], der::explicit(0, &der::octet_string(b"raw"))),
+                "not supported",
+            ),
+            (
+                secret(
+                    oid::OID_PKCS12_SHROUDED_KEY_BAG,
+                    der::explicit(0, &der::octet_string(b"not encrypted key info")),
+                ),
+                "not supported",
+            ),
+            // Content that decrypts with valid padding but is not a key
+            // means the password was wrong.
+            (
+                SafeBag {
+                    bag: Bag::ShroudedKey(not_a_key),
+                    attributes: vec![friendly_name("key")],
+                },
+                "another password",
+            ),
+        ] {
+            let data = synthetic(vec![bag]);
+            let (entries, mut writable) = open(&data, "changeit");
+            let error = writable
+                .set_password("secret", &mut TestRng(0))
+                .unwrap_err();
+            assert!(error.contains(reason), "{error}");
+            let saved = writable.encode(&mut TestRng(0)).unwrap();
+            assert_eq!(
+                parse(&saved).unwrap().verify("changeit").unwrap().entries,
+                entries
+            );
+        }
+    }
+
+    #[test]
+    fn recognizes_the_shape_of_a_private_key() {
+        assert!(is_private_key_info(&synthetic_pkcs8(b"key")));
+        for content in [
+            &b""[..],
+            b"not DER",
+            &der::sequence(&der::integer(&[0])),
+            &der::octet_string(b"key"),
+            &[synthetic_pkcs8(b"key"), vec![0]].concat(),
+        ] {
+            assert!(!is_private_key_info(content));
+        }
     }
 }

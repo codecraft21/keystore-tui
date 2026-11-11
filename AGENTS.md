@@ -19,7 +19,9 @@ and certificate signing requests. Release 1.1 adds write features; see the
   and wiped when the keystore is closed.
 - **Writes:** the app changes a keystore file only on an explicit save, and
   replaces it atomically. Exports and "save as" only ever create new files.
-  Private keys are never decrypted. Change this only by implementing a
+  Private keys are decrypted only in memory, only where the
+  [SPEC](docs/SPEC.md) says so, and are wiped after use; they are never
+  displayed, logged, or written unencrypted. Change this only by implementing a
   [ROADMAP](docs/ROADMAP.md) feature, following the write rules listed there.
 
 ## Development

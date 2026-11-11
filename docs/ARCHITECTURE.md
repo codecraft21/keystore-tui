@@ -17,7 +17,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/save.rs` | The open keystore's writable form and password, the "save as" and new-keystore name prompt, and replacing a file atomically |
 | `src/keystore.rs` | JKS and JCEKS parsing, integrity check (SHA-1), and writing entries back as stored, renamed, or added; the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
 | `src/java_serialization.rs` | Skipping a serialized Java object (a JCEKS secret key) without deserializing it |
-| `src/pkcs12.rs` | PKCS12 parsing, MAC verification, and decryption of safe contents (AES and legacy PBE); listing entries from bags; editing bags and writing them back with PBES2 and a new MAC |
+| `src/pkcs12.rs` | PKCS12 parsing, MAC verification, and decryption of safe contents (AES and legacy PBE); listing entries from bags; editing bags, re-encrypting keys for a new password, and writing bags back with PBES2 and a new MAC |
 | `src/entry_list.rs` | Entry-list filtering, sorting, and expiry classification |
 | `src/certificate.rs` | X.509 summary (subject, algorithm, key size, expiry) for the entry table |
 | `src/certificate/details.rs` | Full certificate fields for the detail view |

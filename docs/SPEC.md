@@ -46,7 +46,10 @@ document and the usage reference, and also the README if its overview changes.
 - The other files it writes are new certificate and request exports; see
   [Exporting](#exporting).
 - It runs without Java or `keytool` installed.
-- Private keys are never decrypted, displayed, or exported.
+- Private and secret keys are never displayed, exported, or written
+  unencrypted. They are decrypted only in memory, and only to encrypt them
+  again when a PKCS12 keystore's password changes; see [Changing the
+  password](#changing-the-password).
 - The following are out of scope for now: importing anything but a trusted
   certificate, keystore editing other than [deleting](#deleting-entries) and
   [renaming](#renaming-entries) entries, and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
@@ -381,11 +384,19 @@ any existing incomplete-entry warnings.
   written on saving. On saving, only the integrity digest changes.
 - In JKS and JCEKS, private-key and secret-key entries keep the passwords
   they were protected with, as with `keytool -storepasswd`.
-- In PKCS12, keys are encrypted with the keystore's password and are never
-  decrypted, so a keystore holding private or secret keys cannot change its
-  password yet. Neither can a keystore that no password protects, and the new
-  password cannot be empty. Each is refused with a red message after the
-  password is typed, and nothing changes.
+- In PKCS12, Java expects keys to be encrypted with the keystore's password.
+  When the password is confirmed, every private key and secret key is
+  decrypted in memory with the current password and encrypted again with the
+  new one, using PBES2 as in [Writing PKCS12
+  keystores](#writing-pkcs12-keystores), with a new random salt and IV. The
+  decrypted key is wiped at once; its bytes, and the bag's type and
+  attributes, are unchanged. Like the password, the re-encrypted keys reach
+  the file only on saving.
+- The PKCS12 password is not changed, and no key is touched, when a key does
+  not decrypt with the current password, when a key or secret uses encryption
+  or a form the app does not support, when no password protects the keystore
+  and it holds no keys, when the new password is empty, or when the system
+  provides no random numbers. A red message gives the reason.
 
 ## Creating a keystore
 
@@ -443,8 +454,8 @@ any existing incomplete-entry warnings.
 ### Writing PKCS12 keystores
 
 - Every bag is written byte for byte as it was read, except the bags of a
-  renamed entry. Private and secret keys stay encrypted as they were and are
-  never decrypted.
+  renamed entry and, after a password change, the key bags. Otherwise private
+  and secret keys stay encrypted as they were.
 - Bags stay in their safes, in order. A safe that was encrypted is encrypted
   again, and one that was not stays unencrypted; a safe left without bags is
   dropped.

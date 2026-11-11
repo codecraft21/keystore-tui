@@ -31,10 +31,23 @@ pub enum Document {
     Pkcs12(pkcs12::Writable),
 }
 
+const NO_RANDOMNESS: &str = "The system provided no random numbers; nothing was changed.";
+
 /// The operating system's random numbers, for PKCS12 salts.
 #[derive(Default)]
 struct OsRng {
     failed: bool,
+}
+
+impl OsRng {
+    /// Fails if any request for random numbers was not met.
+    fn check(mut self) -> Result<(), String> {
+        // Also catches a source that fails before it is first used.
+        self.fill_bytes(&mut [0]);
+        (!self.failed)
+            .then_some(())
+            .ok_or_else(|| NO_RANDOMNESS.into())
+    }
 }
 
 impl Rng for OsRng {
@@ -55,7 +68,14 @@ impl Document {
     pub fn set_password(&mut self, new: &str) -> Result<(), String> {
         match self {
             Self::Jks { password, .. } => *password = Zeroizing::new(new.to_owned()),
-            Self::Pkcs12(writable) => writable.set_password(new)?,
+            Self::Pkcs12(writable) => {
+                // Re-encrypting keys needs salts; check for them first, so
+                // that a failure leaves the keystore as it was.
+                OsRng::default().check()?;
+                let mut rng = OsRng::default();
+                writable.set_password(new, &mut rng)?;
+                rng.check()?;
+            }
         }
         Ok(())
     }
@@ -161,9 +181,7 @@ impl Document {
                 let data = writable
                     .encode(&mut rng)
                     .map_err(|error| format!("Cannot save: {error}."))?;
-                if rng.failed {
-                    return Err("Cannot save: the system provided no random numbers.".into());
-                }
+                rng.check()?;
                 let read_back = pkcs12::parse(&data)
                     .ok()
                     .and_then(|store| store.verify(writable.password()).ok())

@@ -15,8 +15,9 @@ All notable changes to keystore-tui are listed here. Versions follow
   are stored in lower case, as Java does.
 - Press `n` to create an empty JKS, JCEKS, or PKCS12 keystore, and `p` to
   change the password of the open one. In JKS and JCEKS, private-key entries
-  keep their own passwords; a PKCS12 keystore holding keys cannot change its
-  password yet.
+  keep their own passwords. In PKCS12, private and secret keys are re-encrypted
+  with the new password, as Java expects; a key under another password stops
+  the change.
 - PKCS12 keystores are saved with AES-256-CBC and HMAC-SHA256, whatever they
   used before. Java 8u301, 11.0.12, and later, and OpenSSL 1.1 and later, read
   them. A passwordless Java truststore stays passwordless.
