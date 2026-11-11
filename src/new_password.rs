@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
-use crate::{App, Confirm, Password, canonical_path, keystore, path_bar, save};
+use crate::{App, Confirm, Password, canonical_path, keystore, path_bar, pkcs12, save};
 
 /// What the new password is for.
 pub enum Purpose {
@@ -37,7 +37,7 @@ impl NewPasswordPrompt {
     }
 }
 
-/// Whether `path` names a PKCS12 keystore, which cannot be created yet.
+/// Whether `path` names a PKCS12 keystore.
 fn is_pkcs12_name(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("p12") || ext.eq_ignore_ascii_case("pfx"))
@@ -65,13 +65,7 @@ impl App {
 
     /// Checks the typed name, then asks for the new keystore's password.
     pub(crate) fn password_new_keystore(&mut self, path: PathBuf) {
-        if is_pkcs12_name(&path) {
-            self.message = Some((
-                "Only JKS and JCEKS keystores can be created for now; use a .jks or .jceks name."
-                    .into(),
-                true,
-            ));
-        } else if path.exists() {
+        if path.exists() {
             self.message = Some((
                 format!("'{}' already exists; choose another name.", path.display()),
                 true,
@@ -122,16 +116,31 @@ impl App {
     }
 
     /// Writes an empty keystore to the new file `path` and opens it. A
-    /// `.jceks` name creates a JCEKS keystore, any other name a JKS one.
+    /// `.jceks` name creates a JCEKS keystore, a `.p12` or `.pfx` name a
+    /// PKCS12 one, and any other name a JKS one.
     fn create_keystore(&mut self, path: PathBuf, password: &str) {
         let jceks = path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("jceks"));
-        let document = save::Document::new(keystore::Writable::empty(jceks), password);
+        let (format, document) = if is_pkcs12_name(&path) {
+            if password.is_empty() {
+                self.message = Some((
+                    "A PKCS12 keystore needs a password that is not empty; nothing was created."
+                        .into(),
+                    true,
+                ));
+                return;
+            }
+            let writable = pkcs12::Writable::empty(password);
+            ("PKCS12", save::Document::Pkcs12(writable))
+        } else {
+            let writable = keystore::Writable::empty(jceks);
+            let format = if jceks { "JCEKS" } else { "JKS" };
+            (format, save::Document::jks(writable, password))
+        };
         match document.save_new(&path, &[]) {
             Ok(()) => {
                 let path = canonical_path::canonicalize(&path).unwrap_or(path);
-                let format = if jceks { "JCEKS" } else { "JKS" };
                 let message = format!("Created the {format} keystore '{}'.", path.display());
                 self.show_entries(path, vec![]);
                 self.document = Some(document);
@@ -142,13 +151,18 @@ impl App {
     }
 
     fn change_password(&mut self, password: &str) {
-        if let Some(document) = &mut self.document {
-            document.set_password(password);
-            self.modified = true;
-            self.message = Some((
-                "Password changed; it is written when the keystore is saved.".into(),
-                false,
-            ));
-        }
+        let Some(document) = &mut self.document else {
+            return;
+        };
+        self.message = Some(match document.set_password(password) {
+            Ok(()) => {
+                self.modified = true;
+                (
+                    "Password changed; it is written when the keystore is saved.".into(),
+                    false,
+                )
+            }
+            Err(error) => (error, true),
+        });
     }
 }
