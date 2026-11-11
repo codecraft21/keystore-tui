@@ -2094,6 +2094,53 @@ mod tests {
     }
 
     #[test]
+    fn keys_that_cannot_be_re_encrypted_stop_the_password_change() {
+        let secret = |kind: &[u64], value: Vec<u8>| SafeBag {
+            bag: Bag::Secret {
+                oid: ObjectIdentifier::new(kind).unwrap(),
+                value,
+            },
+            attributes: vec![friendly_name("secret")],
+        };
+        let not_a_key = encrypted_key(b"decrypts, but is not a key", b"changeit", false);
+        for (bag, reason) in [
+            // A secret that is not an encrypted PKCS #8 structure.
+            (
+                secret(&[1, 2, 3, 4], der::explicit(0, &der::octet_string(b"raw"))),
+                "not supported",
+            ),
+            (
+                secret(
+                    oid::OID_PKCS12_SHROUDED_KEY_BAG,
+                    der::explicit(0, &der::octet_string(b"not encrypted key info")),
+                ),
+                "not supported",
+            ),
+            // Content that decrypts with valid padding but is not a key
+            // means the password was wrong.
+            (
+                SafeBag {
+                    bag: Bag::ShroudedKey(not_a_key),
+                    attributes: vec![friendly_name("key")],
+                },
+                "another password",
+            ),
+        ] {
+            let data = synthetic(vec![bag]);
+            let (entries, mut writable) = open(&data, "changeit");
+            let error = writable
+                .set_password("secret", &mut TestRng(0))
+                .unwrap_err();
+            assert!(error.contains(reason), "{error}");
+            let saved = writable.encode(&mut TestRng(0)).unwrap();
+            assert_eq!(
+                parse(&saved).unwrap().verify("changeit").unwrap().entries,
+                entries
+            );
+        }
+    }
+
+    #[test]
     fn recognizes_the_shape_of_a_private_key() {
         assert!(is_private_key_info(&synthetic_pkcs8(b"key")));
         for content in [
