@@ -584,19 +584,16 @@ impl Writable {
     }
 
     /// The PKCS #8 encoding of the private key listed at `index`, decrypted
-    /// in memory with the store's password.
-    pub fn private_key(&self, index: usize) -> Result<Zeroizing<Vec<u8>>, WriteError> {
-        let bag = self.sources[index]
-            .first()
-            .map(|&source| &self.bags[source]);
-        let Some(Bag::ShroudedKey(info)) = bag.map(|bag| &bag.bag) else {
-            return Err("the entry holds no private key");
+    /// in memory with the store's password, or `None` if that fails.
+    pub fn private_key(&self, index: usize) -> Option<Zeroizing<Vec<u8>>> {
+        let bag = &self.bags[*self.sources[index].first()?];
+        let Bag::ShroudedKey(info) = &bag.bag else {
+            return None;
         };
         pbe_decrypt(&info.algorithm, &info.encrypted_data, &self.password)
             .ok()
             .map(Zeroizing::new)
             .filter(|key| is_private_key_info(key))
-            .ok_or("the key could not be decrypted with the keystore's password")
     }
 
     /// Protects the store with `password` from now on. Java expects keys to
@@ -2219,5 +2216,44 @@ mod tests {
         ] {
             assert!(!is_private_key_info(content));
         }
+    }
+
+    #[test]
+    fn inserted_private_keys_share_issuers_and_decrypt_again() {
+        use crate::test_support::metadata_certificate;
+        let ca = metadata_certificate("ca", "ca", &[1], &[]);
+        let first = metadata_certificate("first", "ca", &[2], &[]);
+        let second = metadata_certificate("second", "ca", &[3], &[]);
+        let key = synthetic_pkcs8(b"synthetic, not a private key");
+        let mut writable = Writable::empty("changeit");
+        // A store whose only safe is encrypted gets a plain one for keys.
+        writable.safes = vec![true];
+        let mut rng = TestRng(0);
+        for leaf in [&first, &second] {
+            let chain = [leaf.clone(), ca.clone()];
+            writable
+                .insert_private_key("key", &key, &chain, &mut rng)
+                .unwrap();
+        }
+        let entries = writable
+            .insert_private_key("bare", &key, &[], &mut rng)
+            .unwrap();
+        assert_eq!(writable.safes, [true, false]);
+        // The second chain reuses the issuer the first one stored.
+        let held = |certificate: &Vec<u8>| {
+            writable
+                .bags
+                .iter()
+                .filter(|bag| bag.certificate_der.as_ref() == Some(certificate))
+                .count()
+        };
+        assert_eq!((held(&ca), held(&first), held(&second)), (1, 1, 1));
+        for index in 0..entries.len() {
+            assert_eq!(writable.private_key(index).unwrap().as_slice(), key);
+        }
+        // An entry without a key has none to decrypt.
+        let entries = writable.insert_trusted_certificate("trusted", &ca).unwrap();
+        let trusted = entries.iter().position(|entry| entry.alias == "trusted");
+        assert!(writable.private_key(trusted.unwrap()).is_none());
     }
 }

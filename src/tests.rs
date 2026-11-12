@@ -2620,6 +2620,14 @@ fn save_as_with_another_format_name_converts_the_keystore() {
     assert!(keystore::is_jceks(
         &fs::read(directory.path().join("copy")).unwrap()
     ));
+    // And on to JKS.
+    press(&mut app, KeyCode::Char('W'));
+    type_alias(&mut app, "last.jks");
+    assert!(screen(&mut app, 200, 24).contains("' as JKS."));
+    assert_eq!(
+        saved_key(&directory.path().join("last.jks"), 1, "changeit"),
+        Ok(key)
+    );
 }
 
 #[test]

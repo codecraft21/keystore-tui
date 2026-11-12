@@ -392,9 +392,7 @@ impl App {
     /// Writes the keystore to the new file `path` in another format and
     /// opens that file in its place. Returns what to add to the message.
     fn save_converted(&mut self, path: &Path, format: save::Format) -> Result<String, String> {
-        let Some(document) = &self.document else {
-            return Ok(String::new());
-        };
+        let document = self.document.as_ref().ok_or("No keystore is open.")?;
         let data = document.convert(&self.entries, format)?;
         let password = Zeroizing::new(document.password().to_owned());
         save::create(path, &data)?;

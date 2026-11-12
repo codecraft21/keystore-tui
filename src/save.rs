@@ -451,13 +451,9 @@ impl Document {
                 ),
                 Err(_) => Err("uses protection that is not supported".into()),
             },
-            Self::Pkcs12(writable) => writable.private_key(index).map_err(|error| {
-                error
-                    .strip_prefix("the key ")
-                    .or(error.strip_prefix("the entry "))
-                    .unwrap_or(error)
-                    .into()
-            }),
+            Self::Pkcs12(writable) => writable
+                .private_key(index)
+                .ok_or_else(|| "could not be decrypted with the keystore's password".into()),
         }
     }
 }
@@ -738,13 +734,11 @@ mod tests {
             assert!(error.contains("share the alias 'dup'"), "{error}");
         }
         // Without the clash, mixed case becomes lower case.
-        entries = match document {
-            Document::Pkcs12(mut writable) => {
-                writable.remove(0);
-                writable.rename(0, "Mixed").unwrap()
-            }
-            Document::Jks { .. } => unreachable!(),
+        let Document::Pkcs12(mut writable) = document else {
+            panic!()
         };
+        writable.remove(0);
+        entries = writable.rename(0, "Mixed").unwrap();
         assert_eq!(entries[0].alias, "Mixed");
         let mut writable = pkcs12::Writable::empty("changeit");
         for entry in &entries {
