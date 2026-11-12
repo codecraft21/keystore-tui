@@ -263,7 +263,8 @@ fn convert_keystore_and_quit_restores_terminal() {
     app.expect(&["needs a password that is not empty"]);
     assert!(!directory.join("keys.p12").exists());
     app.send(b"\x15keys.jceks\r");
-    app.expect(&["Saved", "as JCEKS.", "server", "Private key"]);
+    // A long temporary path wraps the message, so only its start is expected.
+    app.expect(&["Saved", "server", "Private key"]);
     assert_eq!(fs::read(&path).unwrap(), original);
     let converted = fs::read(directory.join("keys.jceks")).unwrap();
     assert_eq!(converted[..4], [0xce; 4]);
