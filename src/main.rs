@@ -368,10 +368,18 @@ impl App {
         let Some(document) = &self.document else {
             return;
         };
-        self.message = Some(match document.save_new(&path, &self.entries) {
-            Ok(()) => {
+        // A name asking for another format converts the keystore.
+        let target = save::Format::from_name(&path).filter(|&format| format != document.format());
+        let saved = match target {
+            Some(format) => self.save_converted(&path, format),
+            None => document
+                .save_new(&path, &self.entries)
+                .map(|()| String::new()),
+        };
+        self.message = Some(match saved {
+            Ok(format) => {
                 let path = canonical_path::canonicalize(&path).unwrap_or(path);
-                let message = format!("Saved '{}'.", path.display());
+                let message = format!("Saved '{}'{format}.", path.display());
                 self.keystore_path = Some(path);
                 self.modified = false;
                 self.save_as = None;
@@ -379,6 +387,25 @@ impl App {
             }
             Err(error) => (error, true),
         });
+    }
+
+    /// Writes the keystore to the new file `path` in another format and
+    /// opens that file in its place. Returns what to add to the message.
+    fn save_converted(&mut self, path: &Path, format: save::Format) -> Result<String, String> {
+        let Some(document) = &self.document else {
+            return Ok(String::new());
+        };
+        let data = document.convert(&self.entries, format)?;
+        let password = Zeroizing::new(document.password().to_owned());
+        save::create(path, &data)?;
+        // The converted keystore was read back before it was written.
+        let opened = match load(path)? {
+            Loaded::Store(store) => store.verify(&password).ok(),
+            Loaded::Certificates(_) => None,
+        }
+        .ok_or("The converted keystore could not be opened again.")?;
+        self.show_verified(path.to_path_buf(), opened);
+        Ok(format!(" as {}", format.label()))
     }
 
     /// Whether letter keys are typed as text rather than used as shortcuts.
@@ -797,7 +824,11 @@ impl App {
                     },
                     format!("{}_", prompt.path).into(),
                 ]),
-                "Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
+                if prompt.creating {
+                    "Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into()
+                } else {
+                    "A .jks, .jceks, or .p12 name converts | Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into()
+                },
             ]
         } else if let Some(prompt) = &self.new_password {
             use new_password::Purpose;

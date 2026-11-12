@@ -174,7 +174,9 @@ pub fn triage_keystore() -> Vec<u8> {
 /// keys, and the public fixture certificate as its chain.
 pub fn key_keystore(key_password: &str) -> Vec<u8> {
     let certificate = fixture_certificate();
-    let key = b"synthetic bytes, not a private key";
+    // A PKCS #8 structure (version, algorithm 1.2.3.4, key octets) around
+    // synthetic bytes.
+    let key = b"\x30\x1c\x02\x01\x00\x30\x05\x06\x03\x2a\x03\x04\x04\x10synthetic bytes!";
     // The JKS protector: a salt, the key XORed with a SHA-1 keystream,
     // and a check digest, all keyed by the password's UTF-16 units.
     let password: Vec<u8> = key_password

@@ -17,6 +17,7 @@ use crown::{
         pbe::{LegacyPbe, LegacyPbeKind, Pbes2, Pbes2Cipher, encrypt_private_key, pkcs12_password},
     },
 };
+use sha1::{Digest, Sha1};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -386,7 +387,8 @@ impl Writable {
     pub fn empty(password: &str) -> Self {
         Self {
             bags: Vec::new(),
-            safes: Vec::new(),
+            // Certificates are encrypted; keys carry their own encryption.
+            safes: vec![true, false],
             mac: true,
             password: Zeroizing::new(password.as_bytes().to_vec()),
             sources: Vec::new(),
@@ -470,14 +472,24 @@ impl Writable {
         alias: &str,
         certificate: &[u8],
     ) -> Result<Vec<KeystoreEntry>, WriteError> {
-        let mut attributes = [
+        let attributes = vec![
             friendly_name_attribute(alias),
             attribute(
                 TRUSTED_KEY_USAGE,
                 &der::oid(&object_id(ANY_EXTENDED_KEY_USAGE)),
             ),
         ];
-        attributes.sort();
+        self.push_certificate(certificate, attributes)?;
+        Ok(self.relist())
+    }
+
+    /// Adds a certificate bag with these attributes to the safe that
+    /// certificates go in.
+    fn push_certificate(
+        &mut self,
+        certificate: &[u8],
+        attributes: Vec<Vec<u8>>,
+    ) -> Result<(), WriteError> {
         let certificate_bag = der::sequence(
             &[
                 der::oid(&object_id(oid::OID_X509_CERTIFICATE)),
@@ -485,19 +497,7 @@ impl Writable {
             ]
             .concat(),
         );
-        let raw = der::sequence(
-            &[
-                der::oid(&object_id(oid::OID_PKCS12_CERT_BAG)),
-                der::explicit(0, &certificate_bag),
-                der::set(&attributes.concat()),
-            ]
-            .concat(),
-        );
-        let mut bag = parse_metadata_bag(&raw)
-            .ok()
-            .flatten()
-            .ok_or("the certificate could not be stored")?;
-        bag.safe = match self.safes.iter().position(|&encrypted| encrypted) {
+        let safe = match self.safes.iter().position(|&encrypted| encrypted) {
             Some(safe) => safe,
             None if !self.safes.is_empty() => 0,
             None => {
@@ -505,8 +505,98 @@ impl Writable {
                 0
             }
         };
+        self.push_bag(oid::OID_PKCS12_CERT_BAG, &certificate_bag, attributes, safe)
+    }
+
+    /// Adds a bag of type `kind` with `value` and `attributes` to `safe`.
+    fn push_bag(
+        &mut self,
+        kind: &[u64],
+        value: &[u8],
+        mut attributes: Vec<Vec<u8>>,
+        safe: usize,
+    ) -> Result<(), WriteError> {
+        // DER orders the elements of a SET OF by their encoding.
+        attributes.sort();
+        let mut content = [der::oid(&object_id(kind)), der::explicit(0, value)].concat();
+        if !attributes.is_empty() {
+            content.extend(der::set(&attributes.concat()));
+        }
+        let mut bag = parse_metadata_bag(&der::sequence(&content))
+            .ok()
+            .flatten()
+            .ok_or("the entry could not be stored")?;
+        bag.safe = safe;
         self.bags.push(bag);
+        Ok(())
+    }
+
+    /// Adds a private key, given as its PKCS #8 encoding, with its
+    /// certificate chain, leaf first, and returns the new listing. The key is
+    /// encrypted with the store's password, as Java expects, in a safe that
+    /// is not encrypted again. The key and its certificate share a local key
+    /// ID, and chain certificates the store already holds are not repeated.
+    pub fn insert_private_key(
+        &mut self,
+        alias: &str,
+        key: &[u8],
+        chain: &[Vec<u8>],
+        rng: &mut impl Rng,
+    ) -> Result<Vec<KeystoreEntry>, WriteError> {
+        let encrypted = encrypt_private_key(
+            key,
+            &self.password,
+            Pbes2Cipher::Aes256Cbc { iv: Vec::new() },
+            PBE_ITERATIONS,
+            rng,
+        )
+        .map_err(|_| "the key could not be encrypted")?
+        .encode();
+        let mut attributes = vec![friendly_name_attribute(alias)];
+        if let Some((leaf, issuers)) = chain.split_first() {
+            let id: [u8; 20] = Sha1::digest(leaf).into();
+            let key_id = attribute(oid::OID_PKCS9_LOCAL_KEY_ID, &der::octet_string(&id));
+            attributes.push(key_id.clone());
+            self.push_certificate(leaf, vec![friendly_name_attribute(alias), key_id])?;
+            for issuer in issuers {
+                let held = self.bags.iter().any(|bag| {
+                    bag.certificate_der.as_deref() == Some(issuer) && bag.attributes.is_empty()
+                });
+                if !held {
+                    self.push_certificate(issuer, vec![])?;
+                }
+            }
+        }
+        let safe = match self.safes.iter().position(|&encrypted| !encrypted) {
+            Some(safe) => safe,
+            None => {
+                self.safes.push(false);
+                self.safes.len() - 1
+            }
+        };
+        self.push_bag(
+            oid::OID_PKCS12_SHROUDED_KEY_BAG,
+            &encrypted,
+            attributes,
+            safe,
+        )?;
         Ok(self.relist())
+    }
+
+    /// The PKCS #8 encoding of the private key listed at `index`, decrypted
+    /// in memory with the store's password.
+    pub fn private_key(&self, index: usize) -> Result<Zeroizing<Vec<u8>>, WriteError> {
+        let bag = self.sources[index]
+            .first()
+            .map(|&source| &self.bags[source]);
+        let Some(Bag::ShroudedKey(info)) = bag.map(|bag| &bag.bag) else {
+            return Err("the entry holds no private key");
+        };
+        pbe_decrypt(&info.algorithm, &info.encrypted_data, &self.password)
+            .ok()
+            .map(Zeroizing::new)
+            .filter(|key| is_private_key_info(key))
+            .ok_or("the key could not be decrypted with the keystore's password")
     }
 
     /// Protects the store with `password` from now on. Java expects keys to

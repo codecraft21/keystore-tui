@@ -244,3 +244,36 @@ fn change_key_password_save_and_quit_restores_terminal() {
     app.send(b"\x03");
     app.assert_restored();
 }
+
+/// SPEC: [Converting a keystore](../../docs/SPEC.md#converting-a-keystore),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn convert_keystore_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("keys.jks");
+    // The key shares the keystore's empty password.
+    let original = key_keystore("");
+    fs::write(&path, &original).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("keys.jks")]);
+    app.expect(&["server", "Private key"]);
+    app.send(b"W");
+    app.expect(&["Save keystore as:", "name converts"]);
+    // PKCS12 needs a password, so nothing is written.
+    app.send(b"\x15keys.p12\r");
+    app.expect(&["needs a password that is not empty"]);
+    assert!(!directory.join("keys.p12").exists());
+    app.send(b"\x15keys.jceks\r");
+    app.expect(&["Saved", "as JCEKS.", "server", "Private key"]);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let converted = fs::read(directory.join("keys.jceks")).unwrap();
+    assert_eq!(converted[..4], [0xce; 4]);
+    // The converted keystore is the open one, and its key still unlocks
+    // with the keystore's password.
+    app.send(b"P");
+    app.expect(&["New password for key 'server': _"]);
+    app.send(b"\x1b");
+    // Sent on its own: Esc followed at once by `q` would read as Alt+q.
+    app.expect(&["P Key password"]);
+    app.send(b"q");
+    app.assert_restored();
+}

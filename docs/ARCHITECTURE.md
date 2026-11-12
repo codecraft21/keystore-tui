@@ -14,7 +14,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
 | `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate from a certificate file |
 | `src/new_password.rs` | Typing a new password twice, changing the open keystore's password or a key's password, and creating a new keystore file |
-| `src/save.rs` | The open keystore's writable form and password, the "save as" and new-keystore name prompt, and replacing a file atomically |
+| `src/save.rs` | The open keystore's writable form and password, converting it to another format, the "save as" and new-keystore name prompt, and replacing a file atomically |
 | `src/keystore.rs` | JKS and JCEKS parsing, integrity check (SHA-1), and writing entries back as stored, renamed, or added; the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
 | `src/key_protection.rs` | Java's password protection of private keys in JKS (SHA-1 keystream) and JCEKS (`PBEWithMD5AndTripleDES`): recovering a key and protecting it again |
 | `src/java_serialization.rs` | Skipping a serialized Java object (a JCEKS secret key) without deserializing it |

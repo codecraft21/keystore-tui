@@ -21,6 +21,9 @@ All notable changes to keystore-tui are listed here. Versions follow
 - In JKS and JCEKS, press `P` to change a private key's own password. The key
   is unlocked with the keystore's password, or with its current password when
   that differs.
+- Convert a keystore between JKS, JCEKS, and PKCS12: in the "save as" prompt
+  (`W`), give the new name the other format's extension. Private keys are
+  converted too, and the original file is left as it was.
 - PKCS12 keystores are saved with AES-256-CBC and HMAC-SHA256, whatever they
   used before. Java 8u301, 11.0.12, and later, and OpenSSL 1.1 and later, read
   them. A passwordless Java truststore stays passwordless.

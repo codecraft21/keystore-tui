@@ -26,6 +26,7 @@ document and the usage reference, and also the README if its overview changes.
 - [Creating a keystore](#creating-a-keystore)
 - [Saving](#saving)
   - [Writing PKCS12 keystores](#writing-pkcs12-keystores)
+  - [Converting a keystore](#converting-a-keystore)
 - [Entry details](#entry-details)
   - [Certificate requests](#certificate-requests)
   - [Weak cryptography](#weak-cryptography)
@@ -49,10 +50,11 @@ document and the usage reference, and also the README if its overview changes.
 - It runs without Java or `keytool` installed.
 - Private and secret keys are never displayed, exported, or written
   unencrypted. They are decrypted only in memory, and only to encrypt them
-  again under a new password: when a PKCS12 keystore's password changes (see
-  [Changing the password](#changing-the-password)), and when a JKS or JCEKS
-  key's password changes (see [Changing a key
-  password](#changing-a-key-password)).
+  again: when a PKCS12 keystore's password changes (see [Changing the
+  password](#changing-the-password)), when a JKS or JCEKS key's password
+  changes (see [Changing a key password](#changing-a-key-password)), and when
+  a keystore is converted to another format (see [Converting a
+  keystore](#converting-a-keystore)).
 - The following are out of scope for now: importing anything but a trusted
   certificate, keystore editing other than [deleting](#deleting-entries) and
   [renaming](#renaming-entries) entries, and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
@@ -505,6 +507,42 @@ any existing incomplete-entry warnings.
   keystores.
 - If the system provides no random numbers, saving fails and nothing is
   written.
+
+### Converting a keystore
+
+- In the "save as" prompt, a name ending in `.jks`, `.jceks`, or `.p12` or
+  `.pfx` (ignoring case) that asks for another format than the keystore's
+  converts it: the new file is written in that format, with the same password,
+  and becomes the opened file. Any other name keeps the format. The prompt's
+  hint line says so, and the green message ends with `as JKS`, `as JCEKS`, or
+  `as PKCS12`.
+- The opened file is not changed. Unsaved changes go into the converted file.
+- Each private key is recovered in memory with the keystore's password,
+  protected again as the new format does, and wiped: Java's key protector for
+  JKS, `PBEWithMD5AndTripleDES` for JCEKS, and PBES2 for PKCS12, each with a
+  new random salt. In the converted keystore every key has the keystore's
+  password.
+- Certificates and chains are copied byte for byte. To JKS or JCEKS, a
+  certificate entry of either PKCS12 kind becomes a trusted certificate,
+  aliases become lower case, and entries get the current time as creation
+  date. To PKCS12, entries are written as in [Writing PKCS12
+  keystores](#writing-pkcs12-keystores) for a new keystore: a key shares a
+  local key ID, the SHA-1 digest of its certificate, with that certificate;
+  chain certificates are stored once; trusted certificates carry Java's
+  attribute; and creation dates are not kept. Between JKS and JCEKS, creation
+  dates are kept.
+- Before anything is written, the converted keystore is opened as a file
+  would be, and its entries, certificates, chains, and recovered keys are
+  compared with the originals. On any difference nothing is written. A chain
+  that is not linked by issuer names fails this check for PKCS12, which
+  rebuilds chains from them.
+- The conversion is refused, with a red message and the prompt left open,
+  when a key has a password other than the keystore's (change it first with
+  `P`), when a key's protection is not supported or the key is not PKCS #8,
+  when the keystore holds a secret key, when two aliases would be the same in
+  lower case, when the target is PKCS12 and the password is empty, when the
+  target is JCEKS and the password is not printable ASCII, or when the file
+  already exists.
 
 ## Entry details
 
