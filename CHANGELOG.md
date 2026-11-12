@@ -29,9 +29,11 @@ All notable changes to keystore-tui are listed here. Versions follow
   a password you choose; leaving it empty writes the key unencrypted, after a
   confirmation.
 - Import a key pair with `i`: choose a PEM or DER private key file (PKCS #8,
-  plain or encrypted, or OpenSSL's RSA and EC formats) or a PKCS12 keystore
-  with one private key. The key must match its certificate, and is stored
-  under the keystore's password.
+  plain or encrypted, or OpenSSL's RSA and EC formats). The key must match
+  its certificate, and is stored under the keystore's password.
+- Copy entries from another keystore with `i`: choose a JKS, JCEKS, or PKCS12
+  keystore, type its password, and pick the certificates and private keys to
+  copy from the list.
 - PKCS12 keystores are saved with AES-256-CBC and HMAC-SHA256, whatever they
   used before. Java 8u301, 11.0.12, and later, and OpenSSL 1.1 and later, read
   them. A passwordless Java truststore stays passwordless.

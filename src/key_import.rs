@@ -1,5 +1,6 @@
-//! Importing a key pair: finding the private key in a PEM, PKCS #8, or
-//! PKCS12 file, matching it to its certificate, and the prompts in between.
+//! Importing a key pair: finding the private key in a PEM or PKCS #8 file,
+//! or a keystore to copy entries from, matching a key to its certificate,
+//! and the prompts in between.
 use std::path::Path;
 
 use crown::{
@@ -15,8 +16,8 @@ use zeroize::Zeroizing;
 use crate::{
     App, MAX_KEYSTORE_SIZE, Password, certificate_file,
     editing::{Action, AliasPrompt},
-    keystore::{self, Content, Kind},
-    pkcs12, read_limited,
+    keystore::{self, Content},
+    pkcs12, read_limited, save,
 };
 
 /// A private key as PKCS #8, wiped when dropped.
@@ -24,18 +25,20 @@ pub type Key = Zeroizing<Vec<u8>>;
 /// Certificate chains, each starting with its own certificate.
 type Chains = Vec<Vec<Vec<u8>>>;
 
-/// The private key an import file holds.
+/// What an import file holds besides certificates.
 pub enum Found {
     Key(Key),
     Locked(Locked),
 }
 
-/// A private key that needs its file's password.
+/// A key or a keystore that needs its file's password.
 pub enum Locked {
     /// An `EncryptedPrivateKeyInfo`.
     Encrypted(Vec<u8>),
     /// A PKCS12 keystore.
     Pkcs12(pkcs12::Store),
+    /// A JKS or JCEKS keystore.
+    Jks(keystore::Keystore),
 }
 
 /// A key pair import that is waiting for the user.
@@ -114,7 +117,11 @@ pub fn find(data: &[u8]) -> Result<Option<Found>, String> {
         Ok(Some(Found::Key(Zeroizing::new(data.to_vec()))))
     } else if EncryptedPrivateKeyInfo::parse(data).is_ok() {
         Ok(Some(Found::Locked(Locked::Encrypted(data.to_vec()))))
-    } else if !keystore::has_magic(data) && certificate_file::parse(data).is_err() {
+    } else if keystore::has_magic(data) {
+        Ok(keystore::parse(data.to_vec())
+            .ok()
+            .map(|store| Found::Locked(Locked::Jks(store))))
+    } else if certificate_file::parse(data).is_err() {
         Ok(pkcs12::parse(data)
             .ok()
             .map(|store| Found::Locked(Locked::Pkcs12(store))))
@@ -201,9 +208,9 @@ impl App {
             Some(KeyImport {
                 stage: Stage::Certificates(key),
                 ..
-            }) => self.ask_key_alias(&file, key, &chains(&data), None),
+            }) => self.ask_key_alias(&file, key, &chains(&data)),
             _ => match find(&data).map_err(|error| format!("'{file}' {error}."))? {
-                Some(Found::Key(key)) => self.import_key(file, key, chains(&data), None),
+                Some(Found::Key(key)) => self.import_key(file, key, chains(&data)),
                 Some(Found::Locked(source)) => {
                     self.key_import = Some(KeyImport {
                         file,
@@ -225,15 +232,9 @@ impl App {
 
     /// Continues with a readable key: asks for its certificate file when
     /// its own file has no certificates, and for the alias otherwise.
-    fn import_key(
-        &mut self,
-        file: String,
-        key: Key,
-        chains: Chains,
-        alias: Option<String>,
-    ) -> Result<(), String> {
+    fn import_key(&mut self, file: String, key: Key, chains: Chains) -> Result<(), String> {
         if !chains.is_empty() {
-            return self.ask_key_alias(&file, key, &chains, alias);
+            return self.ask_key_alias(&file, key, &chains);
         }
         self.open_picker();
         if self.file_picker.is_some() {
@@ -247,22 +248,20 @@ impl App {
     }
 
     /// Asks for the alias of the key pair made of `key` and its chain among
-    /// the `chains` read from `file`, suggesting `alias` or the certificate's
+    /// the `chains` read from `file`, suggesting the certificate's
     /// subject name.
     fn ask_key_alias(
         &mut self,
         file: &str,
         key: Key,
         chains: &[Vec<Vec<u8>>],
-        alias: Option<String>,
     ) -> Result<(), String> {
         let chain = matching_chain(&key, chains)
             .map_err(|error| format!("Not imported: {error}."))?
             .ok_or_else(|| {
                 format!("Not imported: no certificate in '{file}' matches the private key.")
             })?;
-        let alias = alias
-            .or_else(|| certificate_file::subject_name(&chain[0]))
+        let alias = certificate_file::subject_name(&chain[0])
             .unwrap_or_default()
             .to_lowercase();
         self.alias_prompt = Some(AliasPrompt {
@@ -321,37 +320,31 @@ impl App {
             return Ok(());
         };
         let failed = |error: &str| format!("Not imported from '{file}': {error}.");
-        let unlocked = match &source {
+        // A keystore's entries are chosen from a list; a key continues alone.
+        let (source, unlocked) = match source {
             Locked::Pkcs12(store) => match store.open(&password.0) {
                 Ok((verified, writable)) => {
                     let writable = writable.ok_or_else(|| failed("it was not read completely"))?;
-                    let mut keys = verified
-                        .entries
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, entry)| entry.kind() == Kind::PrivateKey.label());
-                    let (Some((index, entry)), None) = (keys.next(), keys.next()) else {
-                        return Err(failed(
-                            "it must hold exactly one private key to import from it",
-                        ));
-                    };
-                    let key = writable
-                        .private_key(index)
-                        .ok_or_else(|| failed("its private key could not be decrypted"))?;
-                    Some((
-                        key,
-                        vec![entry.certificates().to_vec()],
-                        Some(entry.alias.clone()),
-                    ))
+                    let source = save::Document::Pkcs12(writable);
+                    return self.choose_entries(file, source, verified.entries);
                 }
-                Err(pkcs12::VerifyError::Password) => None,
+                Err(pkcs12::VerifyError::Password) => (Locked::Pkcs12(store), None),
                 Err(pkcs12::VerifyError::Invalid(error)) => return Err(failed(error)),
             },
-            Locked::Encrypted(encrypted) => pkcs12::decrypt_key(encrypted, password.0.as_bytes())
-                .map(|key| (key, chains.clone(), None)),
+            Locked::Jks(store) => match store.open(&password.0) {
+                Ok((entries, writable)) => {
+                    let source = save::Document::jks(writable, &password.0);
+                    return self.choose_entries(file, source, entries);
+                }
+                Err(store) => (Locked::Jks(store), None),
+            },
+            Locked::Encrypted(encrypted) => {
+                let key = pkcs12::decrypt_key(&encrypted, password.0.as_bytes());
+                (Locked::Encrypted(encrypted), key)
+            }
         };
         match unlocked {
-            Some((key, chains, alias)) => self.import_key(file, key, chains, alias),
+            Some(key) => self.import_key(file, key, chains),
             None => {
                 self.key_import = Some(KeyImport {
                     file,

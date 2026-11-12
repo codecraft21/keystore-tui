@@ -3,6 +3,7 @@ mod canonical_path;
 mod certificate;
 mod certificate_file;
 mod certificate_request;
+mod copy_entries;
 mod editing;
 mod entry_details;
 mod entry_list;
@@ -122,6 +123,8 @@ struct App {
     new_password: Option<new_password::NewPasswordPrompt>,
     /// Whether the file browser is choosing a file to import from.
     importing: bool,
+    /// Another keystore's entries, being chosen for copying.
+    copying: Option<copy_entries::Selection>,
     /// The file name being typed for a private key export.
     key_export: Option<key_export::KeyExport>,
     /// A key pair import waiting for a password or a certificate file.
@@ -242,6 +245,8 @@ impl App {
             if details.handle_event(key) {
                 self.entry_details = None;
             }
+        } else if self.copying.is_some() {
+            self.handle_selection(key);
         } else if self.key_export.is_some() {
             self.handle_key_export(key);
         } else if self.unlocking_import() {
@@ -431,6 +436,7 @@ impl App {
             || self.new_password.is_some()
             || self.unlocking_import()
             || self.key_export.is_some()
+            || self.copying.is_some()
             || self
                 .entry_details
                 .as_ref()
@@ -597,6 +603,7 @@ impl App {
         self.importing = false;
         self.key_import = None;
         self.key_export = None;
+        self.copying = None;
         self.message = None;
     }
 
@@ -823,6 +830,10 @@ impl App {
             } else {
                 picker.draw(frame);
             }
+        } else if let Some(selection) = &mut self.copying {
+            frame.render_widget(Paragraph::new(shortcuts), help);
+            let error = self.message.as_ref().map(|(message, _)| message.as_str());
+            selection.draw(frame, &self.entries, error);
         } else {
             frame.render_widget(Paragraph::new(shortcuts), help);
         }
