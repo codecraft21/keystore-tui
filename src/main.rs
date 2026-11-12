@@ -9,6 +9,7 @@ mod entry_details;
 mod entry_list;
 mod export;
 mod file_picker;
+mod generate;
 mod java_serialization;
 mod key_export;
 mod key_import;
@@ -18,6 +19,7 @@ mod new_password;
 mod path_bar;
 mod pkcs12;
 mod save;
+mod signing;
 mod startup;
 
 #[cfg(test)]
@@ -129,6 +131,11 @@ struct App {
     key_export: Option<key_export::KeyExport>,
     /// A key pair import waiting for a password or a certificate file.
     key_import: Option<key_import::KeyImport>,
+    /// The form for a new key pair, while it is filled in.
+    generating: Option<generate::Form>,
+    /// The alias and the filled-in form of the key pair to generate once
+    /// the screen says so.
+    generation: Option<(String, Box<generate::Pending>)>,
     /// The result of the last edit or save, and whether it failed. Cleared
     /// on the next key.
     message: Option<(String, bool)>,
@@ -253,6 +260,8 @@ impl App {
             self.handle_import_password(key);
         } else if self.alias_prompt.is_some() {
             self.handle_alias(key);
+        } else if self.generating.is_some() {
+            self.handle_generate(key);
         } else if self.new_password.is_some() {
             self.handle_new_password(key);
         } else if let Some(prompt) = &mut self.save_as {
@@ -277,6 +286,7 @@ impl App {
                 KeyCode::Char('P') if is_text_input(key.modifiers) => self.ask_key_password(),
                 KeyCode::Char('r') if is_text_input(key.modifiers) => self.ask_rename(),
                 KeyCode::Char('i') if is_text_input(key.modifiers) => self.ask_import(),
+                KeyCode::Char('g') if is_text_input(key.modifiers) => self.ask_generate(),
                 KeyCode::Char('e') if is_text_input(key.modifiers) => self.ask_key_export(),
                 KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
                 KeyCode::Char('W') if is_text_input(key.modifiers) => {
@@ -437,6 +447,7 @@ impl App {
             || self.unlocking_import()
             || self.key_export.is_some()
             || self.copying.is_some()
+            || self.generating.is_some()
             || self
                 .entry_details
                 .as_ref()
@@ -604,6 +615,8 @@ impl App {
         self.key_import = None;
         self.key_export = None;
         self.copying = None;
+        self.generating = None;
+        self.generation = None;
         self.message = None;
     }
 
@@ -782,7 +795,7 @@ impl App {
                 content,
             );
         }
-        if let Some(question) = self.question() {
+        if let Some(question) = self.question().or_else(|| self.generation_notice()) {
             frame.render_widget(
                 Paragraph::new(question)
                     .style(Style::default().fg(Color::Yellow))
@@ -834,6 +847,9 @@ impl App {
             frame.render_widget(Paragraph::new(shortcuts), help);
             let error = self.message.as_ref().map(|(message, _)| message.as_str());
             selection.draw(frame, &self.entries, error);
+        } else if let Some(form) = &self.generating {
+            frame.render_widget(Paragraph::new(shortcuts), help);
+            form.draw(frame);
         } else {
             frame.render_widget(Paragraph::new(shortcuts), help);
         }
@@ -915,16 +931,22 @@ impl App {
                 }
                 editing::Action::Import(_) => "Alias for the imported certificate: ".into(),
                 editing::Action::ImportKey(..) => "Alias for the imported key pair: ".into(),
+                editing::Action::Generate(_) => "Alias for the generated key pair: ".into(),
             };
             vec![
                 Line::from(vec![label.bold(), format!("{}_", prompt.alias).into()]),
                 "Enter Confirm | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
             ]
+        } else if self.generating.is_some() {
+            vec![
+                "Up/Down Tab Field | Left/Right Change | Enter Next | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
+            ]
         } else if self.editing_filter {
             vec!["Type to filter | Enter Apply | Esc Clear | Up/Down Scroll | Ctrl+C Quit".into()]
         } else if self.document.is_some() && self.file_picker.is_none() {
             vec![
-                "n New | i Import | e Export | r Rename | d Delete | w Save | W Save as | p Password | P Key password".into(),
+                "Keystore: n New | g Generate | i Import | w Save | W Save as | p Password".into(),
+                "Entry: e Export | r Rename | d Delete | P Key password".into(),
                 LIST.into(),
             ]
         } else {
@@ -1105,6 +1127,10 @@ fn main() -> ExitCode {
 fn run(terminal: &mut DefaultTerminal, mut app: App) -> io::Result<()> {
     loop {
         terminal.draw(|frame| app.draw(frame))?;
+        // The frame just drawn says that a key pair is being generated.
+        if app.finish_generation() {
+            continue;
+        }
 
         // Periodically redraw so a missed resize notification cannot leave
         // the layout stale until the next key press.

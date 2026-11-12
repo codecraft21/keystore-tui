@@ -4,7 +4,7 @@ use std::path::Path;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::{App, certificate_file, key_import::Key, keystore::Content};
+use crate::{App, certificate_file, generate, key_import::Key, keystore::Content};
 
 /// What the alias being typed is for.
 pub enum Action {
@@ -14,6 +14,8 @@ pub enum Action {
     Import(Vec<u8>),
     /// Add this private key with its certificate chain.
     ImportKey(Key, Vec<Vec<u8>>),
+    /// Generate the key pair this filled-in form asks for.
+    Generate(Box<generate::Pending>),
 }
 
 /// The alias being typed for a renamed or imported entry.
@@ -62,12 +64,28 @@ impl App {
             return;
         };
         match key.code {
-            KeyCode::Esc => self.alias_prompt = None,
+            KeyCode::Esc => {
+                // A key pair's form is shown again, as it was filled in.
+                if let Some(AliasPrompt {
+                    action: Action::Generate(pending),
+                    ..
+                }) = self.alias_prompt.take()
+                {
+                    self.generating = Some(pending.into_form());
+                }
+            }
             KeyCode::Enter => {
                 let prompt = self.alias_prompt.take().unwrap();
-                if let Err(error) = self.apply(&prompt) {
-                    self.message = Some((error, true));
-                    self.alias_prompt = Some(prompt);
+                match (self.apply(&prompt), prompt.action) {
+                    (Err(error), action) => {
+                        self.message = Some((error, true));
+                        self.alias_prompt = Some(AliasPrompt { action, ..prompt });
+                    }
+                    // Generated after the next frame, which says so.
+                    (Ok(()), Action::Generate(pending)) => {
+                        self.generation = Some((prompt.alias.to_lowercase(), pending));
+                    }
+                    (Ok(()), _) => {}
                 }
             }
             KeyCode::Backspace => {
@@ -87,7 +105,7 @@ impl App {
         let alias = prompt.alias.to_lowercase();
         let renamed = match prompt.action {
             Action::Rename(index) => Some(index),
-            Action::Import(_) | Action::ImportKey(..) => None,
+            Action::Import(_) | Action::ImportKey(..) | Action::Generate(_) => None,
         };
         if alias.is_empty() {
             return Err("Type an alias, or press Esc to cancel.".into());
@@ -130,11 +148,19 @@ impl App {
                     message,
                 )
             }
+            // Only the alias is checked here.
+            Action::Generate(_) => return Ok(()),
         };
         let to = result?;
         self.modified = true;
         self.message = Some((message, false));
-        // Select the changed entry when the filter still shows it.
+        self.select_changed(to);
+        Ok(())
+    }
+
+    /// Lists the entries again and selects the one at `to`, when the filter
+    /// still shows it.
+    pub(crate) fn select_changed(&mut self, to: usize) {
         self.visible = crate::entry_list::visible_entries(&self.entries, &self.filter, self.sort);
         let selected = self
             .visible
@@ -142,7 +168,6 @@ impl App {
             .position(|&index| index == to)
             .or((!self.visible.is_empty()).then_some(0));
         self.entries_state.select(selected);
-        Ok(())
     }
 }
 

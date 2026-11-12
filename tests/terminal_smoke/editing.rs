@@ -19,7 +19,7 @@ fn delete_save_and_quit_restores_terminal() {
     let original = empty_password_fixture();
     fs::write(&path, &original).unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "d Delete | w Save | W Save as"]);
+    app.expect(&["root-cert", "w Save | W Save as | p Password"]);
     app.send(b"d");
     app.expect(&["Delete entry 'root-cert'? Press y"]);
     app.send(b"y");
@@ -80,7 +80,7 @@ fn rename_import_save_and_quit_restores_terminal() {
     )
     .unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "i Import | e Export | r Rename"]);
+    app.expect(&["root-cert", "Entry: e Export | r Rename"]);
     app.send(b"r");
     app.expect(&["New alias for 'root-cert': root-cert_"]);
     app.send(b"\x15q"); // Ctrl+U clears; `q` is typed, not a quit.
@@ -290,7 +290,7 @@ fn import_key_pair_save_and_quit_restores_terminal() {
     fs::write(&path, &original).unwrap();
     fs::write(directory.join("pair.pem"), key_pair_pem()).unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "i Import | e Export | r Rename"]);
+    app.expect(&["root-cert", "Entry: e Export | r Rename"]);
     app.send(b"i");
     app.expect(&["Import certificate or key pair from file", "pair.pem"]);
     app.send(b"pair\r");
@@ -310,6 +310,44 @@ fn import_key_pair_save_and_quit_restores_terminal() {
     // The key is written protected, never as it was read.
     let secret = [7_u8; 32];
     assert!(!saved.windows(32).any(|window| window == secret));
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Generating key pairs](../../docs/SPEC.md#generating-key-pairs),
+/// [Saving](../../docs/SPEC.md#saving),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn generate_key_pair_save_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    let original = empty_password_fixture();
+    fs::write(&path, &original).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "Keystore: n New | g Generate | i Import"]);
+    app.send(b"g");
+    app.expect(&["Generate key pair", "< EC P-256 >", "Left/Right Change"]);
+    // Three steps right of EC P-256 is Ed25519.
+    app.send(b"\x1b[C\x1b[C\x1b[C");
+    app.expect(&["< Ed25519 >"]);
+    // Enter without a common name points at that field.
+    app.send(b"\r");
+    app.expect(&["A common name is required."]);
+    // `q` is typed into the name, not a quit.
+    app.send(b"q.smoke\r");
+    app.expect(&["Alias for the generated key pair: q.smoke_"]);
+    app.send(b"\r");
+    app.expect(&[
+        "Generated Ed25519 key pair 'q.smoke'.",
+        "Private key",
+        "Ed25519",
+        "[modified]",
+    ]);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+    let saved = fs::read(&path).unwrap();
+    assert_eq!(&saved[8..12], &2_u32.to_be_bytes());
     app.send(b"q");
     app.assert_restored();
 }

@@ -34,6 +34,13 @@ All notable changes to keystore-tui are listed here. Versions follow
 - Copy entries from another keystore with `i`: choose a JKS, JCEKS, or PKCS12
   keystore, type its password, and pick the certificates and private keys to
   copy from the list.
+- Generate a key pair with `g`: choose RSA (2048, 3072, or 4096 bits), EC
+  (P-256, P-384, or P-521), or Ed25519, and fill in the subject name, the
+  validity in days, alternative names, and a purpose such as TLS server or
+  certificate authority. The key gets a self-signed certificate and is stored
+  under the keystore's password.
+- The editing shortcuts are now shown on two lines, one for the keystore and
+  one for the selected entry.
 - PKCS12 keystores are saved with AES-256-CBC and HMAC-SHA256, whatever they
   used before. Java 8u301, 11.0.12, and later, and OpenSSL 1.1 and later, read
   them. A passwordless Java truststore stays passwordless.
