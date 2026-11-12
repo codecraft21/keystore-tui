@@ -124,18 +124,19 @@ impl Document {
         current: Option<&str>,
         new: &str,
     ) -> Result<(), String> {
+        // Only a JKS or JCEKS document recovers a key.
         let key = self.recover_key(index, current).map_err(key_error)?;
-        let Self::Jks { writable, .. } = self else {
-            return Err(key_error(KeyError::Unsupported));
-        };
-        OsRng::default().check()?;
-        let mut rng = OsRng::default();
-        let protected =
-            key_protection::protect(&key, new, writable.is_jceks(), &mut rng).map_err(key_error)?;
-        rng.check()?;
-        writable
-            .set_protected_key(index, &protected)
-            .map_err(|error| format!("The key password was not changed: {error}."))
+        if let Self::Jks { writable, .. } = self {
+            OsRng::default().check()?;
+            let mut rng = OsRng::default();
+            let protected = key_protection::protect(&key, new, writable.is_jceks(), &mut rng)
+                .map_err(key_error)?;
+            rng.check()?;
+            writable
+                .set_protected_key(index, &protected)
+                .map_err(|error| format!("The key password was not changed: {error}."))?;
+        }
+        Ok(())
     }
 
     /// Removes the entry listed at `index`.
@@ -465,6 +466,21 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn only_jks_and_jceks_keys_have_passwords_of_their_own() {
+        let (_, mut jks) = open(&mixed_keystore(), "changeit");
+        assert!(jks.has_key_passwords());
+        // The trusted certificate, listed first, has no key.
+        assert!(jks.unlocks_key(0, None).is_err());
+        assert!(jks.set_key_password(0, None, "new").is_err());
+
+        let mut pkcs12 = Document::Pkcs12(pkcs12::Writable::empty("changeit"));
+        assert!(!pkcs12.has_key_passwords());
+        let error = pkcs12.unlocks_key(0, None).unwrap_err();
+        assert!(error.contains("not supported"), "{error}");
+        assert!(pkcs12.set_key_password(0, None, "new").is_err());
     }
 
     #[test]

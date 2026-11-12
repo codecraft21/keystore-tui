@@ -117,22 +117,20 @@ impl App {
 
     /// Checks the typed current key password, then asks for the new one.
     fn unlock_key(&mut self, index: usize, typed: Password) {
-        let unlocked = self.document.as_ref().map_or(Ok(false), |document| {
-            document.unlocks_key(index, Some(&typed.0))
-        });
-        match unlocked {
-            Ok(true) => {
-                self.new_password = Some(NewPasswordPrompt::new(Purpose::KeyChange(
-                    index,
-                    Some(typed),
-                )));
-            }
+        // The key's protection was read when the prompt opened, so any
+        // failure here is the password.
+        let unlocked = self
+            .document
+            .as_ref()
+            .is_some_and(|document| document.unlocks_key(index, Some(&typed.0)) == Ok(true));
+        if unlocked {
+            self.new_password = Some(NewPasswordPrompt::new(Purpose::KeyChange(
+                index,
+                Some(typed),
+            )));
+        } else {
             // The prompt stays open for another attempt.
-            Ok(false) => self.message = Some(("Incorrect key password.".into(), true)),
-            Err(error) => {
-                self.new_password = None;
-                self.message = Some((error, true));
-            }
+            self.message = Some(("Incorrect key password.".into(), true));
         }
     }
 
