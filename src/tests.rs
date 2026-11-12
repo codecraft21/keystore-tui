@@ -2283,6 +2283,21 @@ fn key_pairs_are_imported_from_and_into_pkcs12_keystores() {
         assert!(app.key_import.is_none());
     }
     assert_eq!(app.entries.len(), 1);
+
+    // A passwordless truststore has no password to protect a key with. The
+    // certificate request in the key's file is passed over.
+    let mut text = key_pem("PRIVATE KEY", &key, &[&leaf]).into_bytes();
+    text.extend_from_slice(test_support::KEYTOOL_REQUEST);
+    write("request.pem", &text);
+    let path = directory.path().join("open.p12");
+    fs::write(&path, include_bytes!("../tests/fixtures/passwordless.p12")).unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    assert!(app.document.is_some());
+    import(&mut app, "request");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("a key needs a keystore password that is not empty"));
+    assert!(!app.modified);
 }
 
 fn type_new_password(app: &mut App, first: &str, second: &str) {
