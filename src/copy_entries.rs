@@ -286,3 +286,30 @@ impl App {
         self.refresh_visible();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keystore::Writable;
+
+    #[test]
+    fn secret_keys_are_not_copied() {
+        let entry = KeystoreEntry {
+            alias: "aes".into(),
+            certificate: None,
+            content: Content::Certificates {
+                kind: Kind::SecretKey,
+                certificates: vec![],
+            },
+            chain_warning: None,
+        };
+        let source = Document::jks(Writable::empty(true), "");
+        let mut selection = Selection::new("source.jceks".into(), source, vec![entry]);
+        let reason = "only certificates and private keys are copied";
+        assert_eq!(selection.blocked, [Some(reason)]);
+        // It is not chosen with the others.
+        selection.toggle_all();
+        assert_eq!(selection.chosen, [false]);
+        assert_eq!(selection.item(0).err().as_deref(), Some(reason));
+    }
+}
