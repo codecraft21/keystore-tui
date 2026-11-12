@@ -22,6 +22,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Renaming entries](#renaming-entries)
   - [Importing certificates](#importing-certificates)
   - [Importing key pairs](#importing-key-pairs)
+  - [Generating key pairs](#generating-key-pairs)
   - [Copying entries from another keystore](#copying-entries-from-another-keystore)
   - [Exporting private keys](#exporting-private-keys)
   - [Changing the password](#changing-the-password)
@@ -63,10 +64,12 @@ document and the usage reference, and also the README if its overview changes.
   [Importing key pairs](#importing-key-pairs)) or copied from another
   keystore (see [Copying entries from another
   keystore](#copying-entries-from-another-keystore)), and when a private key
-  is exported under a password.
+  is exported under a password. A new private key is made only in memory, and
+  is encrypted with the keystore's password at once; see [Generating key
+  pairs](#generating-key-pairs).
 - The following are out of scope for now: importing anything but a trusted
   certificate, a key pair, or another keystore's entries, keystore editing other than [deleting](#deleting-entries) and
-  [renaming](#renaming-entries) entries, and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
+  [renaming](#renaming-entries) entries and [generating key pairs](#generating-key-pairs), and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
   features; each one updates this section when it ships.
 
 ## Command-line startup
@@ -318,8 +321,9 @@ any existing incomplete-entry warnings.
 ### Deleting entries
 
 - JKS, JCEKS, and PKCS12 keystores can be changed. In the entry list of one,
-  a line above the shortcuts shows `n New | i Import | e Export | r Rename | d Delete | w
-  Save | W Save as | p Password | P Key password`.
+  two lines above the shortcuts show `Keystore: n New | g Generate | i Import
+  | w Save | W Save as | p Password` and `Entry: e Export | r Rename | d
+  Delete | P Key password`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
   keys do nothing when no entry is selected.
@@ -332,7 +336,7 @@ any existing incomplete-entry warnings.
   chain certificates that no other entry uses, which would otherwise be
   listed as entries of their own. Certificates another key's chain needs, and
   trusted certificates, stay.
-- For a certificate file, `d`, `Delete`, `r`, `i`, `p`, `w`, and `W` show a
+- For a certificate file, `d`, `Delete`, `r`, `i`, `g`, `p`, `w`, and `W` show a
   red message that only keystores can be changed. A PKCS12 keystore whose
   entry list is incomplete (see [PKCS12
   compatibility](#pkcs12-compatibility)) cannot be changed either, because
@@ -427,6 +431,71 @@ any existing incomplete-entry warnings.
   one of its private keys, because the key and certificate are paired by the
   certificate's digest.
 - Whether the certificates are trusted or valid is not checked.
+
+### Generating key pairs
+
+- In a keystore, `g` opens a form titled `Generate key pair` over the list,
+  72 columns by 16 rows, with one field per row:
+  - `Algorithm`: `RSA 2048`, `RSA 3072`, `RSA 4096`, `EC P-256`, `EC P-384`,
+    `EC P-521`, or `Ed25519`. It starts at `EC P-256`.
+  - The subject name: `Common name (CN)`, `Organization (O)`, `Org. unit
+    (OU)`, `Locality (L)`, `State (ST)`, and `Country (C)`. Only the common
+    name is required. The country is a two-letter code, stored in upper case.
+  - `Valid for (days)`: from 1 to 36500, starting at `365`.
+  - `Alternative names`: optional, separated by commas. A name that reads as
+    an IPv4 or IPv6 address is stored as an IP address, one holding `@` as an
+    email address, and any other as a DNS name. Names must be ASCII without
+    spaces.
+  - `Purpose`: `None`, `TLS server`, `TLS client`, `TLS server and client`,
+    `Certificate authority`, or `Code signing`. It starts at `None`.
+- `Up` / `Down` or `Shift+Tab` / `Tab` move between the fields, wrapping at
+  either end. The selected row is highlighted like the selected entry, and a
+  line below the fields says what the field is for. `Left` / `Right` change
+  the algorithm and the purpose, wrapping at either end. In the other fields
+  every character without `Ctrl` or `Alt` is typed, including `q`;
+  `Backspace` deletes a character and `Ctrl+U` clears the field. A text too
+  long for its row shows its end. `Esc` closes the form and changes nothing;
+  `Ctrl+C` still quits.
+- `Enter` checks the form. The first field that is wrong is selected and a
+  red message below the fields says why; the message clears on the next key.
+- A prompt then asks `Alias for the generated key pair:`, suggesting the
+  common name in lower case. It follows the same rules as the [rename
+  prompt](#renaming-entries), except that `Esc` returns to the form as it was
+  filled in.
+- Once the alias is accepted, `Generating <algorithm> key pair...` is shown
+  in yellow while the key is made; keys are not read until it is done. RSA
+  4096 takes a few seconds.
+- The certificate is version 3 and signed with the new key: RSA with SHA-256,
+  EC with SHA-256, SHA-384, or SHA-512 for P-256, P-384, or P-521, and
+  Ed25519 with its own signature. RSA keys use the public exponent 65537.
+  The issuer is the subject, the validity starts at the current time, and
+  the serial number is 16 random bytes, positive. The subject lists the
+  country first and the common name last, leaving out empty fields.
+- The certificate always holds a subject key identifier, and the alternative
+  names when any were given. The purpose adds:
+  - `None`: nothing.
+  - `TLS server`: a critical key usage of digital signature, with key
+    encipherment for an RSA key, and the extended key usage server
+    authentication.
+  - `TLS client`: a critical key usage of digital signature, and the
+    extended key usage client authentication.
+  - `TLS server and client`: the key usage of `TLS server`, and both
+    extended key usages.
+  - `Certificate authority`: critical basic constraints marking a CA, without
+    a path length, and a critical key usage of certificate signing and CRL
+    signing.
+  - `Code signing`: a critical key usage of digital signature, and the
+    extended key usage code signing.
+- The key pair is added as a private-key entry with a chain of that one
+  certificate, listed in alias order and selected, under the rules of an
+  [imported key pair](#importing-key-pairs): the key is protected with the
+  keystore's password and the plain key is wiped from memory. A green message
+  such as `Generated EC P-256 key pair '<alias>'.` names it. Nothing is
+  written until the keystore is saved.
+- When the key pair cannot be added, for example to a PKCS12 keystore with an
+  empty password, a red message says why and the generated key is discarded.
+- In a terminal smaller than the form, a resize hint is shown instead; `Esc`
+  and `Ctrl+C` still work.
 
 ### Copying entries from another keystore
 

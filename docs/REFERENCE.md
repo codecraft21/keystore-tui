@@ -117,6 +117,7 @@ certificates whose names match another certificate or key.
 | `s` | Switch the sort order between alias and expiry date |
 | `o` | Open another keystore or certificate file |
 | `n` | Create a new, empty JKS, JCEKS, or PKCS12 keystore |
+| `g` | Generate a key pair with a self-signed certificate |
 | `i` | Import a trusted certificate, a key pair, or another keystore's entries from a file |
 | `e` | Export the selected private key, alone or with its certificates |
 | `r` | Rename the selected entry |
@@ -145,6 +146,16 @@ next to the app name, but nothing changes on disk until you save.
   key cancels. In PKCS12, a private key goes with its certificate and the
   chain certificates no other entry uses.
 - **Rename:** press `r` on an entry, edit its alias, and press `Enter`.
+- **Generate a key pair:** press `g` and fill in the form. Choose the
+  algorithm (RSA 2048, 3072, or 4096, EC P-256, P-384, or P-521, or Ed25519)
+  and the purpose with `Left` / `Right`, and type the other fields; move
+  between them with `Up` / `Down` or `Tab`. Only the common name is
+  required. Alternative names are separated by commas: DNS names, IP
+  addresses, or email addresses. The purpose sets the key usage extensions
+  for a TLS server, a TLS client, both, a certificate authority, or code
+  signing. Press `Enter`, then confirm or edit the alias; `Esc` there goes
+  back to the form. The new key gets a self-signed certificate and is stored
+  under the keystore's password.
 - **Import a trusted certificate:** press `i`, choose a file holding one
   certificate (PEM, DER, or PKCS#7) in the browser, then confirm or edit the
   suggested alias and press `Enter`.

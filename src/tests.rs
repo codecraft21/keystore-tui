@@ -614,7 +614,7 @@ fn selecting_a_valid_empty_keystore_displays_its_absolute_path() {
     assert!(app.file_picker.is_none());
     let rendered = screen(&mut app, 200, 24);
     assert_eq!(
-        rendered.lines().nth(21).unwrap().trim_end(),
+        rendered.lines().nth(20).unwrap().trim_end(),
         format!("Path: '{}'", expected.display())
     );
     // Only the path itself is blue, not the label or the quotes.
@@ -626,7 +626,7 @@ fn selecting_a_valid_empty_keystore_displays_its_absolute_path() {
         } else {
             Color::Reset
         };
-        assert_eq!(path_bar[(x, 21)].fg, color, "column {x}");
+        assert_eq!(path_bar[(x, 20)].fg, color, "column {x}");
     }
     let title = rendered.lines().next().unwrap();
     assert!(title.contains(" keystore-tui "));
@@ -1766,7 +1766,7 @@ fn aliases(path: &Path) -> Vec<String> {
 fn deleting_an_entry_asks_first_and_changes_the_file_only_on_save() {
     let directory = TestDirectory::new();
     let (mut app, path) = editing(&directory);
-    assert!(screen(&mut app, 120, 24).contains("d Delete | w Save | W Save as"));
+    assert!(screen(&mut app, 120, 24).contains("w Save | W Save as | p Password"));
 
     press(&mut app, KeyCode::Char('d'));
     assert!(screen(&mut app, 120, 24).contains("Delete entry 'root-cert'? Press y"));
@@ -1928,7 +1928,12 @@ fn type_alias(app: &mut App, alias: &str) {
 fn renaming_an_entry_keeps_alias_order_and_is_written_on_save() {
     let directory = TestDirectory::new();
     let (mut app, path) = editing(&directory);
-    assert!(screen(&mut app, 120, 24).contains("i Import | e Export | r Rename | d Delete"));
+    let rendered = screen(&mut app, 120, 24);
+    assert!(
+        rendered
+            .contains("Keystore: n New | g Generate | i Import | w Save | W Save as | p Password")
+    );
+    assert!(rendered.contains("Entry: e Export | r Rename | d Delete | P Key password"));
     press(&mut app, KeyCode::Char('r'));
     assert!(screen(&mut app, 120, 24).contains("New alias for 'root-cert': root-cert_"));
     // Letters are typed into the alias instead of quitting.
@@ -2056,15 +2061,17 @@ fn rename_and_import_need_an_editable_keystore() {
     fs::write(&path, test_support::BUNDLE_PEM).unwrap();
     let mut app = App::default();
     app.open_file(path);
-    for key in ['r', 'i'] {
+    for key in ['r', 'i', 'g'] {
         press(&mut app, KeyCode::Char(key));
         assert!(app.alias_prompt.is_none() && app.file_picker.is_none());
+        assert!(app.generating.is_none());
         assert!(red_text(&mut app).contains(NOT_EDITABLE), "{key}");
     }
     let mut app = App::default();
-    for key in ['r', 'i'] {
+    for key in ['r', 'i', 'g'] {
         press(&mut app, KeyCode::Char(key));
         assert!(app.message.is_none() && app.file_picker.is_none());
+        assert!(app.generating.is_none());
     }
 }
 
@@ -2459,7 +2466,7 @@ fn exporting_a_private_key_writes_a_new_protected_file() {
     let directory = TestDirectory::new();
     let (mut app, _, key) = keystore_with_keys(&directory, "store.jks");
     let file = |name: &str| directory.path().join(name);
-    assert!(screen(&mut app, 120, 24).contains("i Import | e Export | r Rename"));
+    assert!(screen(&mut app, 120, 24).contains("Entry: e Export | r Rename"));
     // Only a private key that the keystore's password unlocks is exported.
     press(&mut app, KeyCode::Char('e'));
     assert!(red_text(&mut app).contains("Only private keys are exported with e"));
@@ -2796,7 +2803,7 @@ fn pkcs12_keystores_are_edited_and_saved_like_the_others() {
     app.open_file(path.clone());
     type_password(&mut app, "changeit");
     press(&mut app, KeyCode::Enter);
-    assert!(screen(&mut app, 120, 24).contains("i Import | e Export | r Rename"));
+    assert!(screen(&mut app, 120, 24).contains("Entry: e Export | r Rename"));
 
     press(&mut app, KeyCode::Char('r'));
     type_alias(&mut app, "Renamed");
@@ -2936,7 +2943,7 @@ fn a_key_password_is_changed_after_unlocking_the_key() {
         let (mut app, path, key) = keystore_with_keys(&directory, name);
         let original = fs::read(&path).unwrap();
         assert!(
-            screen(&mut app, 120, 24).contains("p Password | P Key password"),
+            screen(&mut app, 120, 24).contains("d Delete | P Key password"),
             "{name}"
         );
 
@@ -3244,4 +3251,133 @@ fn keystores_that_cannot_be_converted_are_left_alone() {
         app.message
     );
     assert_eq!(app.entries[0].certificates().len(), 2);
+}
+
+/// Fills in the form for a new key pair named `name` and confirms it.
+fn fill_key_pair_form(app: &mut App, name: &str) {
+    press(app, KeyCode::Char('g'));
+    press(app, KeyCode::Down);
+    type_password(app, name);
+    press(app, KeyCode::Enter);
+}
+
+#[test]
+fn generating_a_key_pair_adds_a_private_key_entry() {
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+
+    press(&mut app, KeyCode::Char('g'));
+    let rendered = screen(&mut app, 120, 30);
+    assert!(rendered.contains(" Generate key pair "));
+    assert!(rendered.contains("Up/Down Tab Field | Left/Right Change | Enter Next"));
+    // Esc closes the form, and letters are typed into it.
+    press(&mut app, KeyCode::Esc);
+    assert!(app.generating.is_none() && !app.modified);
+    press(&mut app, KeyCode::Char('g'));
+    press(&mut app, KeyCode::Down);
+    for ch in "Q.test".chars() {
+        assert!(!press(&mut app, KeyCode::Char(ch)));
+    }
+    assert!(screen(&mut app, 120, 30).contains("Common name (CN)     Q.test_"));
+
+    // The alias is asked before the key is generated; Esc goes back to the
+    // form as it was filled in.
+    press(&mut app, KeyCode::Enter);
+    assert!(app.generating.is_none());
+    assert!(screen(&mut app, 120, 30).contains("Alias for the generated key pair: q.test_"));
+    press(&mut app, KeyCode::Esc);
+    assert!(app.alias_prompt.is_none());
+    assert!(screen(&mut app, 120, 30).contains("Common name (CN)     Q.test_"));
+    press(&mut app, KeyCode::Enter);
+    type_alias(&mut app, "ROOT-cert");
+    assert!(red_text(&mut app).contains("An entry named 'root-cert' already exists."));
+    assert!(app.generation.is_none() && !app.finish_generation());
+
+    type_alias(&mut app, "New");
+    assert!(app.alias_prompt.is_none() && !app.modified);
+    let waiting = buffer(&mut app, 120, 30);
+    let yellow: String = waiting
+        .content
+        .iter()
+        .filter(|cell| cell.fg == Color::Yellow)
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(yellow.contains("Generating EC P-256 key pair..."));
+    assert!(app.finish_generation());
+    assert!(!app.finish_generation());
+    assert_eq!(
+        app.message,
+        Some(("Generated EC P-256 key pair 'new'.".into(), false))
+    );
+    assert!(app.modified);
+    let generated = &app.entries[app.selected_entry().unwrap()];
+    assert_eq!(
+        (generated.alias.as_str(), generated.kind()),
+        ("new", "Private key")
+    );
+    let summary = generated.certificate.as_ref().unwrap();
+    assert_eq!(
+        (summary.subject.as_str(), summary.algorithm.as_str()),
+        ("CN=Q.test", "EC")
+    );
+    let chain = generated.certificates().to_vec();
+    assert_eq!(chain.len(), 1);
+
+    // The key is written on save, protected with the keystore's password.
+    press(&mut app, KeyCode::Char('w'));
+    assert!(!app.modified, "{:?}", app.message);
+    assert_eq!(aliases(&path), ["new", "root-cert", "server-key"]);
+    let key = saved_key(&path, 0, "changeit").unwrap();
+    assert_eq!(
+        key_import::matching_chain(&key, std::slice::from_ref(&chain)),
+        Ok(Some(chain))
+    );
+    assert_eq!(
+        app.entries,
+        keystore::load_entries(&fs::read(&path).unwrap(), "changeit").unwrap()
+    );
+}
+
+#[test]
+fn key_pairs_are_generated_into_pkcs12_keystores_with_a_password() {
+    let directory = TestDirectory::new();
+    let mut rng = test_support::TestRng(1);
+    let mut app = App::default();
+    for (name, password) in [("store.p12", "changeit"), ("open.p12", "")] {
+        let path = directory.path().join(name);
+        fs::write(
+            &path,
+            pkcs12::Writable::empty(password).encode(&mut rng).unwrap(),
+        )
+        .unwrap();
+        app.open_file(path.clone());
+        type_password(&mut app, password);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.document.is_some());
+        fill_key_pair_form(&mut app, "host.test");
+        if password.is_empty() {
+            press(&mut app, KeyCode::Enter);
+            assert!(app.finish_generation());
+            assert!(red_text(&mut app).contains("a key needs a keystore password"));
+            assert!(app.entries.is_empty() && !app.modified);
+            continue;
+        }
+        press(&mut app, KeyCode::Enter);
+        assert!(app.finish_generation(), "{:?}", app.message);
+        assert_eq!(
+            app.message,
+            Some(("Generated EC P-256 key pair 'host.test'.".into(), false))
+        );
+        press(&mut app, KeyCode::Char('w'));
+        assert!(!app.modified, "{:?}", app.message);
+        assert_eq!(app.entries, pkcs12_entries(&path, password));
+        assert_eq!(app.entries[0].kind(), "Private key");
+    }
+
+    // A keystore closed in between has nowhere to put the key pair.
+    fill_key_pair_form(&mut app, "late.test");
+    press(&mut app, KeyCode::Enter);
+    app.document = None;
+    assert!(app.finish_generation());
+    assert!(red_text(&mut app).contains("No keystore is open."));
 }

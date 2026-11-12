@@ -13,6 +13,8 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |
 | `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
 | `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate or a key pair under the typed alias |
+| `src/generate.rs` | Generating a key pair: the RSA, EC, and Ed25519 keys as PKCS #8, the form asking for the certificate's fields, and adding the result under the typed alias |
+| `src/signing.rs` | Certificates signed with a PKCS #8 key: the subject name, the extensions of a purpose, alternative names, the signature algorithm of a key type, and a self-signed certificate |
 | `src/key_export.rs` | Exporting a private key, alone or with its certificates, to a new PKCS12, PEM, or DER file, and its name prompt |
 | `src/key_import.rs` | Importing a key pair: finding the private key in a PEM or PKCS #8 file, or a keystore to copy from, the file's password prompt, and matching a key to its certificate chain |
 | `src/copy_entries.rs` | Copying entries from another keystore: the list in which they are chosen, and adding them to the open keystore |
@@ -48,10 +50,14 @@ Dependencies are deliberately few:
 
 - `ratatui`, with the `crossterm` backend, for the UI.
 - `sha1` for the JKS and JCEKS integrity digest and the JKS key protector.
-- `crown` for ASN.1, PEM, X.509, PKCS#7, PKCS12 (MAC and PBE), and signature
-  verification (certificates and requests).
+- `crown` for ASN.1, PEM, X.509, PKCS#7, PKCS12 (MAC and PBE), signature
+  verification (certificates and requests), key generation, and signing
+  certificates. It generates RSA keys without giving out their private parts,
+  so `generate.rs` works them out again from the modulus and the random
+  candidates the generator drew.
 - `zeroize` for wiping passwords, including the one kept for saving.
-- `getrandom` for the random salts and IVs of saved PKCS12 keystores.
+- `getrandom` for the random salts and IVs of saved PKCS12 keystores, and for
+  generated keys and serial numbers.
 
 The PTY smoke tests also use `rustix` (Unix only, a dev-dependency) for
 pseudo-terminals; crossterm already depends on it.
