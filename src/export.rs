@@ -17,6 +17,8 @@ pub enum Scope {
     Chain,
     /// A certificate request entry's request.
     Request,
+    /// A private key, with its certificates when the file name asks for them.
+    KeyPair,
 }
 
 impl Scope {
@@ -25,6 +27,7 @@ impl Scope {
             Self::Certificate => "certificate",
             Self::Chain => "chain",
             Self::Request => "certificate request",
+            Self::KeyPair => "key pair",
         }
     }
 
@@ -33,6 +36,7 @@ impl Scope {
         match self {
             Self::Certificate | Self::Chain => "pem",
             Self::Request => "csr",
+            Self::KeyPair => "p12",
         }
     }
 
@@ -41,6 +45,7 @@ impl Scope {
         match self {
             Self::Certificate | Self::Chain => "certificate",
             Self::Request => "request",
+            Self::KeyPair => "key",
         }
     }
 
@@ -49,6 +54,7 @@ impl Scope {
         match self {
             Self::Certificate | Self::Chain => "CERTIFICATE",
             Self::Request => "CERTIFICATE REQUEST",
+            Self::KeyPair => "PRIVATE KEY",
         }
     }
 }
@@ -193,6 +199,12 @@ mod tests {
         assert_eq!(
             Path::new(&prompt.path),
             directory.path().join("server-chain-2.pem")
+        );
+        let prompt = ExportPrompt::new(Scope::KeyPair, directory.path(), "..");
+        assert_eq!(Path::new(&prompt.path), directory.path().join("key.p12"));
+        assert_eq!(
+            (Scope::KeyPair.label(), Scope::KeyPair.pem_label()),
+            ("key pair", "PRIVATE KEY")
         );
         let prompt = ExportPrompt::new(Scope::Certificate, directory.path(), "..");
         assert_eq!(

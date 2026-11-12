@@ -543,15 +543,7 @@ impl Writable {
         chain: &[Vec<u8>],
         rng: &mut impl Rng,
     ) -> Result<Vec<KeystoreEntry>, WriteError> {
-        let encrypted = encrypt_private_key(
-            key,
-            &self.password,
-            Pbes2Cipher::Aes256Cbc { iv: Vec::new() },
-            PBE_ITERATIONS,
-            rng,
-        )
-        .map_err(|_| "the key could not be encrypted")?
-        .encode();
+        let encrypted = encrypt_key(key, &self.password, rng)?;
         let mut attributes = vec![friendly_name_attribute(alias)];
         if let Some((leaf, issuers)) = chain.split_first() {
             let id: [u8; 20] = Sha1::digest(leaf).into();
@@ -842,6 +834,19 @@ fn decrypt_safe(content: &[u8], password: &[u8]) -> Result<Vec<u8>, SafeError> {
     let algorithm = AlgorithmIdentifier::parse(&mut info).map_err(unreadable)?;
     let ciphertext = info.read_implicit(0, false).map_err(unreadable)?;
     pbe_decrypt(&algorithm, ciphertext, password)
+}
+
+/// The PKCS #8 private key `key` as an encoded `EncryptedPrivateKeyInfo`
+/// under `password`.
+pub(crate) fn encrypt_key(
+    key: &[u8],
+    password: &[u8],
+    rng: &mut impl Rng,
+) -> Result<Vec<u8>, WriteError> {
+    let cipher = Pbes2Cipher::Aes256Cbc { iv: Vec::new() };
+    encrypt_private_key(key, password, cipher, PBE_ITERATIONS, rng)
+        .map(|encrypted| encrypted.encode())
+        .map_err(|_| "the key could not be encrypted")
 }
 
 /// The PKCS #8 private key in the encoded `EncryptedPrivateKeyInfo`

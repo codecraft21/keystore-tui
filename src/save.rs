@@ -36,13 +36,13 @@ const NO_RANDOMNESS: &str = "The system provided no random numbers; nothing was 
 
 /// The operating system's random numbers, for PKCS12 salts.
 #[derive(Default)]
-struct OsRng {
+pub(crate) struct OsRng {
     failed: bool,
 }
 
 impl OsRng {
     /// Fails if any request for random numbers was not met.
-    fn check(mut self) -> Result<(), String> {
+    pub(crate) fn check(mut self) -> Result<(), String> {
         // Also catches a source that fails before it is first used.
         self.fill_bytes(&mut [0]);
         (!self.failed)
@@ -508,7 +508,7 @@ impl Document {
 
     /// The PKCS #8 encoding of the private key listed at `index`, recovered
     /// in memory with the keystore's password.
-    fn private_key(&self, index: usize) -> Result<Zeroizing<Vec<u8>>, String> {
+    pub(crate) fn private_key(&self, index: usize) -> Result<Zeroizing<Vec<u8>>, String> {
         match self {
             Self::Jks { .. } => match self.recover_key(index, None) {
                 // The other formats only hold PKCS #8 keys.
@@ -567,16 +567,30 @@ impl Format {
 
 /// Writes a new file, failing if `path` already exists.
 pub fn create(path: &Path, data: &[u8]) -> Result<(), String> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| match error.kind() {
-            io::ErrorKind::AlreadyExists => {
-                format!("'{}' already exists; choose another name.", path.display())
-            }
-            _ => format!("Cannot create '{}': {error}", path.display()),
-        })?;
+    create_with(path, data, false)
+}
+
+/// Like `create`, for a file holding a private key: on Unix only the owner
+/// can read or write it.
+pub fn create_private(path: &Path, data: &[u8]) -> Result<(), String> {
+    create_with(path, data, true)
+}
+
+fn create_with(path: &Path, data: &[u8], private: bool) -> Result<(), String> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if private {
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+    let mut file = options.open(path).map_err(|error| match error.kind() {
+        io::ErrorKind::AlreadyExists => {
+            format!("'{}' already exists; choose another name.", path.display())
+        }
+        _ => format!("Cannot create '{}': {error}", path.display()),
+    })?;
     file.write_all(data)
         .and_then(|()| file.sync_all())
         .map_err(|error| {

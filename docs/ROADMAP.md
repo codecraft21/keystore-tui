@@ -40,12 +40,14 @@ backup.
 
 From this tier on, the app decrypts private keys.
 
-Done: items 7, 8, and 10. PKCS12 keys are re-encrypted when the keystore
+Done: items 7 to 10. PKCS12 keys are re-encrypted when the keystore
 password changes, a JKS or JCEKS private key's own password can be changed, a
 keystore converts between JKS, JCEKS, and PKCS12, and a key pair is imported
-from a PEM, PKCS #8, or PKCS12 file. Still open for items 7 and 10: JCEKS and
+from a PEM, PKCS #8, or PKCS12 file, and a private key is exported to
+PKCS12, PEM, or PKCS #8. Still open for items 7 and 10: JCEKS and
 PKCS12 secret keys, which need Java's sealed-object format. Still open for
-item 8: keys encrypted in OpenSSL's old PEM format.
+items 8 and 9: OpenSSL's older PEM formats, which are the encrypted one on
+import and the `RSA PRIVATE KEY` and `EC PRIVATE KEY` ones on export.
 
 7. **Unlock entry, and set or change an entry password:** decrypt key entries
    (JKS and JCEKS key protection, PKCS12 shrouded key bags). Items 8 to 16

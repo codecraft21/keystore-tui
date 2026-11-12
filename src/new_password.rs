@@ -23,6 +23,9 @@ pub enum Purpose {
     /// Change the password of the private key at this index, unlocked with
     /// the password given, or with the keystore's when there is none.
     KeyChange(usize, Option<Password>),
+    /// Protect the private key at this index in the new file it is exported
+    /// to. An empty password leaves the key unencrypted.
+    Export(PathBuf, usize),
 }
 
 /// A new password being typed, then typed again to rule out a typing error.
@@ -34,7 +37,7 @@ pub struct NewPasswordPrompt {
 }
 
 impl NewPasswordPrompt {
-    fn new(purpose: Purpose) -> Self {
+    pub(crate) fn new(purpose: Purpose) -> Self {
         Self {
             purpose,
             first: None,
@@ -190,6 +193,9 @@ impl App {
                             Purpose::Change => self.change_password(&typed.0),
                             Purpose::KeyChange(index, current) => {
                                 self.change_key_password(index, current, &typed.0);
+                            }
+                            Purpose::Export(path, index) => {
+                                self.export_key_with(path, index, &typed.0);
                             }
                             Purpose::KeyCurrent(_) => {}
                         }

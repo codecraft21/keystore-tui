@@ -80,7 +80,7 @@ fn rename_import_save_and_quit_restores_terminal() {
     )
     .unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "i Import | r Rename"]);
+    app.expect(&["root-cert", "i Import | e Export | r Rename"]);
     app.send(b"r");
     app.expect(&["New alias for 'root-cert': root-cert_"]);
     app.send(b"\x15q"); // Ctrl+U clears; `q` is typed, not a quit.
@@ -290,7 +290,7 @@ fn import_key_pair_save_and_quit_restores_terminal() {
     fs::write(&path, &original).unwrap();
     fs::write(directory.join("pair.pem"), key_pair_pem()).unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "i Import | r Rename"]);
+    app.expect(&["root-cert", "i Import | e Export | r Rename"]);
     app.send(b"i");
     app.expect(&["Import certificate or key pair from file", "pair.pem"]);
     app.send(b"pair\r");
@@ -310,6 +310,32 @@ fn import_key_pair_save_and_quit_restores_terminal() {
     // The key is written protected, never as it was read.
     let secret = [7_u8; 32];
     assert!(!saved.windows(32).any(|window| window == secret));
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Exporting private keys](../../docs/SPEC.md#exporting-private-keys),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn export_private_key_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("keys.jks");
+    let original = key_keystore("");
+    fs::write(&path, &original).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("keys.jks")]);
+    app.expect(&["server", "e Export"]);
+    app.send(b"e");
+    app.expect(&["Export key to:", ".key .p8 Key only"]);
+    // `q` is typed into the name, not a quit.
+    app.send(b"\x15q.key\r");
+    app.expect(&["Password for the exported key: _", "Empty: unencrypted"]);
+    app.send(b"secret\r");
+    app.expect(&["Type the password again: _"]);
+    app.send(b"secret\r");
+    app.expect(&["Exported key 'server' to"]);
+    let exported = fs::read_to_string(directory.join("q.key")).unwrap();
+    assert!(exported.starts_with("-----BEGIN ENCRYPTED PRIVATE KEY-----"));
+    assert_eq!(fs::read(&path).unwrap(), original);
     app.send(b"q");
     app.assert_restored();
 }
