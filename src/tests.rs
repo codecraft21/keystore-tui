@@ -1987,11 +1987,12 @@ fn importing_a_certificate_adds_a_trusted_entry() {
     )
     .unwrap();
 
+    fs::write(directory.path().join("junk.der"), b"\x30\x03\x02\x01\x00").unwrap();
     // Files without exactly one certificate are refused.
     for (name, error) in [
         ("bundle", "holds 2 certificates"),
         ("request", "holds no certificate"),
-        ("store", "is not a certificate file"),
+        ("junk", "is not a certificate file"),
     ] {
         press(&mut app, KeyCode::Char('i'));
         assert!(screen(&mut app, 120, 24).contains(" Import certificate or key pair from file "));
@@ -2200,6 +2201,127 @@ fn importing_a_key_pair_adds_a_private_key_entry() {
 }
 
 #[test]
+fn entries_are_copied_from_another_keystore() {
+    let directory = TestDirectory::new();
+    let (_, _, key) = keystore_with_keys(&directory, "source.jks");
+    let (mut app, path) = editing(&directory);
+
+    import(&mut app, "source");
+    assert!(screen(&mut app, 120, 24).contains("Password of 'source.jks': _"));
+    type_password(&mut app, "wrong");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("Incorrect password."));
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains(" Import entries from 'source.jks' "));
+    assert!(rendered.contains("> [ ] cert | Trusted certificate"));
+    assert!(rendered.contains("[-] own | Private key (its key has a password of its own)"));
+    assert!(rendered.contains("[ ] shared | Private key"));
+    assert!(rendered.contains("Space Choose | a All | Up/Down j/k Move | Enter Import"));
+
+    // An entry that cannot be copied is neither chosen nor imported.
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char(' '));
+    assert!(screen(&mut app, 120, 24).contains("> [-] own"));
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("'own' is not copied: its key has a password of its own."));
+    assert!(app.copying.is_some() && app.alias_prompt.is_none());
+    // The selection wraps; `a` chooses all that can be copied, or none.
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Up);
+    press(&mut app, KeyCode::Char('k'));
+    assert!(screen(&mut app, 120, 24).contains("> [-] own"));
+    press(&mut app, KeyCode::Char('a'));
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains("[x] cert") && rendered.contains("[x] shared"));
+    press(&mut app, KeyCode::Char('a'));
+    assert!(screen(&mut app, 120, 24).contains("[ ] cert"));
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.message,
+        Some(("Imported 2 entries from 'source.jks'.".into(), false))
+    );
+    assert!(app.modified && app.copying.is_none());
+    assert_eq!(app.entries.len(), 4);
+    press(&mut app, KeyCode::Char('w'));
+    assert!(!app.modified, "{:?}", app.message);
+    assert_eq!(
+        aliases(&path),
+        ["cert", "root-cert", "server-key", "shared"]
+    );
+    assert_eq!(saved_key(&path, 3, "changeit"), Ok(key.clone()));
+    assert_eq!(
+        app.entries,
+        keystore::load_entries(&fs::read(&path).unwrap(), "changeit").unwrap()
+    );
+
+    // Aliases that exist are marked, and skipped when several are copied.
+    import(&mut app, "source");
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("[ ] cert | Trusted certificate (alias exists)"));
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.message,
+        Some((
+            "Imported 0 entries from 'source.jks'. Skipped, alias exists: cert, shared.".into(),
+            true
+        ))
+    );
+    assert!(!app.modified);
+    // A single entry, here the highlighted one, is given its alias.
+    import(&mut app, "source");
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Up);
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Alias for the imported key pair: shared_"));
+    type_alias(&mut app, "copy");
+    assert!(screen(&mut app, 120, 24).contains("Imported key pair as 'copy'."));
+    import(&mut app, "source");
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char(' '));
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Alias for the imported certificate: cert_"));
+    press(&mut app, KeyCode::Esc);
+    // Leaving the list copies nothing.
+    import(&mut app, "source");
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Esc);
+    assert!(app.copying.is_none());
+    assert_eq!(app.entries.len(), 5);
+
+    // An entry that fails stops the copy; those before it stay.
+    let path = directory.path().join("open.p12");
+    fs::write(&path, include_bytes!("../tests/fixtures/passwordless.p12")).unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    import(&mut app, "source");
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Enter);
+    let (message, failed) = app.message.clone().unwrap();
+    assert!(failed && app.modified);
+    assert!(
+        message.starts_with("Imported 1 entry from 'source.jks'. 'shared' failed: Not imported"),
+        "{message}"
+    );
+    // Without a list, its keys do nothing.
+    let mut app = App::default();
+    app.handle_selection(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.message.is_none());
+}
+
+#[test]
 fn key_pairs_are_imported_from_and_into_pkcs12_keystores() {
     use test_support::{TestRng, ed25519_certificate, ed25519_pkcs8};
     let directory = TestDirectory::new();
@@ -2271,18 +2393,43 @@ fn key_pairs_are_imported_from_and_into_pkcs12_keystores() {
     type_alias(&mut app, "again");
     assert!(red_text(&mut app).contains("the keystore already holds this key pair as 'source'"));
     press(&mut app, KeyCode::Esc);
-    // PKCS12 files without exactly one key are refused.
-    for name in ["none", "two"] {
-        import(&mut app, name);
-        type_password(&mut app, "srcpass");
-        press(&mut app, KeyCode::Enter);
-        assert!(
-            red_text(&mut app).contains("it must hold exactly one private key"),
-            "{name}"
-        );
-        assert!(app.key_import.is_none());
-    }
-    assert_eq!(app.entries.len(), 1);
+    // An empty PKCS12 keystore has nothing to copy.
+    import(&mut app, "none");
+    type_password(&mut app, "srcpass");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("'none.p12' holds no entries."));
+    assert!(app.key_import.is_none() && app.copying.is_none());
+    // One with several entries lists them. Entries whose alias exists are
+    // skipped, and the others keep their alias.
+    import(&mut app, "two");
+    type_password(&mut app, "srcpass");
+    press(&mut app, KeyCode::Enter);
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains(" Import entries from 'two.p12' "));
+    assert!(rendered.contains("[ ] Source | Private key (alias exists)"));
+    assert!(rendered.contains("[ ] second | Private key"));
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.message,
+        Some((
+            "Imported 1 entry from 'two.p12'. Skipped, alias exists: source.".into(),
+            false
+        ))
+    );
+    assert_eq!(app.entries.len(), 2);
+    assert_eq!(app.entries[0].certificates(), [five]);
+    press(&mut app, KeyCode::Char('w'));
+    assert!(!app.modified, "{:?}", app.message);
+    let (_, saved) = pkcs12::parse(&fs::read(&path).unwrap())
+        .unwrap()
+        .open("changeit")
+        .ok()
+        .unwrap();
+    assert_eq!(
+        saved.unwrap().private_key(0).unwrap().as_slice(),
+        ed25519_pkcs8(5)
+    );
 
     // A passwordless truststore has no password to protect a key with. The
     // certificate request in the key's file is passed over.

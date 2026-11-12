@@ -5,7 +5,7 @@ use std::fs;
 
 use crate::fixtures::{
     TempDir, certificate_pem, empty_password_fixture, fixture_certificate, key_keystore,
-    key_pair_pem, with_empty_password_digest,
+    key_pair_pem, triage_keystore, with_empty_password_digest,
 };
 use crate::pty::PtyApp;
 
@@ -336,6 +336,43 @@ fn export_private_key_and_quit_restores_terminal() {
     let exported = fs::read_to_string(directory.join("q.key")).unwrap();
     assert!(exported.starts_with("-----BEGIN ENCRYPTED PRIVATE KEY-----"));
     assert_eq!(fs::read(&path).unwrap(), original);
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Copying entries from another keystore](../../docs/SPEC.md#copying-entries-from-another-keystore),
+/// [Saving](../../docs/SPEC.md#saving),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn copy_entries_save_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    let original = empty_password_fixture();
+    fs::write(&path, &original).unwrap();
+    fs::write(directory.join("triage.jks"), triage_keystore()).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "i Import"]);
+    app.send(b"i");
+    app.expect(&["Import certificate or key pair from file", "triage.jks"]);
+    app.send(b"triage\r");
+    app.expect(&["Password of 'triage.jks': _"]);
+    app.send(b"\r");
+    app.expect(&[
+        "Import entries from 'triage.jks'",
+        "> [ ] alpha | Trusted certificate",
+        "[ ] zeta-soon",
+    ]);
+    // `q` does not quit while the list is open.
+    app.send(b"qj ");
+    app.expect(&["> [x] beta-quit"]);
+    app.send(b"a");
+    app.expect(&["[x] alpha", "[x] zeta-soon"]);
+    app.send(b"\r");
+    app.expect(&["Imported 3 entries from 'triage.jks'.", "[modified]"]);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+    assert_eq!(&fs::read(&path).unwrap()[8..12], &4_u32.to_be_bytes());
     app.send(b"q");
     app.assert_restored();
 }

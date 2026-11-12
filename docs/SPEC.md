@@ -22,6 +22,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Renaming entries](#renaming-entries)
   - [Importing certificates](#importing-certificates)
   - [Importing key pairs](#importing-key-pairs)
+  - [Copying entries from another keystore](#copying-entries-from-another-keystore)
   - [Exporting private keys](#exporting-private-keys)
   - [Changing the password](#changing-the-password)
   - [Changing a key password](#changing-a-key-password)
@@ -59,10 +60,12 @@ document and the usage reference, and also the README if its overview changes.
   changes (see [Changing a key password](#changing-a-key-password)), when
   a keystore is converted to another format (see [Converting a
   keystore](#converting-a-keystore)), when a key pair is imported (see
-  [Importing key pairs](#importing-key-pairs)), and when a private key is
-  exported under a password.
+  [Importing key pairs](#importing-key-pairs)) or copied from another
+  keystore (see [Copying entries from another
+  keystore](#copying-entries-from-another-keystore)), and when a private key
+  is exported under a password.
 - The following are out of scope for now: importing anything but a trusted
-  certificate or a key pair, keystore editing other than [deleting](#deleting-entries) and
+  certificate, a key pair, or another keystore's entries, keystore editing other than [deleting](#deleting-entries) and
   [renaming](#renaming-entries) entries, and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
   features; each one updates this section when it ships.
 
@@ -368,7 +371,9 @@ any existing incomplete-entry warnings.
   certificate or key pair from file`, in the opened file's directory. `Esc`
   cancels.
 - A chosen file that holds a private key starts a [key pair
-  import](#importing-key-pairs). Any other file is read as a certificate file.
+  import](#importing-key-pairs), and a JKS, JCEKS, or PKCS12 keystore a [copy
+  of its entries](#copying-entries-from-another-keystore). Any other file is
+  read as a certificate file.
 - The chosen file must hold exactly one certificate, as PEM, DER, or PKCS#7.
   A file with several certificates, with none, or of another kind is refused
   with a red message, and nothing is imported.
@@ -394,13 +399,10 @@ any existing incomplete-entry warnings.
     own formats; the EC key must name its curve). It may also hold the
     certificates.
   - A DER file holding a PKCS #8 key, plain or encrypted.
-  - A PKCS12 keystore with exactly one private key, whose certificate chain is
-    imported with it.
 - A PEM file with several private keys, with a key encrypted in OpenSSL's old
   format (a `Proc-Type: 4,ENCRYPTED` header), with a malformed key, or with
-  any other `... PRIVATE KEY` block is refused with a red message. JKS and
-  JCEKS keystores are not read as a source.
-- For an encrypted key or a PKCS12 keystore, a prompt asks `Password of
+  any other `... PRIVATE KEY` block is refused with a red message.
+- For an encrypted key, a prompt asks `Password of
   '<file name>':`, masked like the keystore password. A wrong password shows
   `Incorrect password.` and leaves the prompt open; `Esc` cancels. The
   password is wiped once the key is read.
@@ -413,9 +415,8 @@ any existing incomplete-entry warnings.
   outside the chain are left out. Without a matching certificate, or for a
   type of key whose public key the app cannot work out, nothing is imported.
   RSA, EC (the NIST curves), Ed25519, and Ed448 keys are supported.
-- A prompt then asks `Alias for the imported key pair:`, suggesting the alias
-  from the PKCS12 keystore, or else the certificate's subject name, in lower
-  case. It follows the same rules as the [rename prompt](#renaming-entries).
+- A prompt then asks `Alias for the imported key pair:`, suggesting the
+  certificate's subject name in lower case. It follows the same rules as the [rename prompt](#renaming-entries).
 - The key pair is added as a private-key entry with the current time as its
   creation date, listed in alias order and selected. A green message names it.
   The key is protected with the keystore's password in the keystore's own
@@ -426,6 +427,38 @@ any existing incomplete-entry warnings.
   one of its private keys, because the key and certificate are paired by the
   certificate's digest.
 - Whether the certificates are trusted or valid is not checked.
+
+### Copying entries from another keystore
+
+- A JKS, JCEKS, or PKCS12 keystore chosen with `i` is a source to copy entries
+  from. A prompt asks `Password of '<file name>':`, as for an encrypted key;
+  press `Enter` alone for an empty password. A wrong password shows `Incorrect
+  password.` and leaves the prompt open. A PKCS12 keystore that cannot be read
+  completely, or a keystore without entries, is refused. The source file is
+  never changed.
+- A list titled `Import entries from '<file name>'` then shows the source's
+  entries as `[ ] <alias> | <type>`. `Up`, `Down`, `j`, and `k` move the
+  highlight, wrapping at both ends. `Space` chooses the highlighted entry or
+  drops it, shown as `[x]`; `a` chooses every entry that can be copied, or
+  none when they all are chosen. `Esc` cancels, and `q` does nothing.
+- Entries that cannot be copied are greyed, marked `[-]`, and followed by the
+  reason: secret keys, and private keys that the source's password does not
+  unlock or that are not in PKCS #8 form. An entry whose alias the open
+  keystore already has, ignoring case, is followed by `(alias exists)`.
+- `Enter` imports the chosen entries, or the highlighted one when none is
+  chosen:
+  - A single entry goes through the alias prompt of a [certificate
+    import](#importing-certificates) or a [key pair
+    import](#importing-key-pairs), which suggests its alias in lower case.
+  - Several entries keep their aliases, in lower case. Those whose alias
+    exists are skipped. A message such as `Imported 2 entries from
+    '<file name>'. Skipped, alias exists: <aliases>.` reports the result, in
+    red when nothing was imported or an entry failed.
+- A source with a single entry skips the list and goes straight to the alias
+  prompt.
+- A certificate is added as a trusted certificate, and a private key with its
+  certificate chain, protected with the open keystore's password, under the
+  same rules as the two imports above. Creation dates are not copied.
 
 ### Exporting private keys
 

@@ -117,7 +117,7 @@ certificates whose names match another certificate or key.
 | `s` | Switch the sort order between alias and expiry date |
 | `o` | Open another keystore or certificate file |
 | `n` | Create a new, empty JKS, JCEKS, or PKCS12 keystore |
-| `i` | Import a trusted certificate or a key pair from a file |
+| `i` | Import a trusted certificate, a key pair, or another keystore's entries from a file |
 | `e` | Export the selected private key, alone or with its certificates |
 | `r` | Rename the selected entry |
 | `d` / `Delete` | Delete the selected entry |
@@ -150,12 +150,18 @@ next to the app name, but nothing changes on disk until you save.
   suggested alias and press `Enter`.
 - **Import a key pair:** press `i` and choose the file holding the private
   key: a PEM file (PKCS #8, plain or encrypted, or OpenSSL's `RSA PRIVATE KEY`
-  and `EC PRIVATE KEY`), a DER PKCS #8 file, or a PKCS12 keystore with one
-  private key. Type the file's password if it is encrypted. If the file has no
+  and `EC PRIVATE KEY`) or a DER PKCS #8 file. Type the file's password if it
+  is encrypted. If the file has no
   certificate, choose the certificate file next. Then confirm or edit the
   alias. The key must match one of the certificates; it is stored under the
   keystore's password. Keys encrypted in OpenSSL's old PEM format are not
   read; convert them first with `openssl pkcs8 -topk8`.
+- **Copy entries from another keystore:** press `i`, choose a JKS, JCEKS, or
+  PKCS12 keystore, and type its password. In the list, press `Space` to choose
+  entries or `a` for all, then `Enter`. Several entries keep their aliases,
+  and those whose alias already exists are skipped; a single entry lets you
+  edit its alias. Private keys are stored under the open keystore's password.
+  Secret keys and keys with a password of their own are not copied.
 - **Export a private key:** press `e` on a private key, edit the file name,
   and type a password twice. A `.p12` or `.pfx` name writes a PKCS12 keystore
   with the key and its certificates, a `.pem` name the key followed by its
