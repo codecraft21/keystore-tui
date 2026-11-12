@@ -169,6 +169,59 @@ pub fn triage_keystore() -> Vec<u8> {
     with_empty_password_digest(body)
 }
 
+/// Build an empty-password JKS with one private-key entry, `server`, whose
+/// key is synthetic bytes protected by `key_password` as Java protects JKS
+/// keys, and the public fixture certificate as its chain.
+pub fn key_keystore(key_password: &str) -> Vec<u8> {
+    let certificate = fixture_certificate();
+    let key = b"synthetic bytes, not a private key";
+    // The JKS protector: a salt, the key XORed with a SHA-1 keystream,
+    // and a check digest, all keyed by the password's UTF-16 units.
+    let password: Vec<u8> = key_password
+        .encode_utf16()
+        .flat_map(u16::to_be_bytes)
+        .collect();
+    let salt = [7_u8; 20];
+    let mut protected = salt.to_vec();
+    let mut block = Sha1::new()
+        .chain_update(&password)
+        .chain_update(salt)
+        .finalize();
+    for chunk in key.chunks(20) {
+        protected.extend(chunk.iter().zip(block).map(|(byte, mask)| byte ^ mask));
+        block = Sha1::new()
+            .chain_update(&password)
+            .chain_update(block)
+            .finalize();
+    }
+    protected.extend(
+        Sha1::new()
+            .chain_update(&password)
+            .chain_update(key)
+            .finalize(),
+    );
+    // EncryptedPrivateKeyInfo with Sun's key protector algorithm.
+    let mut info = b"\x30\x0e\x06\x0a\x2b\x06\x01\x04\x01\x2a\x02\x11\x01\x01\x05\x00".to_vec();
+    info.extend([0x04, protected.len() as u8]);
+    info.extend(protected);
+    let mut encoded = vec![0x30, info.len() as u8];
+    encoded.extend(info);
+
+    let mut body = Vec::new();
+    for value in [0xFEED_FEED, 2, 1, 1] {
+        body.extend_from_slice(&u32::to_be_bytes(value));
+    }
+    body.extend_from_slice(b"\x00\x06server");
+    body.extend_from_slice(&0_u64.to_be_bytes());
+    body.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+    body.extend_from_slice(&encoded);
+    body.extend_from_slice(&1_u32.to_be_bytes());
+    body.extend_from_slice(b"\x00\x05X.509");
+    body.extend_from_slice(&(certificate.len() as u32).to_be_bytes());
+    body.extend_from_slice(&certificate);
+    with_empty_password_digest(body)
+}
+
 #[test]
 fn base64_round_trips() {
     for data in [&b""[..], b"f", b"fo", b"foo", b"foob", b"fooba", b"foobar"] {

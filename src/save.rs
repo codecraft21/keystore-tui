@@ -13,6 +13,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     certificate,
+    key_protection::{self, Error as KeyError},
     keystore::{self, Content, KeystoreEntry, Kind},
     pkcs12,
 };
@@ -76,6 +77,64 @@ impl Document {
                 writable.set_password(new, &mut rng)?;
                 rng.check()?;
             }
+        }
+        Ok(())
+    }
+
+    /// Whether keys have passwords of their own, as in JKS and JCEKS. In
+    /// PKCS12 they share the keystore's.
+    pub fn has_key_passwords(&self) -> bool {
+        matches!(self, Self::Jks { .. })
+    }
+
+    /// Recovers the private key of the entry listed at `index` with
+    /// `password`, or with the keystore's password when there is none.
+    fn recover_key(
+        &self,
+        index: usize,
+        password: Option<&str>,
+    ) -> Result<Zeroizing<Vec<u8>>, KeyError> {
+        let Self::Jks {
+            writable,
+            password: store_password,
+        } = self
+        else {
+            return Err(KeyError::Unsupported);
+        };
+        let protected = writable.protected_key(index).ok_or(KeyError::Unsupported)?;
+        key_protection::recover(protected, password.unwrap_or(store_password))
+    }
+
+    /// Whether `password`, or the keystore's password when there is none,
+    /// is the one protecting the private key listed at `index`.
+    pub fn unlocks_key(&self, index: usize, password: Option<&str>) -> Result<bool, String> {
+        match self.recover_key(index, password) {
+            Ok(_) => Ok(true),
+            Err(KeyError::Password) => Ok(false),
+            Err(error) => Err(key_error(error)),
+        }
+    }
+
+    /// Protects the private key listed at `index` with the password `new`.
+    /// The key is recovered in memory with `current`, or with the keystore's
+    /// password when there is none, and wiped once protected again.
+    pub fn set_key_password(
+        &mut self,
+        index: usize,
+        current: Option<&str>,
+        new: &str,
+    ) -> Result<(), String> {
+        // Only a JKS or JCEKS document recovers a key.
+        let key = self.recover_key(index, current).map_err(key_error)?;
+        if let Self::Jks { writable, .. } = self {
+            OsRng::default().check()?;
+            let mut rng = OsRng::default();
+            let protected = key_protection::protect(&key, new, writable.is_jceks(), &mut rng)
+                .map_err(key_error)?;
+            rng.check()?;
+            writable
+                .set_protected_key(index, &protected)
+                .map_err(|error| format!("The key password was not changed: {error}."))?;
         }
         Ok(())
     }
@@ -225,6 +284,17 @@ impl Document {
                 format!("Cannot write '{}': {error}", path.display())
             })
     }
+}
+
+fn key_error(error: KeyError) -> String {
+    match error {
+        KeyError::Password => "Incorrect key password.",
+        KeyError::Unsupported => "This key's protection is not supported.",
+        KeyError::PasswordNotAscii => {
+            "A JCEKS key password can only use printable ASCII characters."
+        }
+    }
+    .into()
 }
 
 /// Where the entry named `alias` is listed.
@@ -396,6 +466,21 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn only_jks_and_jceks_keys_have_passwords_of_their_own() {
+        let (_, mut jks) = open(&mixed_keystore(), "changeit");
+        assert!(jks.has_key_passwords());
+        // The trusted certificate, listed first, has no key.
+        assert!(jks.unlocks_key(0, None).is_err());
+        assert!(jks.set_key_password(0, None, "new").is_err());
+
+        let mut pkcs12 = Document::Pkcs12(pkcs12::Writable::empty("changeit"));
+        assert!(!pkcs12.has_key_passwords());
+        let error = pkcs12.unlocks_key(0, None).unwrap_err();
+        assert!(error.contains("not supported"), "{error}");
+        assert!(pkcs12.set_key_password(0, None, "new").is_err());
     }
 
     #[test]

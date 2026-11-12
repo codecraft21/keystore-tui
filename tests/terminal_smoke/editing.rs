@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::fs;
 
 use crate::fixtures::{
-    TempDir, certificate_pem, empty_password_fixture, fixture_certificate,
+    TempDir, certificate_pem, empty_password_fixture, fixture_certificate, key_keystore,
     with_empty_password_digest,
 };
 use crate::pty::PtyApp;
@@ -19,7 +19,7 @@ fn delete_save_and_quit_restores_terminal() {
     let original = empty_password_fixture();
     fs::write(&path, &original).unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "d Delete entry | w Save | W Save as"]);
+    app.expect(&["root-cert", "d Delete | w Save | W Save as"]);
     app.send(b"d");
     app.expect(&["Delete entry 'root-cert'? Press y"]);
     app.send(b"y");
@@ -80,7 +80,7 @@ fn rename_import_save_and_quit_restores_terminal() {
     )
     .unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "i Import certificate | r Rename"]);
+    app.expect(&["root-cert", "i Import | r Rename"]);
     app.send(b"r");
     app.expect(&["New alias for 'root-cert': root-cert_"]);
     app.send(b"\x15q"); // Ctrl+U clears; `q` is typed, not a quit.
@@ -196,5 +196,51 @@ fn create_pkcs12_import_save_and_quit_restores_terminal() {
     app.send(b"secret\r");
     app.expect(&["root", "Trusted certificate", "1 entries"]);
     app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Changing a key password](../../docs/SPEC.md#changing-a-key-password),
+/// [Saving](../../docs/SPEC.md#saving),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn change_key_password_save_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("keys.jks");
+    let original = key_keystore("keypass");
+    fs::write(&path, &original).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("keys.jks")]);
+    app.expect(&["server", "Private key", "P Key password"]);
+    app.send(b"P");
+    app.expect(&["Current password of key 'server': _"]);
+    app.send(b"wrong\r");
+    app.expect(&["Incorrect key password."]);
+    app.send(b"keypass\r");
+    app.expect(&["New password for key 'server': _"]);
+    app.send(b"q1\r"); // `q` is typed, masked, into the password.
+    app.expect(&["Type the password again: _"]);
+    app.send(b"q1\r");
+    app.expect(&["Password of key 'server' changed", "[modified]"]);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+    // Everything before the key's new random salt is as it was, and the
+    // protected key has the same size.
+    let saved = fs::read(&path).unwrap();
+    assert_eq!(saved[..56], original[..56]);
+    assert_ne!(saved, original);
+    assert_eq!(saved.len(), original.len());
+    app.send(b"q");
+    app.assert_restored();
+
+    // The key now opens with the new password and not the old one.
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("keys.jks")]);
+    app.expect(&["server", "Private key"]);
+    app.send(b"P");
+    app.expect(&["Current password of key 'server': _"]);
+    app.send(b"keypass\r");
+    app.expect(&["Incorrect key password."]);
+    app.send(b"q1\r");
+    app.expect(&["New password for key 'server': _"]);
+    app.send(b"\x03");
     app.assert_restored();
 }

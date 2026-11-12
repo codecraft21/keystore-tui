@@ -123,6 +123,7 @@ certificates whose names match another certificate or key.
 | `w` | Save the changes to the opened file |
 | `W` | Save the keystore to a new file |
 | `p` | Change the keystore password |
+| `P` | Change the selected private key's own password (JKS and JCEKS) |
 
 Press `/` to filter by part of the alias or the certificate subject (such as
 `CN=example`), ignoring case. The list updates as you type, and every letter,
@@ -152,6 +153,10 @@ next to the app name, but nothing changes on disk until you save.
   `keytool -storepasswd`. In PKCS12, the private and secret keys are re-encrypted
   with the new password too, as Java expects; if a key is protected by another
   password, nothing is changed.
+- **Change a key password:** in JKS and JCEKS, press `P` on a private key. If
+  the key has a password other than the keystore's, type it first; then type
+  the new password twice. JCEKS key passwords must be printable ASCII. PKCS12
+  keys always share the keystore's password.
 
 To create a keystore, press `n`, edit the suggested file name, and type its
 password twice. A `.jceks` name creates a JCEKS keystore, a `.p12` or `.pfx`

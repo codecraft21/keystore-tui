@@ -148,6 +148,32 @@ impl Writable {
         self.entries.remove(index);
     }
 
+    pub fn is_jceks(&self) -> bool {
+        self.header[..4] == JCEKS_MAGIC.to_be_bytes()
+    }
+
+    /// The protected key of the entry listed at `index`, if it is a private
+    /// key. The key stays as Java protected it.
+    pub fn protected_key(&self, index: usize) -> Option<&[u8]> {
+        let entry = &self.entries[index].1;
+        protected_key_span(entry).map(|span| &entry[span])
+    }
+
+    /// Replaces the protected key of the private-key entry listed at
+    /// `index`. The rest of the entry, and its place in the file, stay as
+    /// they were.
+    pub fn set_protected_key(&mut self, index: usize, key: &[u8]) -> Result<(), Error> {
+        let entry = &mut self.entries[index].1;
+        let span = protected_key_span(entry).ok_or(Error::Invalid("not a private key entry"))?;
+        let length = u32::try_from(key.len())
+            .map_err(|_| Error::Invalid("the key is too large for a keystore"))?;
+        entry.splice(
+            span.start - 4..span.end,
+            length.to_be_bytes().into_iter().chain(key.iter().copied()),
+        );
+        Ok(())
+    }
+
     /// Gives the entry listed at `index` another alias and lists it at `to`.
     /// The rest of the entry, and its place in the file, stay as they were.
     pub fn rename(&mut self, index: usize, alias: &str, to: usize) -> Result<(), Error> {
@@ -352,6 +378,18 @@ fn hash_password(password: &str, mut update: impl FnMut(&[u8])) {
         bytes.zeroize();
     }
     update(WHITENER_MESSAGE);
+}
+
+/// Where a stored private-key entry holds its protected key: after the tag,
+/// the alias, the creation date, and the key's length.
+fn protected_key_span(entry: &[u8]) -> Option<Range<usize>> {
+    if entry[..4] != PRIVATE_KEY_TAG.to_be_bytes() {
+        return None;
+    }
+    let alias_len = usize::from(u16::from_be_bytes([entry[4], entry[5]]));
+    let start = 4 + 2 + alias_len + 8 + 4;
+    let length = u32::from_be_bytes(entry[start - 4..start].try_into().unwrap()) as usize;
+    Some(start..start + length)
 }
 
 /// A string as Java's `DataOutput.writeUTF` writes it: a two-byte length,
@@ -989,6 +1027,43 @@ mod tests {
         assert!(is_jceks(&jceks));
         assert!(load_entries(&jceks, "changeit").unwrap().is_empty());
         assert!(load_entries(&jceks, "").is_none());
+    }
+
+    #[test]
+    fn replaces_a_protected_key_and_nothing_else() {
+        for version in [VERSION_01, VERSION_02] {
+            let build = |key: &[u8]| {
+                let mut builder = Builder::jceks(version, 3);
+                builder.entry(TRUSTED_CERT_TAG, b"cert", version, 1);
+                builder.entry_header(PRIVATE_KEY_TAG, "clé".as_bytes());
+                builder.payload(key);
+                builder.u32_field(2);
+                builder.certificate(version);
+                builder.certificate(version);
+                builder.entry(SECRET_KEY_TAG, b"secret", version, 0);
+                builder.finish("changeit")
+            };
+            let (entries, mut writable) = parse(build(b"old protected key"))
+                .unwrap()
+                .open("changeit")
+                .ok()
+                .unwrap();
+            assert!(writable.is_jceks());
+            // Only the private key, listed second, has a protected key.
+            assert_eq!(writable.protected_key(0), None);
+            assert_eq!(writable.protected_key(1), Some(&b"old protected key"[..]));
+            assert_eq!(writable.protected_key(2), None);
+            assert!(writable.set_protected_key(0, b"key").is_err());
+            for key in [&b"a longer protected key than before"[..], b"", b"short"] {
+                writable.set_protected_key(1, key).unwrap();
+                assert_eq!(writable.protected_key(1), Some(key));
+                let saved = writable.encode("changeit");
+                assert_eq!(saved, build(key));
+                assert_eq!(load_entries(&saved, "changeit").unwrap(), entries);
+            }
+        }
+        let (_, writable) = parse(empty_keystore()).unwrap().open("").ok().unwrap();
+        assert!(!writable.is_jceks());
     }
 
     #[test]

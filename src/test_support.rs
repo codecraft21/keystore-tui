@@ -359,3 +359,28 @@ pub fn sealed_secret_key() -> Vec<u8> {
     ]
     .concat()
 }
+
+/// A deterministic byte source for salts in tests.
+pub struct TestRng(pub u8);
+
+impl crown::rng::Rng for TestRng {
+    fn fill_bytes(&mut self, bytes: &mut [u8]) {
+        for byte in bytes {
+            self.0 = self.0.wrapping_add(1);
+            *byte = self.0;
+        }
+    }
+}
+
+/// A PKCS #8 structure around synthetic bytes, not a private key.
+pub fn synthetic_pkcs8(content: &[u8]) -> Vec<u8> {
+    use crown::asn1::{der, oid::ObjectIdentifier};
+    der::sequence(
+        &[
+            der::integer(&[0]),
+            der::sequence(&der::oid(&ObjectIdentifier::new(&[1, 2, 3, 4]).unwrap())),
+            der::octet_string(content),
+        ]
+        .concat(),
+    )
+}

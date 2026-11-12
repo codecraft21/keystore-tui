@@ -1766,7 +1766,7 @@ fn aliases(path: &Path) -> Vec<String> {
 fn deleting_an_entry_asks_first_and_changes_the_file_only_on_save() {
     let directory = TestDirectory::new();
     let (mut app, path) = editing(&directory);
-    assert!(screen(&mut app, 120, 24).contains("d Delete entry | w Save | W Save as"));
+    assert!(screen(&mut app, 120, 24).contains("d Delete | w Save | W Save as"));
 
     press(&mut app, KeyCode::Char('d'));
     assert!(screen(&mut app, 120, 24).contains("Delete entry 'root-cert'? Press y"));
@@ -1902,10 +1902,7 @@ fn certificate_files_cannot_be_changed() {
         let mut app = App::default();
         app.open_file(path.clone());
         assert!(!app.entries.is_empty(), "{name}");
-        assert!(
-            !screen(&mut app, 120, 24).contains("d Delete entry"),
-            "{name}"
-        );
+        assert!(!screen(&mut app, 120, 24).contains("d Delete |"), "{name}");
         for key in ['d', 'w', 'W'] {
             press(&mut app, KeyCode::Char(key));
             assert!(app.confirm.is_none() && app.save_as.is_none(), "{name}");
@@ -1931,7 +1928,7 @@ fn type_alias(app: &mut App, alias: &str) {
 fn renaming_an_entry_keeps_alias_order_and_is_written_on_save() {
     let directory = TestDirectory::new();
     let (mut app, path) = editing(&directory);
-    assert!(screen(&mut app, 120, 24).contains("i Import certificate | r Rename | d Delete entry"));
+    assert!(screen(&mut app, 120, 24).contains("i Import | r Rename | d Delete"));
     press(&mut app, KeyCode::Char('r'));
     assert!(screen(&mut app, 120, 24).contains("New alias for 'root-cert': root-cert_"));
     // Letters are typed into the alias instead of quitting.
@@ -2272,7 +2269,7 @@ fn pkcs12_keystores_are_edited_and_saved_like_the_others() {
     app.open_file(path.clone());
     type_password(&mut app, "changeit");
     press(&mut app, KeyCode::Enter);
-    assert!(screen(&mut app, 120, 24).contains("i Import certificate | r Rename"));
+    assert!(screen(&mut app, 120, 24).contains("i Import | r Rename"));
 
     press(&mut app, KeyCode::Char('r'));
     type_alias(&mut app, "Renamed");
@@ -2361,4 +2358,198 @@ fn an_incompletely_read_pkcs12_keystore_cannot_be_changed() {
         );
     }
     assert_eq!(fs::read(&path).unwrap(), data);
+}
+
+/// A keystore saved as `name` with a trusted certificate and two private
+/// keys holding synthetic bytes: `own`, protected by `keypass`, and `shared`,
+/// protected by the keystore's password, `changeit`.
+fn keystore_with_keys(directory: &TestDirectory, name: &str) -> (App, PathBuf, Vec<u8>) {
+    use keystore::{PRIVATE_KEY_TAG, TRUSTED_CERT_TAG, VERSION_02};
+    use test_support::{Builder, TestRng, synthetic_pkcs8};
+    let jceks = name.ends_with(".jceks");
+    let key = synthetic_pkcs8(b"synthetic, not a private key");
+    let mut builder = if jceks {
+        Builder::jceks(VERSION_02, 3)
+    } else {
+        Builder::new(VERSION_02, 3)
+    };
+    builder.entry(TRUSTED_CERT_TAG, b"cert", VERSION_02, 1);
+    for (alias, password) in [(&b"own"[..], "keypass"), (b"shared", "changeit")] {
+        builder.entry_header(PRIVATE_KEY_TAG, alias);
+        builder.payload(&key_protection::protect(&key, password, jceks, &mut TestRng(0)).unwrap());
+        builder.u32_field(1);
+        builder.certificate(VERSION_02);
+    }
+    let path = directory.path().join(name);
+    fs::write(&path, builder.finish("changeit")).unwrap();
+    let mut app = App::default();
+    app.open_file(path.clone());
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.entries.len(), 3);
+    (app, path, key)
+}
+
+/// The key that `password` recovers from the entry listed at `index` of the
+/// keystore saved at `path`.
+fn saved_key(path: &Path, index: usize, password: &str) -> Result<Vec<u8>, key_protection::Error> {
+    let (_, writable) = keystore::parse(fs::read(path).unwrap())
+        .unwrap()
+        .open("changeit")
+        .ok()
+        .unwrap();
+    key_protection::recover(writable.protected_key(index).unwrap(), password)
+        .map(|key| key.to_vec())
+}
+
+#[test]
+fn a_key_password_is_changed_after_unlocking_the_key() {
+    let directory = TestDirectory::new();
+    for name in ["store.jks", "store.jceks"] {
+        let (mut app, path, key) = keystore_with_keys(&directory, name);
+        let original = fs::read(&path).unwrap();
+        assert!(
+            screen(&mut app, 120, 24).contains("p Password | P Key password"),
+            "{name}"
+        );
+
+        // A certificate has no password of its own.
+        press(&mut app, KeyCode::Char('P'));
+        assert!(red_text(&mut app).contains("Only private keys"), "{name}");
+        assert!(app.new_password.is_none(), "{name}");
+
+        // `own` needs its current password first, typed once and masked.
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('P'));
+        assert!(
+            screen(&mut app, 120, 24).contains("Current password of key 'own': _"),
+            "{name}"
+        );
+        type_password(&mut app, "wrong");
+        assert!(screen(&mut app, 120, 24).contains("Current password of key 'own': *****_"));
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            red_text(&mut app).contains("Incorrect key password."),
+            "{name}"
+        );
+        assert!(
+            screen(&mut app, 120, 24).contains("Current password of key 'own': _"),
+            "{name}"
+        );
+        type_password(&mut app, "keypass");
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            screen(&mut app, 120, 24).contains("New password for key 'own': _"),
+            "{name}"
+        );
+        type_new_password(&mut app, "new-one", "new-two");
+        assert!(
+            red_text(&mut app).contains("The passwords do not match"),
+            "{name}"
+        );
+        assert!(!app.modified, "{name}");
+        type_new_password(&mut app, "new-own", "new-own");
+        let rendered = screen(&mut app, 160, 24);
+        assert!(rendered.contains("Password of key 'own' changed"), "{name}");
+        assert!(rendered.contains("[modified]"), "{name}");
+
+        // `shared` is unlocked by the keystore's password.
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('P'));
+        assert!(
+            screen(&mut app, 120, 24).contains("New password for key 'shared': _"),
+            "{name}"
+        );
+        // Esc cancels.
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('P'));
+        type_new_password(&mut app, "new-shared", "new-shared");
+        assert_eq!(fs::read(&path).unwrap(), original, "{name}");
+
+        press(&mut app, KeyCode::Char('w'));
+        assert!(!app.modified, "{name}");
+        // The same keys come back with the new passwords only, and the
+        // keystore keeps its own password and entries.
+        assert_eq!(saved_key(&path, 1, "new-own"), Ok(key.clone()), "{name}");
+        assert_eq!(saved_key(&path, 2, "new-shared"), Ok(key.clone()), "{name}");
+        for (index, old) in [(1, "keypass"), (2, "changeit")] {
+            assert_eq!(
+                saved_key(&path, index, old),
+                Err(key_protection::Error::Password)
+            );
+        }
+        assert_eq!(
+            keystore::load_entries(&fs::read(&path).unwrap(), "changeit").unwrap(),
+            app.entries,
+            "{name}"
+        );
+
+        // Now `own` asks for the new current password, not the old one.
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Char('P'));
+        type_password(&mut app, "keypass");
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            red_text(&mut app).contains("Incorrect key password."),
+            "{name}"
+        );
+        type_password(&mut app, "new-own");
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            screen(&mut app, 120, 24).contains("New password for key 'own': _"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn key_passwords_follow_the_rules_of_the_keystore_format() {
+    let directory = TestDirectory::new();
+    // JCEKS protects keys with printable ASCII passwords only.
+    let (mut app, _, _) = keystore_with_keys(&directory, "store.jceks");
+    press(&mut app, KeyCode::End);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char('P'));
+    type_new_password(&mut app, "pässword", "pässword");
+    assert!(red_text(&mut app).contains("printable ASCII"));
+    assert!(!app.modified);
+
+    // PKCS12 keys share the keystore's password.
+    let path = directory.path().join("store.p12");
+    fs::write(&path, include_bytes!("../tests/fixtures/trusted-cert.p12")).unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('P'));
+    assert!(red_text(&mut app).contains("share the keystore's password"));
+    assert!(app.new_password.is_none());
+
+    // A certificate file cannot be changed, and no file means no action.
+    let path = directory.path().join("bundle.pem");
+    fs::write(&path, test_support::BUNDLE_PEM).unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    press(&mut app, KeyCode::Char('P'));
+    assert!(red_text(&mut app).contains(NOT_EDITABLE));
+    let mut app = App::default();
+    press(&mut app, KeyCode::Char('P'));
+    assert!(app.message.is_none() && app.new_password.is_none());
+}
+
+#[test]
+fn a_key_with_unsupported_protection_is_reported() {
+    let directory = TestDirectory::new();
+    let path = directory.path().join("store.jks");
+    // The synthetic key of the mixed keystore is not a protected key.
+    fs::write(&path, mixed_keystore()).unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char('P'));
+    assert!(red_text(&mut app).contains("protection is not supported"));
+    assert!(app.new_password.is_none());
 }

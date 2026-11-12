@@ -9,6 +9,7 @@ mod entry_list;
 mod export;
 mod file_picker;
 mod java_serialization;
+mod key_protection;
 mod keystore;
 mod new_password;
 mod path_bar;
@@ -255,6 +256,7 @@ impl App {
                 KeyCode::Char('d') if is_text_input(key.modifiers) => self.ask_delete(),
                 KeyCode::Char('n') if is_text_input(key.modifiers) => self.ask_new_keystore(),
                 KeyCode::Char('p') if is_text_input(key.modifiers) => self.ask_password_change(),
+                KeyCode::Char('P') if is_text_input(key.modifiers) => self.ask_key_password(),
                 KeyCode::Char('r') if is_text_input(key.modifiers) => self.ask_rename(),
                 KeyCode::Char('i') if is_text_input(key.modifiers) => self.ask_import(),
                 KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
@@ -798,10 +800,18 @@ impl App {
                 "Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
             ]
         } else if let Some(prompt) = &self.new_password {
+            use new_password::Purpose;
+            let alias = |index: &usize| self.entries[*index].alias.as_str();
             let label = match (&prompt.purpose, prompt.repeating()) {
-                (_, true) => "Type the password again: ",
-                (new_password::Purpose::Create(_), false) => "Password for the new keystore: ",
-                (new_password::Purpose::Change, false) => "New keystore password: ",
+                (_, true) => "Type the password again: ".into(),
+                (Purpose::Create(_), false) => "Password for the new keystore: ".into(),
+                (Purpose::Change, false) => "New keystore password: ".into(),
+                (Purpose::KeyCurrent(index), false) => {
+                    format!("Current password of key '{}': ", alias(index))
+                }
+                (Purpose::KeyChange(index, _), false) => {
+                    format!("New password for key '{}': ", alias(index))
+                }
             };
             vec![
                 Line::from(vec![
@@ -825,7 +835,7 @@ impl App {
             vec!["Type to filter | Enter Apply | Esc Clear | Up/Down Scroll | Ctrl+C Quit".into()]
         } else if self.document.is_some() && self.file_picker.is_none() {
             vec![
-                "n New | i Import certificate | r Rename | d Delete entry | w Save | W Save as | p Password".into(),
+                "n New | i Import | r Rename | d Delete | w Save | W Save as | p Password | P Key password".into(),
                 LIST.into(),
             ]
         } else {

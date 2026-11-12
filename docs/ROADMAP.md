@@ -40,9 +40,9 @@ backup.
 
 From this tier on, the app decrypts private keys.
 
-Done so far, from item 7: PKCS12 keys are decrypted and re-encrypted when the
-keystore password changes. Still open for item 7: JKS and JCEKS key
-protection, and changing one entry's password.
+Done: item 7. PKCS12 keys are re-encrypted when the keystore password
+changes, and a JKS or JCEKS private key's own password can be changed. Still
+open for item 7: JCEKS secret keys, which Java seals in a serialized object.
 
 7. **Unlock entry, and set or change an entry password:** decrypt key entries
    (JKS and JCEKS key protection, PKCS12 shrouded key bags). Items 8 to 16
