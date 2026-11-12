@@ -195,16 +195,66 @@ impl Writable {
         certificate: &[u8],
         created: u64,
     ) -> Result<(), Error> {
-        let length = u32::try_from(certificate.len())
-            .map_err(|_| Error::Invalid("the certificate is too large for a keystore"))?;
         let mut entry = TRUSTED_CERT_TAG.to_be_bytes().to_vec();
         entry.extend(encode_string(alias)?);
         entry.extend_from_slice(&created.to_be_bytes());
+        self.push_certificate(&mut entry, certificate)?;
+        self.insert(to, entry);
+        Ok(())
+    }
+
+    /// Adds a private key, already protected as Java protects keys, with
+    /// its certificate chain, leaf first. It is listed at `to` and stored
+    /// after every other entry.
+    pub fn insert_private_key(
+        &mut self,
+        to: usize,
+        alias: &str,
+        protected_key: &[u8],
+        chain: &[Vec<u8>],
+        created: u64,
+    ) -> Result<(), Error> {
+        let too_large = |_| Error::Invalid("the key is too large for a keystore");
+        let mut entry = PRIVATE_KEY_TAG.to_be_bytes().to_vec();
+        entry.extend(encode_string(alias)?);
+        entry.extend_from_slice(&created.to_be_bytes());
+        entry.extend_from_slice(
+            &u32::try_from(protected_key.len())
+                .map_err(too_large)?
+                .to_be_bytes(),
+        );
+        entry.extend_from_slice(protected_key);
+        entry.extend_from_slice(&u32::try_from(chain.len()).map_err(too_large)?.to_be_bytes());
+        for certificate in chain {
+            self.push_certificate(&mut entry, certificate)?;
+        }
+        self.insert(to, entry);
+        Ok(())
+    }
+
+    /// When the entry listed at `index` was created, in milliseconds since
+    /// the Unix epoch.
+    pub fn created(&self, index: usize) -> u64 {
+        let entry = &self.entries[index].1;
+        let start = 4 + 2 + usize::from(u16::from_be_bytes([entry[4], entry[5]]));
+        u64::from_be_bytes(entry[start..start + 8].try_into().unwrap())
+    }
+
+    /// Appends a certificate as an entry stores it: its type, in version 2,
+    /// then its length and encoding.
+    fn push_certificate(&self, entry: &mut Vec<u8>, certificate: &[u8]) -> Result<(), Error> {
+        let length = u32::try_from(certificate.len())
+            .map_err(|_| Error::Invalid("the certificate is too large for a keystore"))?;
         if self.header[4..] == VERSION_02.to_be_bytes() {
             entry.extend(encode_string(CERTIFICATE_TYPE)?);
         }
         entry.extend_from_slice(&length.to_be_bytes());
         entry.extend_from_slice(certificate);
+        Ok(())
+    }
+
+    /// Lists a new entry at `to`, stored after every other entry.
+    fn insert(&mut self, to: usize, entry: Vec<u8>) {
         let offset = self
             .entries
             .iter()
@@ -212,7 +262,6 @@ impl Writable {
             .max()
             .unwrap_or(0);
         self.entries.insert(to, (offset, entry));
-        Ok(())
     }
 
     /// The keystore file: the entries in their stored order, followed by the

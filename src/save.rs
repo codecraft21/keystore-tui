@@ -266,24 +266,255 @@ impl Document {
 
     /// Writes a new file, failing if `path` already exists.
     pub fn save_new(&self, path: &Path, entries: &[KeystoreEntry]) -> Result<(), String> {
-        let data = self.encode(entries)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .map_err(|error| match error.kind() {
-                io::ErrorKind::AlreadyExists => {
-                    format!("'{}' already exists; choose another name.", path.display())
-                }
-                _ => format!("Cannot create '{}': {error}", path.display()),
-            })?;
-        file.write_all(&data)
-            .and_then(|()| file.sync_all())
-            .map_err(|error| {
-                drop(fs::remove_file(path));
-                format!("Cannot write '{}': {error}", path.display())
-            })
+        create(path, &self.encode(entries)?)
     }
+
+    pub fn format(&self) -> Format {
+        match self {
+            Self::Jks { writable, .. } if writable.is_jceks() => Format::Jceks,
+            Self::Jks { .. } => Format::Jks,
+            Self::Pkcs12(_) => Format::Pkcs12,
+        }
+    }
+
+    /// The keystore's password, as typed.
+    pub fn password(&self) -> &str {
+        match self {
+            Self::Jks { password, .. } => password,
+            // An empty PKCS12 password may be stored as a NUL character.
+            Self::Pkcs12(writable) => writable.password().trim_end_matches('\0'),
+        }
+    }
+
+    /// The keystore as a file of another format, with the same password.
+    /// Private keys are recovered in memory with the keystore's password,
+    /// protected again as the other format does, and wiped. The result is
+    /// read back and compared with `entries` before it is returned.
+    pub fn convert(&self, entries: &[KeystoreEntry], target: Format) -> Result<Vec<u8>, String> {
+        let password = self.password();
+        let to_java = target != Format::Pkcs12;
+        let mut expected: Vec<Converted> = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            let key = match &entry.content {
+                Content::Certificates {
+                    kind: Kind::PrivateKey,
+                    ..
+                } => Some(self.private_key(index).map_err(|error| {
+                    format!("Not converted: the key '{}' {error}.", entry.alias)
+                })?),
+                Content::Certificates {
+                    kind: Kind::TrustedCertificate | Kind::Certificate,
+                    ..
+                } => None,
+                _ => {
+                    return Err(format!(
+                        "Not converted: the secret key '{}' cannot be converted yet.",
+                        entry.alias
+                    ));
+                }
+            };
+            // JKS and JCEKS look aliases up in lower case.
+            let alias = if to_java {
+                entry.alias.to_lowercase()
+            } else {
+                entry.alias.clone()
+            };
+            if to_java && expected.iter().any(|other| other.alias == alias) {
+                return Err(format!(
+                    "Not converted: two entries would share the alias '{alias}'."
+                ));
+            }
+            expected.push(Converted {
+                alias,
+                key,
+                certificates: entry.certificates().to_vec(),
+            });
+        }
+        let created = |index: usize| match self {
+            Self::Jks { writable, .. } => writable.created(index),
+            Self::Pkcs12(_) => SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis() as u64),
+        };
+        let failed = |error: String| format!("Not converted: {error}.");
+        OsRng::default().check()?;
+        let mut rng = OsRng::default();
+        let data = if to_java {
+            let jceks = target == Format::Jceks;
+            let mut writable = keystore::Writable::empty(jceks);
+            for (index, entry) in expected.iter().enumerate() {
+                match &entry.key {
+                    Some(key) => {
+                        let protected = key_protection::protect(key, password, jceks, &mut rng)
+                            .map_err(key_error)?;
+                        writable.insert_private_key(
+                            index,
+                            &entry.alias,
+                            &protected,
+                            &entry.certificates,
+                            created(index),
+                        )
+                    }
+                    None => writable.insert_trusted_certificate(
+                        index,
+                        &entry.alias,
+                        &entry.certificates[0],
+                        created(index),
+                    ),
+                }
+                .map_err(|error| failed(error.to_string()))?;
+            }
+            writable.encode(password)
+        } else {
+            if password.is_empty() {
+                return Err(failed(
+                    "a PKCS12 keystore needs a password that is not empty; change the password first (p)"
+                        .into(),
+                ));
+            }
+            let mut writable = pkcs12::Writable::empty(password);
+            for entry in &expected {
+                match &entry.key {
+                    Some(key) => writable.insert_private_key(
+                        &entry.alias,
+                        key,
+                        &entry.certificates,
+                        &mut rng,
+                    ),
+                    None => {
+                        writable.insert_trusted_certificate(&entry.alias, &entry.certificates[0])
+                    }
+                }
+                .map_err(|error| failed(error.to_owned()))?;
+            }
+            writable
+                .encode(&mut rng)
+                .map_err(|error| failed(error.to_owned()))?
+        };
+        rng.check()?;
+        // Open the result as a file would be opened, and recover its keys.
+        let mut read = Self::open(&data, password).and_then(|(read, document)| {
+            read.iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    let is_key = entry.kind() == Kind::PrivateKey.label();
+                    Some(Converted {
+                        alias: entry.alias.clone(),
+                        key: match is_key {
+                            true => Some(document.private_key(index).ok()?),
+                            false => None,
+                        },
+                        certificates: entry.certificates().to_vec(),
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+        });
+        let order = |a: &Converted, b: &Converted| {
+            (&a.alias, &a.certificates, a.key.is_some()).cmp(&(
+                &b.alias,
+                &b.certificates,
+                b.key.is_some(),
+            ))
+        };
+        expected.sort_by(order);
+        if let Some(read) = &mut read {
+            read.sort_by(order);
+        }
+        if read.as_ref() == Some(&expected) {
+            Ok(data)
+        } else {
+            Err("Not converted: the keystore would not read back with the same entries and keys, for example because a certificate chain is not linked by issuer names. Nothing was written.".into())
+        }
+    }
+
+    /// Opens keystore `data` with its password, as a file is opened.
+    fn open(data: &[u8], password: &str) -> Option<(Vec<KeystoreEntry>, Self)> {
+        if keystore::has_magic(data) {
+            let (entries, writable) = keystore::parse(data.to_vec()).ok()?.open(password).ok()?;
+            Some((entries, Self::jks(writable, password)))
+        } else {
+            let (verified, writable) = pkcs12::parse(data).ok()?.open(password).ok()?;
+            Some((verified.entries, Self::Pkcs12(writable?)))
+        }
+    }
+
+    /// The PKCS #8 encoding of the private key listed at `index`, recovered
+    /// in memory with the keystore's password.
+    fn private_key(&self, index: usize) -> Result<Zeroizing<Vec<u8>>, String> {
+        match self {
+            Self::Jks { .. } => match self.recover_key(index, None) {
+                // The other formats only hold PKCS #8 keys.
+                Ok(key) if pkcs12::is_private_key_info(&key) => Ok(key),
+                Ok(_) => Err("is not a PKCS #8 key".into()),
+                Err(KeyError::Password) => Err(
+                    "has a password of its own; give it the keystore's password first (P)".into(),
+                ),
+                Err(_) => Err("uses protection that is not supported".into()),
+            },
+            Self::Pkcs12(writable) => writable
+                .private_key(index)
+                .ok_or_else(|| "could not be decrypted with the keystore's password".into()),
+        }
+    }
+}
+
+/// What an entry is in a converted keystore: its alias, its private key if
+/// it has one, as PKCS #8, and its certificates.
+#[derive(PartialEq)]
+struct Converted {
+    alias: String,
+    key: Option<Zeroizing<Vec<u8>>>,
+    certificates: Vec<Vec<u8>>,
+}
+
+/// A keystore file format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Jks,
+    Jceks,
+    Pkcs12,
+}
+
+impl Format {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Jks => "JKS",
+            Self::Jceks => "JCEKS",
+            Self::Pkcs12 => "PKCS12",
+        }
+    }
+
+    /// The format a file name asks for: `.jks`, `.jceks`, and `.p12` or
+    /// `.pfx`, ignoring case. Other names ask for none.
+    pub fn from_name(path: &Path) -> Option<Self> {
+        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+        match extension.as_str() {
+            "jks" => Some(Self::Jks),
+            "jceks" => Some(Self::Jceks),
+            "p12" | "pfx" => Some(Self::Pkcs12),
+            _ => None,
+        }
+    }
+}
+
+/// Writes a new file, failing if `path` already exists.
+pub fn create(path: &Path, data: &[u8]) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::AlreadyExists => {
+                format!("'{}' already exists; choose another name.", path.display())
+            }
+            _ => format!("Cannot create '{}': {error}", path.display()),
+        })?;
+    file.write_all(data)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| {
+            drop(fs::remove_file(path));
+            format!("Cannot write '{}': {error}", path.display())
+        })
 }
 
 fn key_error(error: KeyError) -> String {
@@ -481,6 +712,76 @@ mod tests {
         let error = pkcs12.unlocks_key(0, None).unwrap_err();
         assert!(error.contains("not supported"), "{error}");
         assert!(pkcs12.set_key_password(0, None, "new").is_err());
+    }
+
+    #[test]
+    fn conversion_refuses_what_the_other_format_cannot_hold() {
+        use crate::keystore::{PRIVATE_KEY_TAG, VERSION_02};
+        use crate::test_support::{Builder, TestRng, metadata_certificate};
+        // PKCS12 aliases that differ only in case would collide in JKS.
+        let mut writable = pkcs12::Writable::empty("changeit");
+        let mut entries = Vec::new();
+        for (alias, serial) in [("Dup", 1), ("dup", 2), ("other", 3)] {
+            let certificate = metadata_certificate(alias, alias, &[serial], &[]);
+            entries = writable
+                .insert_trusted_certificate(alias, &certificate)
+                .unwrap();
+        }
+        let document = Document::Pkcs12(writable);
+        assert_eq!(document.format(), Format::Pkcs12);
+        for target in [Format::Jks, Format::Jceks] {
+            let error = document.convert(&entries, target).unwrap_err();
+            assert!(error.contains("share the alias 'dup'"), "{error}");
+        }
+        // Without the clash, mixed case becomes lower case.
+        let Document::Pkcs12(mut writable) = document else {
+            panic!()
+        };
+        writable.remove(0);
+        entries = writable.rename(0, "Mixed").unwrap();
+        assert_eq!(entries[0].alias, "Mixed");
+        let mut writable = pkcs12::Writable::empty("changeit");
+        for entry in &entries {
+            writable
+                .insert_trusted_certificate(&entry.alias, &entry.certificates()[0])
+                .unwrap();
+        }
+        let data = Document::Pkcs12(writable)
+            .convert(&entries, Format::Jks)
+            .unwrap();
+        let converted = keystore::load_entries(&data, "changeit").unwrap();
+        assert_eq!(converted[0].alias, "mixed");
+        assert_eq!(converted[0].kind(), "Trusted certificate");
+
+        // A JKS key that is not PKCS #8 has no place in the other formats,
+        // and JCEKS cannot protect keys with a password that is not ASCII.
+        for (key, password, target, reason) in [
+            (
+                &b"not PKCS #8"[..],
+                "changeit",
+                Format::Pkcs12,
+                "is not a PKCS #8 key",
+            ),
+            (
+                &crate::test_support::synthetic_pkcs8(b"synthetic")[..],
+                "pässword",
+                Format::Jceks,
+                "printable ASCII",
+            ),
+        ] {
+            let protected = key_protection::protect(key, password, false, &mut TestRng(0)).unwrap();
+            let mut builder = Builder::new(VERSION_02, 1);
+            builder.entry_header(PRIVATE_KEY_TAG, b"key");
+            builder.payload(&protected);
+            builder.u32_field(0);
+            let (entries, document) = open(&builder.finish(password), password);
+            assert_eq!(document.format(), Format::Jks);
+            let error = document.convert(&entries, target).unwrap_err();
+            assert!(error.contains(reason), "{error}");
+        }
+        assert_eq!(Format::from_name(Path::new("a.PFX")), Some(Format::Pkcs12));
+        assert_eq!(Format::from_name(Path::new("cacerts")), None);
+        assert_eq!(Format::from_name(Path::new("a.pem")), None);
     }
 
     #[test]

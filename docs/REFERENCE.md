@@ -121,7 +121,7 @@ certificates whose names match another certificate or key.
 | `r` | Rename the selected entry |
 | `d` / `Delete` | Delete the selected entry |
 | `w` | Save the changes to the opened file |
-| `W` | Save the keystore to a new file |
+| `W` | Save the keystore to a new file, converting it when the name asks for another format |
 | `p` | Change the keystore password |
 | `P` | Change the selected private key's own password (JKS and JCEKS) |
 
@@ -181,6 +181,12 @@ Press `W` to save the keystore under a new name, then edit the suggested name
 and press `Enter`. The prompt works like the [export
 prompt](#exporting-certificates): existing files are never replaced, and `Esc`
 cancels. The new file becomes the opened one.
+
+To convert a keystore to another format, give the new name that format's
+extension: `.jks`, `.jceks`, or `.p12` (or `.pfx`). The converted keystore has
+the same password, for the keystore and for every private key in it, and the
+original file is left as it was. A key with a password of its own must first be
+given the keystore's password with `P`. Secret keys cannot be converted yet.
 
 With unsaved changes, `q`, `Esc`, `o`, and `n` ask before discarding them; press `y`
 to go on. `Ctrl+C` quits at once and discards them.

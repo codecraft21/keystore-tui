@@ -43,7 +43,8 @@ opens standalone certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`,
   belong to no key are listed as `Certificate` entries.
 - Creates and edits JKS, JCEKS, and PKCS12 keystores: import a trusted certificate,
   rename or delete an entry, or change the keystore password or a key's
-  password. Nothing changes on disk until you save, and saving
+  password.
+- Converts a keystore between JKS, JCEKS, and PKCS12, private keys included. Nothing changes on disk until you save, and saving
   replaces the file in one step.
 - Safe and self-contained: it never displays or exports private keys, and
   does not need Java or `keytool`.
@@ -82,7 +83,8 @@ certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
 
 - Editing is limited to importing a trusted certificate, renaming or deleting
   an entry, and changing the keystore password. Key pairs cannot be imported
-  or generated, and JCEKS secret keys cannot change their password.
+  or generated, and secret keys cannot change their password or be
+  converted.
   Only certificates, certificate chains, and certificate signing requests can
   be exported. More editing is planned for release 1.1; see the
   [roadmap](docs/ROADMAP.md).
