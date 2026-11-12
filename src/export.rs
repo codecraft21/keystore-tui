@@ -200,6 +200,12 @@ mod tests {
             Path::new(&prompt.path),
             directory.path().join("server-chain-2.pem")
         );
+        let prompt = ExportPrompt::new(Scope::KeyPair, directory.path(), "..");
+        assert_eq!(Path::new(&prompt.path), directory.path().join("key.p12"));
+        assert_eq!(
+            (Scope::KeyPair.label(), Scope::KeyPair.pem_label()),
+            ("key pair", "PRIVATE KEY")
+        );
         let prompt = ExportPrompt::new(Scope::Certificate, directory.path(), "..");
         assert_eq!(
             Path::new(&prompt.path),

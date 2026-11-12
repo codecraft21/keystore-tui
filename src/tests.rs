@@ -2436,6 +2436,22 @@ fn exporting_a_private_key_writes_a_new_protected_file() {
     type_alias(&mut app, "missing/shared.key");
     type_new_password(&mut app, "exportpw", "exportpw");
     assert!(red_text(&mut app).contains("Cannot create"));
+
+    // Without a private key to export, nothing is asked.
+    let (mut app, _) = editing(&directory);
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('y'));
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('y'));
+    assert!(app.entries.is_empty());
+    press(&mut app, KeyCode::Char('e'));
+    assert!(app.key_export.is_none() && app.message.is_none());
+    let mut app = App::default();
+    press(&mut app, KeyCode::Char('e'));
+    app.handle_key_export(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.export_key(&file("none.key"), 0, "");
+    assert!(app.key_export.is_none() && app.message.is_none());
+    assert!(!file("none.key").exists());
 }
 
 #[test]
