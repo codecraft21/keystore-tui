@@ -21,6 +21,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Deleting entries](#deleting-entries)
   - [Renaming entries](#renaming-entries)
   - [Importing certificates](#importing-certificates)
+  - [Importing key pairs](#importing-key-pairs)
   - [Changing the password](#changing-the-password)
   - [Changing a key password](#changing-a-key-password)
 - [Creating a keystore](#creating-a-keystore)
@@ -52,11 +53,12 @@ document and the usage reference, and also the README if its overview changes.
   unencrypted. They are decrypted only in memory, and only to encrypt them
   again: when a PKCS12 keystore's password changes (see [Changing the
   password](#changing-the-password)), when a JKS or JCEKS key's password
-  changes (see [Changing a key password](#changing-a-key-password)), and when
+  changes (see [Changing a key password](#changing-a-key-password)), when
   a keystore is converted to another format (see [Converting a
-  keystore](#converting-a-keystore)).
+  keystore](#converting-a-keystore)), and when a key pair is imported (see
+  [Importing key pairs](#importing-key-pairs)).
 - The following are out of scope for now: importing anything but a trusted
-  certificate, keystore editing other than [deleting](#deleting-entries) and
+  certificate or a key pair, keystore editing other than [deleting](#deleting-entries) and
   [renaming](#renaming-entries) entries, and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
   features; each one updates this section when it ships.
 
@@ -101,8 +103,9 @@ any existing incomplete-entry warnings.
   in that keystore's directory, which for a bare file name is the working
   directory.
 - It lists directories, then files whose extension is `.jks`, `.jceks`, `.p12`,
-  `.pfx`, `.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`, `.csr`, or `.p10`
-  (case-insensitive). It also lists the Java truststore names `cacerts` and
+  `.pfx`, `.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`, `.csr`, `.p10`,
+  `.key`, or `.p8` (case-insensitive). The last two are private key files,
+  listed for [importing key pairs](#importing-key-pairs). It also lists the Java truststore names `cacerts` and
   `jssecacerts`, case-insensitively. Directories come first.
 - Paths are shown as users type them: on Windows, without the verbatim `\\?\`
   prefix (`C:\certs`, not `\\?\C:\certs`), unless a path needs it, such as
@@ -358,7 +361,10 @@ any existing incomplete-entry warnings.
 ### Importing certificates
 
 - In a keystore, `i` opens the file browser, titled `Import
-  certificate from file`, in the opened file's directory. `Esc` cancels.
+  certificate or key pair from file`, in the opened file's directory. `Esc`
+  cancels.
+- A chosen file that holds a private key starts a [key pair
+  import](#importing-key-pairs). Any other file is read as a certificate file.
 - The chosen file must hold exactly one certificate, as PEM, DER, or PKCS#7.
   A file with several certificates, with none, or of another kind is refused
   with a red message, and nothing is imported.
@@ -375,6 +381,47 @@ any existing incomplete-entry warnings.
   attribute, so Java lists it as a trusted certificate. It joins the
   encrypted certificates when the keystore has any; in a keystore that stores
   its certificates unencrypted, it is unencrypted too.
+
+### Importing key pairs
+
+- The file chosen with `i` starts a key pair import when it is one of:
+  - A PEM file with one private key block: `PRIVATE KEY` (PKCS #8),
+    `ENCRYPTED PRIVATE KEY`, `RSA PRIVATE KEY`, or `EC PRIVATE KEY` (OpenSSL's
+    own formats; the EC key must name its curve). It may also hold the
+    certificates.
+  - A DER file holding a PKCS #8 key, plain or encrypted.
+  - A PKCS12 keystore with exactly one private key, whose certificate chain is
+    imported with it.
+- A PEM file with several private keys, with a key encrypted in OpenSSL's old
+  format (a `Proc-Type: 4,ENCRYPTED` header), with a malformed key, or with
+  any other `... PRIVATE KEY` block is refused with a red message. JKS and
+  JCEKS keystores are not read as a source.
+- For an encrypted key or a PKCS12 keystore, a prompt asks `Password of
+  '<file name>':`, masked like the keystore password. A wrong password shows
+  `Incorrect password.` and leaves the prompt open; `Esc` cancels. The
+  password is wiped once the key is read.
+- When the key's file holds no certificate, the file browser opens again,
+  titled `Certificate file of the imported key`, to choose a PEM, DER, or
+  PKCS#7 certificate file. `Esc` cancels the import.
+- The key's certificate is the one holding the key's public key, which is
+  worked out from the private key. Its chain is built from the other
+  certificates in the same file by issuer and subject names; certificates
+  outside the chain are left out. Without a matching certificate, or for a
+  type of key whose public key the app cannot work out, nothing is imported.
+  RSA, EC (the NIST curves), Ed25519, and Ed448 keys are supported.
+- A prompt then asks `Alias for the imported key pair:`, suggesting the alias
+  from the PKCS12 keystore, or else the certificate's subject name, in lower
+  case. It follows the same rules as the [rename prompt](#renaming-entries).
+- The key pair is added as a private-key entry with the current time as its
+  creation date, listed in alias order and selected. A green message names it.
+  The key is protected with the keystore's password in the keystore's own
+  scheme, as in [Converting a keystore](#converting-a-keystore), and the plain
+  key is wiped from memory. A JCEKS keystore needs a printable-ASCII password
+  for this, and a PKCS12 keystore a password that is not empty.
+- A PKCS12 keystore refuses a key pair whose certificate already belongs to
+  one of its private keys, because the key and certificate are paired by the
+  certificate's digest.
+- Whether the certificates are trusted or valid is not checked.
 
 ### Changing the password
 

@@ -224,6 +224,74 @@ impl Document {
         }
     }
 
+    /// Adds the PKCS #8 private key `key` with its certificate `chain` as a
+    /// key pair named `alias`, protected with the keystore's password, and
+    /// returns where it is listed.
+    pub fn import_key_pair(
+        &mut self,
+        entries: &mut Vec<KeystoreEntry>,
+        alias: String,
+        key: &[u8],
+        chain: &[Vec<u8>],
+    ) -> Result<usize, String> {
+        let failed = |error: String| format!("Not imported: {error}.");
+        OsRng::default().check()?;
+        let mut rng = OsRng::default();
+        match self {
+            Self::Jks { writable, password } => {
+                let protected =
+                    key_protection::protect(key, password, writable.is_jceks(), &mut rng)
+                        .map_err(key_error)?;
+                rng.check()?;
+                let to = entries.partition_point(|other| other.alias < alias);
+                let created = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |elapsed| elapsed.as_millis() as u64);
+                writable
+                    .insert_private_key(to, &alias, &protected, chain, created)
+                    .map_err(|error| failed(error.to_string()))?;
+                entries.insert(
+                    to,
+                    KeystoreEntry {
+                        alias,
+                        certificate: certificate::summarize(&chain[0]),
+                        content: Content::Certificates {
+                            kind: Kind::PrivateKey,
+                            certificates: chain.to_vec(),
+                        },
+                        chain_warning: None,
+                    },
+                );
+                Ok(to)
+            }
+            Self::Pkcs12(writable) => {
+                // The key and its certificate are paired by the
+                // certificate's digest, which must not pair two keys.
+                if let Some(held) = entries.iter().find(|entry| {
+                    entry.kind() == Kind::PrivateKey.label()
+                        && entry.certificates().first() == chain.first()
+                }) {
+                    return Err(failed(format!(
+                        "the keystore already holds this key pair as '{}'",
+                        held.alias
+                    )));
+                }
+                if writable.password().is_empty() {
+                    return Err(failed(
+                        "a key needs a keystore password that is not empty; change the password first (p)"
+                            .into(),
+                    ));
+                }
+                let listed = writable
+                    .insert_private_key(&alias, key, chain, &mut rng)
+                    .map_err(|error| failed(error.to_owned()))?;
+                rng.check()?;
+                *entries = listed;
+                Ok(listed_at(entries, &alias))
+            }
+        }
+    }
+
     /// The keystore file, after checking that it reads back as `entries`.
     fn encode(&self, entries: &[KeystoreEntry]) -> Result<Vec<u8>, String> {
         let (data, read_back) = match self {

@@ -1994,7 +1994,7 @@ fn importing_a_certificate_adds_a_trusted_entry() {
         ("store", "is not a certificate file"),
     ] {
         press(&mut app, KeyCode::Char('i'));
-        assert!(screen(&mut app, 120, 24).contains(" Import certificate from file "));
+        assert!(screen(&mut app, 120, 24).contains(" Import certificate or key pair from file "));
         type_password(&mut app, name);
         press(&mut app, KeyCode::Enter);
         assert!(red_text(&mut app).contains(error), "{name}");
@@ -2065,6 +2065,239 @@ fn rename_and_import_need_an_editable_keystore() {
         press(&mut app, KeyCode::Char(key));
         assert!(app.message.is_none() && app.file_picker.is_none());
     }
+}
+
+/// Chooses the file starting with `name` in the import file browser.
+fn import(app: &mut App, name: &str) {
+    press(app, KeyCode::Char('i'));
+    type_password(app, name);
+    press(app, KeyCode::Enter);
+}
+
+/// PEM text of the synthetic Ed25519 key `key` and of `certificates`.
+fn key_pem(label: &str, key: &[u8], certificates: &[&[u8]]) -> String {
+    use crown::asn1::pem;
+    let mut text = pem::encode(label, key);
+    for certificate in certificates {
+        text.push_str(&pem::encode("CERTIFICATE", certificate));
+    }
+    text
+}
+
+#[test]
+fn importing_a_key_pair_adds_a_private_key_entry() {
+    use test_support::{TestRng, ed25519_certificate, ed25519_pkcs8};
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    let write = |name: &str, data: &[u8]| fs::write(directory.path().join(name), data).unwrap();
+    let ca = ed25519_certificate("ca", "ca", 9, 9);
+    let leaf = ed25519_certificate("Leaf", "ca", 7, 9);
+    let key = ed25519_pkcs8(7);
+    write(
+        "pair.pem",
+        key_pem("PRIVATE KEY", &key, &[&ca, &leaf]).as_bytes(),
+    );
+
+    // A PEM file with the key and its certificates: only the alias is asked.
+    import(&mut app, "pair");
+    assert!(screen(&mut app, 120, 24).contains("Alias for the imported key pair: leaf_"));
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Imported key pair as 'leaf'."));
+    assert!(app.modified);
+    let imported = &app.entries[app.selected_entry().unwrap()];
+    assert_eq!(
+        (imported.alias.as_str(), imported.kind()),
+        ("leaf", "Private key")
+    );
+    assert_eq!(imported.certificates(), [leaf.clone(), ca.clone()]);
+    // The key is protected with the keystore's password when saved.
+    press(&mut app, KeyCode::Char('w'));
+    assert!(!app.modified, "{:?}", app.message);
+    assert_eq!(aliases(&path), ["leaf", "root-cert", "server-key"]);
+    assert_eq!(saved_key(&path, 0, "changeit"), Ok(key.clone()));
+    assert_eq!(
+        app.entries,
+        keystore::load_entries(&fs::read(&path).unwrap(), "changeit").unwrap()
+    );
+
+    // A key file on its own: its certificate file is asked for next.
+    write("only.key", &ed25519_pkcs8(5));
+    write("five.crt", &ed25519_certificate("five", "five", 5, 5));
+    write("other.crt", &ca);
+    import(&mut app, "only");
+    assert!(screen(&mut app, 120, 24).contains(" Certificate file of the imported key "));
+    type_password(&mut app, "other");
+    press(&mut app, KeyCode::Enter);
+    assert!(
+        red_text(&mut app)
+            .contains("Not imported: no certificate in 'other.crt' matches the private key.")
+    );
+    assert!(app.key_import.is_none() && app.alias_prompt.is_none());
+    // Leaving the browser leaves the import.
+    import(&mut app, "only");
+    press(&mut app, KeyCode::Esc);
+    assert!(app.key_import.is_none() && !app.importing);
+    import(&mut app, "only");
+    type_password(&mut app, "five");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.key_import.is_none() && !app.importing);
+    // The alias is checked like any other.
+    type_alias(&mut app, "LEAF");
+    assert!(red_text(&mut app).contains("An entry named 'leaf' already exists."));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.entries.len(), 3);
+
+    // An encrypted key asks for its password until it is right.
+    let encrypted = crown::x509::pbe::encrypt_private_key(
+        &ed25519_pkcs8(5),
+        b"secret",
+        crown::x509::pbe::Pbes2Cipher::Aes256Cbc { iv: Vec::new() },
+        1,
+        &mut TestRng(3),
+    )
+    .unwrap()
+    .encode();
+    let five = ed25519_certificate("five", "five", 5, 5);
+    write(
+        "locked.pem",
+        key_pem("ENCRYPTED PRIVATE KEY", &encrypted, &[&five]).as_bytes(),
+    );
+    import(&mut app, "locked");
+    assert!(screen(&mut app, 120, 24).contains("Password of 'locked.pem': _"));
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    press(&mut app, KeyCode::Char('x'));
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Tab);
+    assert!(screen(&mut app, 120, 24).contains("Password of 'locked.pem': *_"));
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("Incorrect password."));
+    assert!(screen(&mut app, 120, 24).contains("Password of 'locked.pem': _"));
+    press(&mut app, KeyCode::Esc);
+    assert!(app.key_import.is_none());
+    // The same key as DER, with its certificate in another file.
+    write("der.p8", &encrypted);
+    import(&mut app, "der");
+    type_password(&mut app, "secret");
+    press(&mut app, KeyCode::Enter);
+    type_password(&mut app, "five");
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Alias for the imported key pair: five_"));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.entries[0].kind(), "Private key");
+    assert_eq!(app.entries[0].certificates(), [five]);
+
+    // Key files that cannot be read say why.
+    write(
+        "many.pem",
+        format!("{0}{0}", key_pem("PRIVATE KEY", &key, &[])).as_bytes(),
+    );
+    import(&mut app, "many");
+    assert!(red_text(&mut app).contains("'many.pem' holds several private keys"));
+    fs::remove_file(directory.path().join("many.pem")).unwrap();
+    app.import_file(&directory.path().join("many.pem"));
+    let message = app.message.as_ref().unwrap();
+    assert!(message.0.starts_with("Cannot read") && message.1);
+}
+
+#[test]
+fn key_pairs_are_imported_from_and_into_pkcs12_keystores() {
+    use test_support::{TestRng, ed25519_certificate, ed25519_pkcs8};
+    let directory = TestDirectory::new();
+    let write = |name: &str, data: &[u8]| fs::write(directory.path().join(name), data).unwrap();
+    let ca = ed25519_certificate("ca", "ca", 9, 9);
+    let leaf = ed25519_certificate("leaf", "ca", 7, 9);
+    let five = ed25519_certificate("five", "five", 5, 5);
+    let key = ed25519_pkcs8(7);
+    let mut rng = TestRng(1);
+    let mut source = pkcs12::Writable::empty("srcpass");
+    write("none.p12", &source.encode(&mut rng).unwrap());
+    source
+        .insert_private_key("Source", &key, &[leaf.clone(), ca.clone()], &mut rng)
+        .unwrap();
+    write("source.p12", &source.encode(&mut rng).unwrap());
+    source
+        .insert_private_key(
+            "second",
+            &ed25519_pkcs8(5),
+            std::slice::from_ref(&five),
+            &mut rng,
+        )
+        .unwrap();
+    write("two.p12", &source.encode(&mut rng).unwrap());
+    write(
+        "pair.pem",
+        key_pem("PRIVATE KEY", &key, &[&leaf, &ca]).as_bytes(),
+    );
+
+    let path = directory.path().join("store.p12");
+    fs::write(
+        &path,
+        pkcs12::Writable::empty("changeit")
+            .encode(&mut rng)
+            .unwrap(),
+    )
+    .unwrap();
+    let mut app = App::default();
+    app.open_file(path.clone());
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.document.is_some());
+
+    // A PKCS12 file gives its only key pair, under its alias.
+    import(&mut app, "source");
+    assert!(screen(&mut app, 120, 24).contains("Password of 'source.p12': _"));
+    type_password(&mut app, "wrong");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("Incorrect password."));
+    type_password(&mut app, "srcpass");
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Alias for the imported key pair: source_"));
+    press(&mut app, KeyCode::Enter);
+    assert!(app.modified, "{:?}", app.message);
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.entries[0].certificates(), [leaf.clone(), ca.clone()]);
+    press(&mut app, KeyCode::Char('w'));
+    assert!(!app.modified, "{:?}", app.message);
+    assert_eq!(app.entries, pkcs12_entries(&path, "changeit"));
+    let (_, saved) = pkcs12::parse(&fs::read(&path).unwrap())
+        .unwrap()
+        .open("changeit")
+        .ok()
+        .unwrap();
+    assert_eq!(saved.unwrap().private_key(0).unwrap().as_slice(), key);
+
+    // The same key pair is not added twice.
+    import(&mut app, "pair");
+    type_alias(&mut app, "again");
+    assert!(red_text(&mut app).contains("the keystore already holds this key pair as 'source'"));
+    press(&mut app, KeyCode::Esc);
+    // PKCS12 files without exactly one key are refused.
+    for name in ["none", "two"] {
+        import(&mut app, name);
+        type_password(&mut app, "srcpass");
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            red_text(&mut app).contains("it must hold exactly one private key"),
+            "{name}"
+        );
+        assert!(app.key_import.is_none());
+    }
+    assert_eq!(app.entries.len(), 1);
+
+    // A passwordless truststore has no password to protect a key with. The
+    // certificate request in the key's file is passed over.
+    let mut text = key_pem("PRIVATE KEY", &key, &[&leaf]).into_bytes();
+    text.extend_from_slice(test_support::KEYTOOL_REQUEST);
+    write("request.pem", &text);
+    let path = directory.path().join("open.p12");
+    fs::write(&path, include_bytes!("../tests/fixtures/passwordless.p12")).unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    assert!(app.document.is_some());
+    import(&mut app, "request");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("a key needs a keystore password that is not empty"));
+    assert!(!app.modified);
 }
 
 fn type_new_password(app: &mut App, first: &str, second: &str) {

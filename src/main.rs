@@ -9,6 +9,7 @@ mod entry_list;
 mod export;
 mod file_picker;
 mod java_serialization;
+mod key_import;
 mod key_protection;
 mod keystore;
 mod new_password;
@@ -118,8 +119,10 @@ struct App {
     save_as: Option<save::SaveAsPrompt>,
     alias_prompt: Option<editing::AliasPrompt>,
     new_password: Option<new_password::NewPasswordPrompt>,
-    /// Whether the file browser is choosing a certificate to import.
+    /// Whether the file browser is choosing a file to import from.
     importing: bool,
+    /// A key pair import waiting for a password or a certificate file.
+    key_import: Option<key_import::KeyImport>,
     /// The result of the last edit or save, and whether it failed. Cleared
     /// on the next key.
     message: Option<(String, bool)>,
@@ -220,6 +223,7 @@ impl App {
                 if !picker.clear_filter() {
                     self.file_picker = None;
                     self.importing = false;
+                    self.cancel_key_import();
                 }
             } else if let Some(path) = picker.handle_key(key) {
                 self.file_picker = None;
@@ -233,6 +237,8 @@ impl App {
             if details.handle_event(key) {
                 self.entry_details = None;
             }
+        } else if self.unlocking_import() {
+            self.handle_import_password(key);
         } else if self.alias_prompt.is_some() {
             self.handle_alias(key);
         } else if self.new_password.is_some() {
@@ -414,6 +420,7 @@ impl App {
             || self.save_as.is_some()
             || self.alias_prompt.is_some()
             || self.new_password.is_some()
+            || self.unlocking_import()
             || self
                 .entry_details
                 .as_ref()
@@ -578,6 +585,7 @@ impl App {
         self.alias_prompt = None;
         self.new_password = None;
         self.importing = false;
+        self.key_import = None;
         self.message = None;
     }
 
@@ -797,8 +805,10 @@ impl App {
             frame.render_widget(path_bar::line(path), path_area);
         }
         if let Some(picker) = &mut self.file_picker {
-            if self.importing {
-                picker.draw_titled(frame, " Import certificate from file ");
+            if self.key_import.is_some() {
+                picker.draw_titled(frame, " Certificate file of the imported key ");
+            } else if self.importing {
+                picker.draw_titled(frame, " Import certificate or key pair from file ");
             } else {
                 picker.draw(frame);
             }
@@ -849,12 +859,25 @@ impl App {
                 ]),
                 "Enter Confirm | Backspace Delete | Esc Cancel | Ctrl+C Quit".into(),
             ]
+        } else if let Some((file, password)) = self
+            .key_import
+            .as_ref()
+            .and_then(|import| import.password())
+        {
+            vec![
+                Line::from(vec![
+                    format!("Password of '{file}': ").bold(),
+                    format!("{}_", "*".repeat(password.chars().count())).into(),
+                ]),
+                "Enter Confirm | Backspace Delete | Esc Cancel | Ctrl+C Quit".into(),
+            ]
         } else if let Some(prompt) = &self.alias_prompt {
             let label = match prompt.action {
                 editing::Action::Rename(index) => {
                     format!("New alias for '{}': ", self.entries[index].alias)
                 }
                 editing::Action::Import(_) => "Alias for the imported certificate: ".into(),
+                editing::Action::ImportKey(..) => "Alias for the imported key pair: ".into(),
             };
             vec![
                 Line::from(vec![label.bold(), format!("{}_", prompt.alias).into()]),

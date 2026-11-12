@@ -372,6 +372,22 @@ impl crown::rng::Rng for TestRng {
     }
 }
 
+/// The PKCS #8 encoding of the Ed25519 key made from the synthetic secret
+/// `[key; 32]`, as in `ed25519_certificate`.
+pub fn ed25519_pkcs8(key: u8) -> Vec<u8> {
+    use crown::asn1::{der, oid::ObjectIdentifier};
+    der::sequence(
+        &[
+            der::integer(&[0]),
+            der::sequence(&der::oid(
+                &ObjectIdentifier::new(&[1, 3, 101, 112]).unwrap(),
+            )),
+            der::octet_string(&der::octet_string(&[key; 32])),
+        ]
+        .concat(),
+    )
+}
+
 /// A PKCS #8 structure around synthetic bytes, not a private key.
 pub fn synthetic_pkcs8(content: &[u8]) -> Vec<u8> {
     use crown::asn1::{der, oid::ObjectIdentifier};

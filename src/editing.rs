@@ -1,10 +1,10 @@
 //! Changing the open keystore's entries: the alias prompt, renaming an
-//! entry, and importing a trusted certificate from a certificate file.
+//! entry, and importing a trusted certificate or a key pair under an alias.
 use std::path::Path;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::{App, MAX_KEYSTORE_SIZE, certificate_file, keystore::Content, read_limited};
+use crate::{App, certificate_file, key_import::Key, keystore::Content};
 
 /// What the alias being typed is for.
 pub enum Action {
@@ -12,6 +12,8 @@ pub enum Action {
     Rename(usize),
     /// Add this certificate's DER as a trusted certificate.
     Import(Vec<u8>),
+    /// Add this private key with its certificate chain.
+    ImportKey(Key, Vec<Vec<u8>>),
 }
 
 /// The alias being typed for a renamed or imported entry.
@@ -33,7 +35,7 @@ impl App {
         }
     }
 
-    /// Opens the file browser to choose a certificate file to import.
+    /// Opens the file browser to choose a certificate or key file to import.
     pub(crate) fn ask_import(&mut self) {
         if self.editable() {
             self.open_picker();
@@ -41,21 +43,18 @@ impl App {
         }
     }
 
-    /// Reads the chosen file's certificate and asks for its alias, suggesting
-    /// the certificate's subject name.
-    pub(crate) fn import_file(&mut self, path: &Path) {
-        match read_certificate(path) {
-            Ok(certificate) => {
-                let alias = certificate_file::subject_name(&certificate)
-                    .unwrap_or_default()
-                    .to_lowercase();
-                self.alias_prompt = Some(AliasPrompt {
-                    action: Action::Import(certificate),
-                    alias,
-                });
-            }
-            Err(error) => self.message = Some((error, true)),
-        }
+    /// Asks for the alias of the single certificate in the file content
+    /// `data`, suggesting the certificate's subject name.
+    pub(crate) fn import_certificate(&mut self, path: &Path, data: &[u8]) -> Result<(), String> {
+        let certificate = read_certificate(path, data)?;
+        let alias = certificate_file::subject_name(&certificate)
+            .unwrap_or_default()
+            .to_lowercase();
+        self.alias_prompt = Some(AliasPrompt {
+            action: Action::Import(certificate),
+            alias,
+        });
+        Ok(())
     }
 
     pub(crate) fn handle_alias(&mut self, key: KeyEvent) {
@@ -88,7 +87,7 @@ impl App {
         let alias = prompt.alias.to_lowercase();
         let renamed = match prompt.action {
             Action::Rename(index) => Some(index),
-            Action::Import(_) => None,
+            Action::Import(_) | Action::ImportKey(..) => None,
         };
         if alias.is_empty() {
             return Err("Type an alias, or press Esc to cancel.".into());
@@ -124,6 +123,13 @@ impl App {
                     message,
                 )
             }
+            Action::ImportKey(key, chain) => {
+                let message = format!("Imported key pair as '{alias}'.");
+                (
+                    document.import_key_pair(&mut self.entries, alias, key, chain),
+                    message,
+                )
+            }
         };
         let to = result?;
         self.modified = true;
@@ -140,11 +146,10 @@ impl App {
     }
 }
 
-/// The DER of the single certificate in the file at `path`.
-fn read_certificate(path: &Path) -> Result<Vec<u8>, String> {
-    let data = read_limited(path, MAX_KEYSTORE_SIZE)
-        .map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
-    let file = certificate_file::parse(&data)
+/// The DER of the single certificate in the content `data` of the file at
+/// `path`.
+fn read_certificate(path: &Path, data: &[u8]) -> Result<Vec<u8>, String> {
+    let file = certificate_file::parse(data)
         .map_err(|error| format!("{} is not a certificate file: {error}", path.display()))?;
     let mut certificates: Vec<_> = file
         .entries

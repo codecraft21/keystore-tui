@@ -12,7 +12,8 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/file_picker.rs` | The keystore file browser |
 | `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |
 | `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
-| `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate from a certificate file |
+| `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate or a key pair under the typed alias |
+| `src/key_import.rs` | Importing a key pair: finding the private key in a PEM, PKCS #8, or PKCS12 file, its password prompt, and matching it to its certificate chain |
 | `src/new_password.rs` | Typing a new password twice, changing the open keystore's password or a key's password, and creating a new keystore file |
 | `src/save.rs` | The open keystore's writable form and password, converting it to another format, the "save as" and new-keystore name prompt, and replacing a file atomically |
 | `src/keystore.rs` | JKS and JCEKS parsing, integrity check (SHA-1), and writing entries back as stored, renamed, or added; the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
