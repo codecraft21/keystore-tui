@@ -22,6 +22,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Renaming entries](#renaming-entries)
   - [Importing certificates](#importing-certificates)
   - [Changing the password](#changing-the-password)
+  - [Changing a key password](#changing-a-key-password)
 - [Creating a keystore](#creating-a-keystore)
 - [Saving](#saving)
   - [Writing PKCS12 keystores](#writing-pkcs12-keystores)
@@ -48,8 +49,10 @@ document and the usage reference, and also the README if its overview changes.
 - It runs without Java or `keytool` installed.
 - Private and secret keys are never displayed, exported, or written
   unencrypted. They are decrypted only in memory, and only to encrypt them
-  again when a PKCS12 keystore's password changes; see [Changing the
-  password](#changing-the-password).
+  again under a new password: when a PKCS12 keystore's password changes (see
+  [Changing the password](#changing-the-password)), and when a JKS or JCEKS
+  key's password changes (see [Changing a key
+  password](#changing-a-key-password)).
 - The following are out of scope for now: importing anything but a trusted
   certificate, keystore editing other than [deleting](#deleting-entries) and
   [renaming](#renaming-entries) entries, and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
@@ -303,8 +306,8 @@ any existing incomplete-entry warnings.
 ### Deleting entries
 
 - JKS, JCEKS, and PKCS12 keystores can be changed. In the entry list of one,
-  a line above the shortcuts shows `n New | i Import certificate | r Rename | d
-  Delete entry | w Save | W Save as | p Password`.
+  a line above the shortcuts shows `n New | i Import | r Rename | d Delete | w
+  Save | W Save as | p Password | P Key password`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
   keys do nothing when no entry is selected.
@@ -397,6 +400,35 @@ any existing incomplete-entry warnings.
   or a form the app does not support, when no password protects the keystore
   and it holds no keys, when the new password is empty, or when the system
   provides no random numbers. A red message gives the reason.
+
+### Changing a key password
+
+- In JKS and JCEKS, each private key has a password of its own, which may
+  differ from the keystore's. `P` changes it for the selected private key.
+- When the keystore's password unlocks the key, the new password is asked for
+  at once. Otherwise a prompt first asks `Current password of key '<alias>':`,
+  typed once and shown as `*`. A wrong password shows a red message and the
+  prompt stays open; `Esc` cancels.
+- The new password is then asked for twice, `New password for key '<alias>':`
+  and `Type the password again:`, as when [changing the
+  password](#changing-the-password). An empty password is accepted.
+- The key is recovered in memory, protected again under the new password as
+  Java protects keys in the keystore's format, with a new random salt, and
+  wiped. JKS uses Java's SHA-1 based key protector. JCEKS uses
+  `PBEWithMD5AndTripleDES` with 200,000 iterations, and accepts only printable
+  ASCII passwords, as Java does; another password is refused with a red
+  message.
+- A JKS or JCEKS keystore may hold keys protected either way; each is
+  recovered by its own scheme and protected again by the keystore's.
+- The change counts as a modification and reaches the file on saving, where
+  only the protected key changes: the entry keeps its alias, creation date,
+  certificate chain, and place in the file. A green message names the key.
+- `P` shows a red message, and changes nothing, for an entry that is not a
+  private key, for a key whose protection the app cannot read, for a PKCS12
+  keystore, whose keys share the keystore's password, and where the keystore
+  cannot be changed. JCEKS secret keys are not supported yet.
+- The keystore's own password is not affected, and changing it does not
+  change key passwords.
 
 ## Creating a keystore
 

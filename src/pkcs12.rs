@@ -873,7 +873,7 @@ fn reencrypt_key(
 
 /// Whether `content` has the shape of a PKCS #8 `PrivateKeyInfo`: a version,
 /// an algorithm, and the key octets, with optional fields after them.
-fn is_private_key_info(content: &[u8]) -> bool {
+pub(crate) fn is_private_key_info(content: &[u8]) -> bool {
     let mut reader = Reader::new(content);
     let Ok(mut info) = reader.read_sequence() else {
         return false;
@@ -916,11 +916,10 @@ fn is_safe_contents(content: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{fixture_certificate_der, fixture_summary};
+    use crate::test_support::{TestRng, fixture_certificate_der, fixture_summary, synthetic_pkcs8};
     use crown::{
         asn1::{der, oid::ObjectIdentifier},
         pkcs12::{SafeBag, encode_safe_contents},
-        rng::Rng,
         x509::{
             Certificate,
             algorithm::{AlgorithmIdentifier, Hash},
@@ -948,16 +947,6 @@ mod tests {
     ];
     /// A wrong password that passes the padding check of `OPENSSL_NO_MAC_AES`.
     const VALID_PADDING_PASSWORD: &str = "wrong130";
-
-    struct TestRng(u8);
-    impl Rng for TestRng {
-        fn fill_bytes(&mut self, bytes: &mut [u8]) {
-            for byte in bytes {
-                self.0 = self.0.wrapping_add(1);
-                *byte = self.0;
-            }
-        }
-    }
 
     fn synthetic(bags: Vec<SafeBag>) -> Vec<u8> {
         Pfx::build(bags, b"changeit", 100, &mut TestRng(0))
@@ -1954,18 +1943,6 @@ mod tests {
         assert!(error.contains("not supported"), "{error}");
         let saved = writable.encode(&mut TestRng(0)).unwrap();
         assert!(parse(&saved).unwrap().verify("changeit").is_ok());
-    }
-
-    /// A PKCS #8 structure around synthetic bytes, not a private key.
-    fn synthetic_pkcs8(content: &[u8]) -> Vec<u8> {
-        der::sequence(
-            &[
-                der::integer(&[0]),
-                der::sequence(&der::oid(&ObjectIdentifier::new(&[1, 2, 3, 4]).unwrap())),
-                der::octet_string(content),
-            ]
-            .concat(),
-        )
     }
 
     fn encrypted_key(pkcs8: &[u8], password: &[u8], legacy: bool) -> EncryptedPrivateKeyInfo {

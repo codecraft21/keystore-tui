@@ -4,7 +4,11 @@ use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
-use crate::{App, Confirm, Password, canonical_path, keystore, path_bar, pkcs12, save};
+use crate::{
+    App, Confirm, Password, canonical_path,
+    keystore::{self, Kind},
+    path_bar, pkcs12, save,
+};
 
 /// What the new password is for.
 pub enum Purpose {
@@ -12,6 +16,13 @@ pub enum Purpose {
     Create(PathBuf),
     /// Change the open keystore's password.
     Change,
+    /// Type the current password of the private key at this index of the
+    /// app's entries, which the keystore's password does not unlock. It is
+    /// typed once.
+    KeyCurrent(usize),
+    /// Change the password of the private key at this index, unlocked with
+    /// the password given, or with the keystore's when there is none.
+    KeyChange(usize, Option<Password>),
 }
 
 /// A new password being typed, then typed again to rule out a typing error.
@@ -76,6 +87,75 @@ impl App {
         }
     }
 
+    /// Asks for the selected private key's new password, after its current
+    /// one unless the keystore's password unlocks it.
+    pub(crate) fn ask_key_password(&mut self) {
+        if !self.editable() {
+            return;
+        }
+        let (Some(index), Some(document)) = (self.selected_entry(), &self.document) else {
+            return;
+        };
+        let purpose = if !document.has_key_passwords() {
+            Err("PKCS12 keys share the keystore's password; press p to change it.".into())
+        } else if self.entries[index].kind() != Kind::PrivateKey.label() {
+            Err("Only private keys have a password of their own that can be changed.".into())
+        } else {
+            document.unlocks_key(index, None).map(|unlocked| {
+                if unlocked {
+                    Purpose::KeyChange(index, None)
+                } else {
+                    Purpose::KeyCurrent(index)
+                }
+            })
+        };
+        match purpose {
+            Ok(purpose) => self.new_password = Some(NewPasswordPrompt::new(purpose)),
+            Err(error) => self.message = Some((error, true)),
+        }
+    }
+
+    /// Checks the typed current key password, then asks for the new one.
+    fn unlock_key(&mut self, index: usize, typed: Password) {
+        let unlocked = self.document.as_ref().map_or(Ok(false), |document| {
+            document.unlocks_key(index, Some(&typed.0))
+        });
+        match unlocked {
+            Ok(true) => {
+                self.new_password = Some(NewPasswordPrompt::new(Purpose::KeyChange(
+                    index,
+                    Some(typed),
+                )));
+            }
+            // The prompt stays open for another attempt.
+            Ok(false) => self.message = Some(("Incorrect key password.".into(), true)),
+            Err(error) => {
+                self.new_password = None;
+                self.message = Some((error, true));
+            }
+        }
+    }
+
+    fn change_key_password(&mut self, index: usize, current: Option<Password>, new: &str) {
+        let Some(document) = &mut self.document else {
+            return;
+        };
+        let current = current.as_ref().map(|password| password.0.as_str());
+        self.message = Some(match document.set_key_password(index, current, new) {
+            Ok(()) => {
+                self.modified = true;
+                (
+                    format!(
+                        "Password of key '{}' changed; it is written when the keystore is saved.",
+                        self.entries[index].alias
+                    ),
+                    false,
+                )
+            }
+            Err(error) => (error, true),
+        });
+    }
+
     /// Asks for the open keystore's new password.
     pub(crate) fn ask_password_change(&mut self) {
         if self.editable() {
@@ -93,6 +173,9 @@ impl App {
             KeyCode::Backspace => prompt.current.pop(),
             KeyCode::Enter => {
                 let typed = std::mem::take(&mut prompt.current);
+                if let Purpose::KeyCurrent(index) = prompt.purpose {
+                    return self.unlock_key(index, typed);
+                }
                 match prompt.first.take() {
                     None => prompt.first = Some(typed),
                     Some(first) if *first.0 != *typed.0 => {
@@ -107,6 +190,10 @@ impl App {
                         match prompt.purpose {
                             Purpose::Create(path) => self.create_keystore(path, &typed.0),
                             Purpose::Change => self.change_password(&typed.0),
+                            Purpose::KeyChange(index, current) => {
+                                self.change_key_password(index, current, &typed.0);
+                            }
+                            Purpose::KeyCurrent(_) => {}
                         }
                     }
                 }
