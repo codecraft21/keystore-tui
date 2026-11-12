@@ -36,7 +36,8 @@ impl FilePicker {
             let path = entry?.path();
             let is_directory = path.is_dir();
             let is_supported = path.extension().is_some_and(|extension| {
-                ["jks", "jceks", "p12", "pfx"]
+                // Private key files are listed for the key pair import.
+                ["jks", "jceks", "p12", "pfx", "key", "p8"]
                     .iter()
                     .any(|ext| extension.eq_ignore_ascii_case(ext))
             }) || path.file_name().is_some_and(|name| {

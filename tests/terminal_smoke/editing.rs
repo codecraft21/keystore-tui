@@ -5,7 +5,7 @@ use std::fs;
 
 use crate::fixtures::{
     TempDir, certificate_pem, empty_password_fixture, fixture_certificate, key_keystore,
-    with_empty_password_digest,
+    key_pair_pem, with_empty_password_digest,
 };
 use crate::pty::PtyApp;
 
@@ -88,7 +88,7 @@ fn rename_import_save_and_quit_restores_terminal() {
     app.send(b"\x7fOld-Root\r");
     app.expect(&["Renamed entry 'root-cert' to 'old-root'.", "[modified]"]);
     app.send(b"i");
-    app.expect(&["Import certificate from file", "ca.pem"]);
+    app.expect(&["Import certificate or key pair from file", "ca.pem"]);
     app.send(b"ca\r");
     app.expect(&["Alias for the imported certificate: jks tui test fixture_"]);
     app.send(b"\x15new-root\r");
@@ -171,7 +171,7 @@ fn create_pkcs12_import_save_and_quit_restores_terminal() {
     app.expect(&["Created the PKCS12 keystore", "no entries"]);
     let empty = fs::read(directory.join("new.p12")).unwrap();
     app.send(b"i");
-    app.expect(&["Import certificate from file", "ca.pem"]);
+    app.expect(&["Import certificate or key pair from file", "ca.pem"]);
     app.send(b"ca\r");
     app.expect(&["Alias for the imported certificate:"]);
     app.send(b"\x15root\r");
@@ -275,6 +275,41 @@ fn convert_keystore_and_quit_restores_terminal() {
     app.send(b"\x1b");
     // Sent on its own: Esc followed at once by `q` would read as Alt+q.
     app.expect(&["P Key password"]);
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Importing key pairs](../../docs/SPEC.md#importing-key-pairs),
+/// [Saving](../../docs/SPEC.md#saving),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn import_key_pair_save_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    let original = empty_password_fixture();
+    fs::write(&path, &original).unwrap();
+    fs::write(directory.join("pair.pem"), key_pair_pem()).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "i Import | r Rename"]);
+    app.send(b"i");
+    app.expect(&["Import certificate or key pair from file", "pair.pem"]);
+    app.send(b"pair\r");
+    app.expect(&["Alias for the imported key pair: imported_"]);
+    app.send(b"\r");
+    app.expect(&[
+        "Imported key pair as 'imported'.",
+        "Private key",
+        "Ed25519",
+        "[modified]",
+    ]);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+    let saved = fs::read(&path).unwrap();
+    assert_eq!(&saved[8..12], &2_u32.to_be_bytes());
+    // The key is written protected, never as it was read.
+    let secret = [7_u8; 32];
+    assert!(!saved.windows(32).any(|window| window == secret));
     app.send(b"q");
     app.assert_restored();
 }

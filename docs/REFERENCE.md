@@ -117,7 +117,7 @@ certificates whose names match another certificate or key.
 | `s` | Switch the sort order between alias and expiry date |
 | `o` | Open another keystore or certificate file |
 | `n` | Create a new, empty JKS, JCEKS, or PKCS12 keystore |
-| `i` | Import a certificate file as a trusted certificate |
+| `i` | Import a trusted certificate or a key pair from a file |
 | `r` | Rename the selected entry |
 | `d` / `Delete` | Delete the selected entry |
 | `w` | Save the changes to the opened file |
@@ -147,6 +147,14 @@ next to the app name, but nothing changes on disk until you save.
 - **Import a trusted certificate:** press `i`, choose a file holding one
   certificate (PEM, DER, or PKCS#7) in the browser, then confirm or edit the
   suggested alias and press `Enter`.
+- **Import a key pair:** press `i` and choose the file holding the private
+  key: a PEM file (PKCS #8, plain or encrypted, or OpenSSL's `RSA PRIVATE KEY`
+  and `EC PRIVATE KEY`), a DER PKCS #8 file, or a PKCS12 keystore with one
+  private key. Type the file's password if it is encrypted. If the file has no
+  certificate, choose the certificate file next. Then confirm or edit the
+  alias. The key must match one of the certificates; it is stored under the
+  keystore's password. Keys encrypted in OpenSSL's old PEM format are not
+  read; convert them first with `openssl pkcs8 -topk8`.
 - **Change the password:** press `p`, then type the new password twice. In JKS
   and JCEKS only the keystore's own password changes; private-key and
   secret-key entries keep the passwords they were protected with, as with

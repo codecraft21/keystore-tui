@@ -590,10 +590,7 @@ impl Writable {
         let Bag::ShroudedKey(info) = &bag.bag else {
             return None;
         };
-        pbe_decrypt(&info.algorithm, &info.encrypted_data, &self.password)
-            .ok()
-            .map(Zeroizing::new)
-            .filter(|key| is_private_key_info(key))
+        decrypt_info(info, &self.password)
     }
 
     /// Protects the store with `password` from now on. Java expects keys to
@@ -845,6 +842,19 @@ fn decrypt_safe(content: &[u8], password: &[u8]) -> Result<Vec<u8>, SafeError> {
     let algorithm = AlgorithmIdentifier::parse(&mut info).map_err(unreadable)?;
     let ciphertext = info.read_implicit(0, false).map_err(unreadable)?;
     pbe_decrypt(&algorithm, ciphertext, password)
+}
+
+/// The PKCS #8 private key in the encoded `EncryptedPrivateKeyInfo`
+/// `encrypted`, or `None` if `password` does not decrypt it.
+pub(crate) fn decrypt_key(encrypted: &[u8], password: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    decrypt_info(&EncryptedPrivateKeyInfo::parse(encrypted).ok()?, password)
+}
+
+fn decrypt_info(info: &EncryptedPrivateKeyInfo, password: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    pbe_decrypt(&info.algorithm, &info.encrypted_data, password)
+        .ok()
+        .map(Zeroizing::new)
+        .filter(|key| is_private_key_info(key))
 }
 
 /// Decrypts `ciphertext` as its password-based encryption `algorithm` says.
