@@ -9,6 +9,7 @@ mod entry_list;
 mod export;
 mod file_picker;
 mod java_serialization;
+mod key_export;
 mod key_import;
 mod key_protection;
 mod keystore;
@@ -121,6 +122,8 @@ struct App {
     new_password: Option<new_password::NewPasswordPrompt>,
     /// Whether the file browser is choosing a file to import from.
     importing: bool,
+    /// The file name being typed for a private key export.
+    key_export: Option<key_export::KeyExport>,
     /// A key pair import waiting for a password or a certificate file.
     key_import: Option<key_import::KeyImport>,
     /// The result of the last edit or save, and whether it failed. Cleared
@@ -136,6 +139,8 @@ enum Confirm {
     Open,
     /// Create a keystore, which replaces the modified one.
     New,
+    /// Write the private key at this index unencrypted to this new file.
+    ExportPlain(PathBuf, usize),
 }
 
 const NOT_EDITABLE: &str = "Only keystores can be changed, not certificate files.";
@@ -237,6 +242,8 @@ impl App {
             if details.handle_event(key) {
                 self.entry_details = None;
             }
+        } else if self.key_export.is_some() {
+            self.handle_key_export(key);
         } else if self.unlocking_import() {
             self.handle_import_password(key);
         } else if self.alias_prompt.is_some() {
@@ -265,6 +272,7 @@ impl App {
                 KeyCode::Char('P') if is_text_input(key.modifiers) => self.ask_key_password(),
                 KeyCode::Char('r') if is_text_input(key.modifiers) => self.ask_rename(),
                 KeyCode::Char('i') if is_text_input(key.modifiers) => self.ask_import(),
+                KeyCode::Char('e') if is_text_input(key.modifiers) => self.ask_key_export(),
                 KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
                 KeyCode::Char('W') if is_text_input(key.modifiers) => {
                     if self.editable()
@@ -311,6 +319,7 @@ impl App {
             Confirm::Quit => return true,
             Confirm::Open => self.open_picker(),
             Confirm::New => self.name_new_keystore(),
+            Confirm::ExportPlain(path, index) => self.export_key(&path, index, ""),
             Confirm::Delete(index) => {
                 let Some(document) = &mut self.document else {
                     return false;
@@ -421,6 +430,7 @@ impl App {
             || self.alias_prompt.is_some()
             || self.new_password.is_some()
             || self.unlocking_import()
+            || self.key_export.is_some()
             || self
                 .entry_details
                 .as_ref()
@@ -586,6 +596,7 @@ impl App {
         self.new_password = None;
         self.importing = false;
         self.key_import = None;
+        self.key_export = None;
         self.message = None;
     }
 
@@ -851,13 +862,28 @@ impl App {
                 (Purpose::KeyChange(index, _), false) => {
                     format!("New password for key '{}': ", alias(index))
                 }
+                (Purpose::Export(..), false) => "Password for the exported key: ".into(),
             };
+            let plain = matches!(&prompt.purpose, Purpose::Export(path, _)
+                if key_export::Format::from_name(path) != key_export::Format::Pkcs12);
             vec![
                 Line::from(vec![
                     label.bold(),
                     format!("{}_", "*".repeat(prompt.current.0.chars().count())).into(),
                 ]),
-                "Enter Confirm | Backspace Delete | Esc Cancel | Ctrl+C Quit".into(),
+                if plain {
+                    "Empty: unencrypted | Enter Confirm | Backspace Delete | Esc Cancel | Ctrl+C Quit".into()
+                } else {
+                    "Enter Confirm | Backspace Delete | Esc Cancel | Ctrl+C Quit".into()
+                },
+            ]
+        } else if let Some(export) = &self.key_export {
+            vec![
+                Line::from(vec![
+                    "Export key to: ".bold(),
+                    format!("{}_", export.prompt.path).into(),
+                ]),
+                ".p12 Keystore | .pem Key and certificates | .key .p8 Key only | Enter Next | Ctrl+U Clear | Esc Cancel".into(),
             ]
         } else if let Some((file, password)) = self
             .key_import
@@ -887,7 +913,7 @@ impl App {
             vec!["Type to filter | Enter Apply | Esc Clear | Up/Down Scroll | Ctrl+C Quit".into()]
         } else if self.document.is_some() && self.file_picker.is_none() {
             vec![
-                "n New | i Import | r Rename | d Delete | w Save | W Save as | p Password | P Key password".into(),
+                "n New | i Import | e Export | r Rename | d Delete | w Save | W Save as | p Password | P Key password".into(),
                 LIST.into(),
             ]
         } else {
@@ -908,6 +934,10 @@ impl App {
             Confirm::New => {
                 "Creating a keystore discards the unsaved changes. Press y to continue, any other key to cancel.".into()
             }
+            Confirm::ExportPlain(_, index) => format!(
+                "Write the private key '{}' unencrypted? Press y to write it, any other key to cancel.",
+                self.entries[*index].alias
+            ),
             Confirm::Open => {
                 "Opening another file discards the unsaved changes. Press y to continue, any other key to cancel.".into()
             }

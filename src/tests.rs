@@ -1928,7 +1928,7 @@ fn type_alias(app: &mut App, alias: &str) {
 fn renaming_an_entry_keeps_alias_order_and_is_written_on_save() {
     let directory = TestDirectory::new();
     let (mut app, path) = editing(&directory);
-    assert!(screen(&mut app, 120, 24).contains("i Import | r Rename | d Delete"));
+    assert!(screen(&mut app, 120, 24).contains("i Import | e Export | r Rename | d Delete"));
     press(&mut app, KeyCode::Char('r'));
     assert!(screen(&mut app, 120, 24).contains("New alias for 'root-cert': root-cert_"));
     // Letters are typed into the alias instead of quitting.
@@ -2308,6 +2308,137 @@ fn type_new_password(app: &mut App, first: &str, second: &str) {
 }
 
 #[test]
+fn exporting_a_private_key_writes_a_new_protected_file() {
+    let directory = TestDirectory::new();
+    let (mut app, _, key) = keystore_with_keys(&directory, "store.jks");
+    let file = |name: &str| directory.path().join(name);
+    assert!(screen(&mut app, 120, 24).contains("i Import | e Export | r Rename"));
+    // Only a private key that the keystore's password unlocks is exported.
+    press(&mut app, KeyCode::Char('e'));
+    assert!(red_text(&mut app).contains("Only private keys are exported with e"));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char('e'));
+    assert!(red_text(&mut app).contains("the key 'own' has a password of its own"));
+    assert!(app.key_export.is_none());
+    press(&mut app, KeyCode::Down);
+    let chain = app.entries[2].certificates().to_vec();
+
+    // The suggested name exports a PKCS12 keystore.
+    press(&mut app, KeyCode::Char('e'));
+    let rendered = screen(&mut app, 200, 24);
+    assert!(rendered.contains("Export key to: ") && rendered.contains("shared.p12_"));
+    assert!(rendered.contains(".p12 Keystore | .pem Key and certificates | .key .p8 Key only"));
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Esc);
+    assert!(app.key_export.is_none());
+    press(&mut app, KeyCode::Char('e'));
+    press(&mut app, KeyCode::Enter);
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains("Password for the exported key: _"));
+    assert!(!rendered.contains("Empty: unencrypted"));
+    // PKCS12 needs a password.
+    type_new_password(&mut app, "", "");
+    assert!(red_text(&mut app).contains("a PKCS12 file needs a password that is not empty"));
+    assert!(!file("shared.p12").exists());
+    press(&mut app, KeyCode::Char('e'));
+    press(&mut app, KeyCode::Enter);
+    type_new_password(&mut app, "exportpw", "exportpw");
+    assert!(
+        screen(&mut app, 200, 24).contains("Exported key 'shared' to '"),
+        "{:?}",
+        app.message
+    );
+    assert!(!app.modified);
+    let (verified, exported) = pkcs12::parse(&fs::read(file("shared.p12")).unwrap())
+        .unwrap()
+        .open("exportpw")
+        .ok()
+        .unwrap();
+    assert_eq!(verified.entries.len(), 1);
+    assert_eq!(verified.entries[0].alias, "shared");
+    assert_eq!(verified.entries[0].certificates(), chain);
+    assert_eq!(exported.unwrap().private_key(0).unwrap().as_slice(), key);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(file("shared.p12"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    // An existing file is never replaced.
+    press(&mut app, KeyCode::Char('e'));
+    assert!(screen(&mut app, 200, 24).contains("shared-2.p12_"));
+    type_alias(&mut app, "shared.p12");
+    assert!(red_text(&mut app).contains("already exists; choose another name."));
+    // A .pem name holds the key and its certificates; without a password
+    // the key is unencrypted, which is asked about first.
+    type_alias(&mut app, "shared.pem");
+    assert!(screen(&mut app, 120, 24).contains("Empty: unencrypted | Enter Confirm"));
+    type_new_password(&mut app, "", "");
+    assert!(
+        screen(&mut app, 200, 24)
+            .contains("Write the private key 'shared' unencrypted? Press y to write it")
+    );
+    press(&mut app, KeyCode::Char('n'));
+    assert!(!file("shared.pem").exists());
+    press(&mut app, KeyCode::Char('e'));
+    type_alias(&mut app, "shared.pem");
+    type_new_password(&mut app, "", "");
+    press(&mut app, KeyCode::Char('y'));
+    let text = fs::read_to_string(file("shared.pem")).unwrap();
+    let blocks = crown::asn1::pem::parse(&text).unwrap();
+    assert_eq!(blocks.len(), 1 + chain.len());
+    assert_eq!(
+        (blocks[0].label.as_str(), &blocks[0].data),
+        ("PRIVATE KEY", &key)
+    );
+    assert_eq!(
+        (blocks[1].label.as_str(), &blocks[1].data),
+        ("CERTIFICATE", &chain[0])
+    );
+
+    // .key and .p8 names hold the key alone, here encrypted.
+    for (name, der) in [("shared.key", false), ("shared.p8", true)] {
+        press(&mut app, KeyCode::Char('e'));
+        type_alias(&mut app, name);
+        type_new_password(&mut app, "exportpw", "exportpw");
+        let data = fs::read(file(name)).unwrap();
+        let encrypted = if der {
+            data
+        } else {
+            let blocks = crown::asn1::pem::parse(std::str::from_utf8(&data).unwrap()).unwrap();
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks[0].label, "ENCRYPTED PRIVATE KEY");
+            blocks[0].data.clone()
+        };
+        assert!(!encrypted.windows(key.len()).any(|window| window == key));
+        assert_eq!(
+            pkcs12::decrypt_key(&encrypted, b"exportpw")
+                .unwrap()
+                .as_slice(),
+            key,
+            "{name}"
+        );
+    }
+    // Mistyped passwords export nothing.
+    press(&mut app, KeyCode::Char('e'));
+    type_alias(&mut app, "typo.key");
+    type_new_password(&mut app, "one", "two");
+    assert!(red_text(&mut app).contains("The passwords do not match"));
+    press(&mut app, KeyCode::Esc);
+    assert!(!file("typo.key").exists());
+    // A file that cannot be created says so.
+    press(&mut app, KeyCode::Char('e'));
+    type_alias(&mut app, "missing/shared.key");
+    type_new_password(&mut app, "exportpw", "exportpw");
+    assert!(red_text(&mut app).contains("Cannot create"));
+}
+
+#[test]
 fn changing_the_password_is_written_on_save() {
     let directory = TestDirectory::new();
     let (mut app, path) = editing(&directory);
@@ -2502,7 +2633,7 @@ fn pkcs12_keystores_are_edited_and_saved_like_the_others() {
     app.open_file(path.clone());
     type_password(&mut app, "changeit");
     press(&mut app, KeyCode::Enter);
-    assert!(screen(&mut app, 120, 24).contains("i Import | r Rename"));
+    assert!(screen(&mut app, 120, 24).contains("i Import | e Export | r Rename"));
 
     press(&mut app, KeyCode::Char('r'));
     type_alias(&mut app, "Renamed");

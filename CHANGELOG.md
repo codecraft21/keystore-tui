@@ -24,6 +24,10 @@ All notable changes to keystore-tui are listed here. Versions follow
 - Convert a keystore between JKS, JCEKS, and PKCS12: in the "save as" prompt
   (`W`), give the new name the other format's extension. Private keys are
   converted too, and the original file is left as it was.
+- Export a private key with `e`, to a PKCS12 keystore or a PEM file with its
+  certificates, or alone as PKCS #8 in PEM or DER. The key is encrypted with
+  a password you choose; leaving it empty writes the key unencrypted, after a
+  confirmation.
 - Import a key pair with `i`: choose a PEM or DER private key file (PKCS #8,
   plain or encrypted, or OpenSSL's RSA and EC formats) or a PKCS12 keystore
   with one private key. The key must match its certificate, and is stored

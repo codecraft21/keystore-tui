@@ -22,6 +22,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Renaming entries](#renaming-entries)
   - [Importing certificates](#importing-certificates)
   - [Importing key pairs](#importing-key-pairs)
+  - [Exporting private keys](#exporting-private-keys)
   - [Changing the password](#changing-the-password)
   - [Changing a key password](#changing-a-key-password)
 - [Creating a keystore](#creating-a-keystore)
@@ -46,17 +47,20 @@ document and the usage reference, and also the README if its overview changes.
   certificate files, and PKCS#10 certificate requests. It changes a keystore
   file only when the user saves it; see [Saving](#saving). Certificate files
   and requests are never written or modified.
-- The other files it writes are new certificate and request exports; see
-  [Exporting](#exporting).
+- The other files it writes are new exports: certificates and requests (see
+  [Exporting](#exporting)) and private keys (see [Exporting private
+  keys](#exporting-private-keys)).
 - It runs without Java or `keytool` installed.
-- Private and secret keys are never displayed, exported, or written
-  unencrypted. They are decrypted only in memory, and only to encrypt them
-  again: when a PKCS12 keystore's password changes (see [Changing the
+- Private and secret keys are never displayed. A private key is written
+  unencrypted only by an export that the user confirms; see [Exporting
+  private keys](#exporting-private-keys). Otherwise keys are decrypted only in
+  memory, and only to encrypt them again: when a PKCS12 keystore's password changes (see [Changing the
   password](#changing-the-password)), when a JKS or JCEKS key's password
   changes (see [Changing a key password](#changing-a-key-password)), when
   a keystore is converted to another format (see [Converting a
-  keystore](#converting-a-keystore)), and when a key pair is imported (see
-  [Importing key pairs](#importing-key-pairs)).
+  keystore](#converting-a-keystore)), when a key pair is imported (see
+  [Importing key pairs](#importing-key-pairs)), and when a private key is
+  exported under a password.
 - The following are out of scope for now: importing anything but a trusted
   certificate or a key pair, keystore editing other than [deleting](#deleting-entries) and
   [renaming](#renaming-entries) entries, and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
@@ -311,7 +315,7 @@ any existing incomplete-entry warnings.
 ### Deleting entries
 
 - JKS, JCEKS, and PKCS12 keystores can be changed. In the entry list of one,
-  a line above the shortcuts shows `n New | i Import | r Rename | d Delete | w
+  a line above the shortcuts shows `n New | i Import | e Export | r Rename | d Delete | w
   Save | W Save as | p Password | P Key password`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
@@ -422,6 +426,38 @@ any existing incomplete-entry warnings.
   one of its private keys, because the key and certificate are paired by the
   certificate's digest.
 - Whether the certificates are trusted or valid is not checked.
+
+### Exporting private keys
+
+- In a keystore, `e` exports the selected private key to a new file. On
+  another kind of entry a red message points to the certificate export in the
+  details. The key must be one that the keystore's password unlocks, in PKCS
+  #8 form; a JKS or JCEKS key with a password of its own is refused with a
+  message that says to give it the keystore's password first (`P`).
+- A prompt asks `Export key to:`, suggesting `<alias>.p12` in the open file's
+  directory, named and edited like the [certificate export](#exporting)
+  prompt. The name chooses what is written, ignoring case:
+  - `.p12` or `.pfx`: a PKCS12 keystore holding the key and its certificate
+    chain under the entry's alias, written like [any PKCS12
+    keystore](#writing-pkcs12-keystores).
+  - `.key`: the key alone, as a PKCS #8 PEM block.
+  - `.p8` or `.der`: the key alone, as PKCS #8 DER.
+  - Any other name, such as `.pem`: the key as a PKCS #8 PEM block, followed
+    by its certificates as `CERTIFICATE` blocks, leaf first.
+- A name that already exists is refused with a red message and the prompt
+  stays open. Then a prompt asks `Password for the exported key:`, typed
+  twice like a [new keystore password](#changing-the-password).
+- With a password, the key is encrypted with PBES2 (AES-256-CBC, PBKDF2 with
+  HMAC-SHA256, 10,000 iterations) as an `ENCRYPTED PRIVATE KEY`, and is
+  decrypted again as a check before the file is written. A PKCS12 file is
+  also read back, and is not written if its certificate chain would differ,
+  as when the chain is not linked by issuer names.
+- An empty password is refused for a PKCS12 file. For the other files the
+  prompt's shortcuts start with `Empty: unencrypted`, and an empty password
+  asks, in yellow, `Write the private key '<alias>' unencrypted?`; only `y`
+  writes the key, as a plain `PRIVATE KEY`.
+- The file is new and is never replaced. On Unix only its owner can read or
+  write it. A green message names it. The keystore is not changed.
 
 ### Changing the password
 

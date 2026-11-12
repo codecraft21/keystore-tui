@@ -118,6 +118,7 @@ certificates whose names match another certificate or key.
 | `o` | Open another keystore or certificate file |
 | `n` | Create a new, empty JKS, JCEKS, or PKCS12 keystore |
 | `i` | Import a trusted certificate or a key pair from a file |
+| `e` | Export the selected private key, alone or with its certificates |
 | `r` | Rename the selected entry |
 | `d` / `Delete` | Delete the selected entry |
 | `w` | Save the changes to the opened file |
@@ -155,6 +156,13 @@ next to the app name, but nothing changes on disk until you save.
   alias. The key must match one of the certificates; it is stored under the
   keystore's password. Keys encrypted in OpenSSL's old PEM format are not
   read; convert them first with `openssl pkcs8 -topk8`.
+- **Export a private key:** press `e` on a private key, edit the file name,
+  and type a password twice. A `.p12` or `.pfx` name writes a PKCS12 keystore
+  with the key and its certificates, a `.pem` name the key followed by its
+  certificates, a `.key` name the key alone as PEM, and a `.p8` or `.der`
+  name the key alone as DER. The key is encrypted with the password. With an
+  empty password (not for PKCS12) the key is written unencrypted, after you
+  confirm with `y`. Existing files are never replaced.
 - **Change the password:** press `p`, then type the new password twice. In JKS
   and JCEKS only the keystore's own password changes; private-key and
   secret-key entries keep the passwords they were protected with, as with
