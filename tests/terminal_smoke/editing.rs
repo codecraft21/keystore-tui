@@ -4,8 +4,8 @@ use std::ffi::OsStr;
 use std::fs;
 
 use crate::fixtures::{
-    TempDir, certificate_pem, ed25519_certificate, empty_password_fixture, fixture_certificate,
-    key_keystore, key_pair_pem, triage_keystore, with_empty_password_digest,
+    TempDir, certificate_pem, ed25519_certificate, empty_password_fixture, fixture,
+    fixture_certificate, key_keystore, key_pair_pem, triage_keystore, with_empty_password_digest,
 };
 use crate::pty::PtyApp;
 
@@ -528,6 +528,60 @@ fn copy_entries_save_and_quit_restores_terminal() {
     app.send(b"w");
     app.expect(&["Saved"]);
     assert_eq!(&fs::read(&path).unwrap()[8..12], &4_u32.to_be_bytes());
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Signing certificates](../../docs/SPEC.md#signing-certificates),
+/// [Generating key pairs](../../docs/SPEC.md#generating-key-pairs),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn sign_request_and_key_pair_then_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    fs::write(&path, empty_password_fixture()).unwrap();
+    fs::copy(fixture("keytool-request.csr"), directory.join("device.csr")).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "C Chain | S Sign | r Rename"]);
+    // A trusted certificate has no key to sign with.
+    app.send(b"S");
+    app.expect(&["Only a private key can sign certificates."]);
+    // A certificate authority: Up from the first field is the purpose, and
+    // four steps right of None is the authority.
+    app.send(b"g\x1b[A\x1b[C\x1b[C\x1b[C\x1b[C");
+    app.expect(&["< Certificate authority >"]);
+    app.send(b"\x1b[B\x1b[Bsmoke ca\r");
+    app.expect(&["Alias for the generated key pair: smoke ca_"]);
+    app.send(b"\x15ca\r");
+    app.expect(&["Generated EC P-256 key pair 'ca'.", "[modified]"]);
+
+    app.send(b"S");
+    app.expect(&["Sign with 'ca':", "r Request file | g New key pair"]);
+    // `q` is not a quit here, and does nothing.
+    app.send(b"q");
+    assert_eq!(app.exited(), None);
+    app.send(b"r");
+    app.expect(&["Certificate request to sign with 'ca'", "device.csr"]);
+    app.send(b"device\r");
+    app.expect(&[
+        "Sign request with 'ca'",
+        "CN=CSR TUI test fixture",
+        "[x] Subject Alternative Name: DNS: csr.example.test",
+        "Left/Right Space Change",
+    ]);
+    app.send(b"\r");
+    app.expect(&["Save certificate as:"]);
+    app.send(b"\x15q.pem\r"); // Ctrl+U clears the suggested absolute path.
+    app.expect(&["Signed the request in 'device.csr' with 'ca'"]);
+    let saved = fs::read_to_string(directory.join("q.pem")).unwrap();
+    assert_eq!(saved.matches("-----BEGIN CERTIFICATE-----").count(), 2);
+
+    app.send(b"Sg");
+    app.expect(&["Generate key pair signed by 'ca'"]);
+    app.send(b"\x1b[Bleaf.smoke\r\r");
+    app.expect(&["Generated EC P-256 key pair 'leaf.smoke', signed by 'ca'."]);
+    app.send(b"w");
+    app.expect(&["Saved"]);
     app.send(b"q");
     app.assert_restored();
 }

@@ -23,6 +23,8 @@ mod new_request;
 mod path_bar;
 mod pkcs12;
 mod save;
+mod sign;
+mod sign_form;
 mod signing;
 mod startup;
 
@@ -150,6 +152,12 @@ struct App {
     reply: Option<usize>,
     /// A certificate request being made for a private key.
     requesting: Option<new_request::NewRequest>,
+    /// The private key, by its index in `entries`, that is asked what to
+    /// sign, and the one the file browser chooses a request to sign for.
+    sign_menu: Option<usize>,
+    signing_request: Option<usize>,
+    /// A certificate request being signed with a private key.
+    signing: Option<sign::Signing>,
     /// The result of the last edit or save, and whether it failed. Cleared
     /// on the next key.
     message: Option<(String, bool)>,
@@ -254,6 +262,7 @@ impl App {
                     self.importing = false;
                     self.reply = None;
                     self.appending = None;
+                    self.signing_request = None;
                     self.cancel_key_import();
                 }
             } else if let Some(path) = picker.handle_key(key) {
@@ -262,6 +271,8 @@ impl App {
                     self.import_reply(index, &path);
                 } else if let Some(index) = self.appending.take() {
                     self.append_to_chain(index, &path);
+                } else if let Some(index) = self.signing_request.take() {
+                    self.sign_request_file(index, &path);
                 } else if std::mem::take(&mut self.importing) {
                     self.import_file(&path);
                 } else {
@@ -282,6 +293,10 @@ impl App {
             self.handle_alias(key);
         } else if self.chain_menu.is_some() {
             self.handle_chain(key);
+        } else if self.sign_menu.is_some() {
+            self.handle_sign_menu(key);
+        } else if self.signing.is_some() {
+            self.handle_signing(key);
         } else if self.generating.is_some() {
             self.handle_generate(key);
         } else if self.requesting.is_some() {
@@ -314,6 +329,7 @@ impl App {
                 KeyCode::Char('c') if is_text_input(key.modifiers) => self.ask_request(),
                 KeyCode::Char('R') if is_text_input(key.modifiers) => self.ask_reply(),
                 KeyCode::Char('C') if is_text_input(key.modifiers) => self.ask_chain(),
+                KeyCode::Char('S') if is_text_input(key.modifiers) => self.ask_sign(),
                 KeyCode::Char('e') if is_text_input(key.modifiers) => self.ask_key_export(),
                 KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
                 KeyCode::Char('W') if is_text_input(key.modifiers) => {
@@ -477,6 +493,8 @@ impl App {
             || self.generating.is_some()
             || self.chain_menu.is_some()
             || self.requesting.is_some()
+            || self.sign_menu.is_some()
+            || self.signing.is_some()
             || self
                 .entry_details
                 .as_ref()
@@ -650,6 +668,9 @@ impl App {
         self.reply = None;
         self.chain_menu = None;
         self.appending = None;
+        self.sign_menu = None;
+        self.signing_request = None;
+        self.signing = None;
         self.message = None;
     }
 
@@ -876,6 +897,10 @@ impl App {
                 let alias = &self.entries[index].alias;
                 let title = format!(" Certificate to append to the chain of '{alias}' ");
                 picker.draw_titled(frame, &title);
+            } else if let Some(index) = self.signing_request {
+                let alias = &self.entries[index].alias;
+                let title = format!(" Certificate request to sign with '{alias}' ");
+                picker.draw_titled(frame, &title);
             } else if self.key_import.is_some() {
                 picker.draw_titled(frame, " Certificate file of the imported key ");
             } else if self.importing {
@@ -895,6 +920,9 @@ impl App {
         {
             frame.render_widget(Paragraph::new(shortcuts), help);
             form.draw(frame);
+        } else if let Some(signing) = self.signing.as_ref().filter(|s| s.naming.is_none()) {
+            frame.render_widget(Paragraph::new(shortcuts), help);
+            signing.form.draw(frame);
         } else {
             frame.render_widget(Paragraph::new(shortcuts), help);
         }
@@ -1007,6 +1035,31 @@ impl App {
                 ]),
                 "a Append from file | x Remove last | Esc Cancel | Ctrl+C Quit".into(),
             ]
+        } else if let Some(index) = self.sign_menu {
+            let mut title = vec![format!("Sign with '{}': ", self.entries[index].alias).bold()];
+            if let Some(warning) = self.sign_warning(index) {
+                title.push(format!("Warning: {warning}.").yellow());
+            }
+            vec![
+                Line::from(title),
+                "r Request file | g New key pair | Esc Cancel | Ctrl+C Quit".into(),
+            ]
+        } else if let Some((_, _, prompt)) = self
+            .signing
+            .as_ref()
+            .and_then(|signing| signing.naming.as_ref())
+        {
+            vec![
+                Line::from(vec![
+                    "Save certificate as: ".bold(),
+                    format!("{}_", prompt.path).into(),
+                ]),
+                "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Back | Ctrl+C Quit".into(),
+            ]
+        } else if self.signing.is_some() {
+            vec![
+                "Up/Down Tab Field | Left/Right Space Change | Enter Next | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
+            ]
         } else if self.generating.is_some() || self.requesting.is_some() {
             vec![
                 "Up/Down Tab Field | Left/Right Change | Enter Next | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
@@ -1016,7 +1069,7 @@ impl App {
         } else if self.document.is_some() && self.file_picker.is_none() {
             vec![
                 "Keystore: n New | g Generate | i Import | w Save | W Save as | p Password".into(),
-                "Entry: e Export | c Request | R CA reply | C Chain | r Rename | d Delete | P Key password"
+                "Entry: e Export | c Request | R CA reply | C Chain | S Sign | r Rename | d Delete | P Key password"
                     .into(),
                 LIST.into(),
             ]

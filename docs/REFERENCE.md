@@ -123,6 +123,7 @@ certificates whose names match another certificate or key.
 | `c` | Make a certificate request (CSR) for the selected private key |
 | `R` | Import a CA reply: replace the selected private key's certificate chain with the issued one |
 | `C` | Edit the selected private key's certificate chain: append an issuer from a file, or remove the last certificate |
+| `S` | Sign with the selected private key: a certificate request from a file, or a new key pair |
 | `r` | Rename the selected entry |
 | `d` / `Delete` | Delete the selected entry |
 | `w` | Save the changes to the opened file |
@@ -189,6 +190,22 @@ next to the app name, but nothing changes on disk until you save.
   alias. The key must match one of the certificates; it is stored under the
   keystore's password. Keys encrypted in OpenSSL's old PEM format are not
   read; convert them first with `openssl pkcs8 -topk8`.
+- **Sign a certificate request:** press `S` on the private key of your
+  certificate authority, then `r`, and choose the `.csr` file. Its signature
+  is checked first. In the form, set the validity in days, a serial number in
+  hex if you want a particular one, and whether the file also gets the
+  signer's chain. Each extension the request asks for is listed: `Space`
+  marks the ones the certificate gets. A request for a certificate authority
+  starts unmarked. Then edit the file name and press `Enter`. The certificate
+  is written to a new PEM file, or alone as DER under a `.der` name; the
+  keystore is not changed. Check the result with
+  `openssl verify -CAfile ca.pem issued.pem`.
+- **Generate a key pair signed by another key:** press `S` on the signing
+  private key, then `g`, and fill in the form as for `g`. The new entry's
+  chain is its certificate followed by the signer's chain.
+- When the signer's certificate is not a certificate authority's, a yellow
+  warning says so, and signing still works: other software may reject what
+  it signs.
 - **Copy entries from another keystore:** press `i`, choose a JKS, JCEKS, or
   PKCS12 keystore, and type its password. In the list, press `Space` to choose
   entries or `a` for all, then `Enter`. Several entries keep their aliases,

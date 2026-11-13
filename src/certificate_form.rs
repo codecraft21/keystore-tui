@@ -100,6 +100,9 @@ pub struct Form {
     /// What was typed, by field; the two choices have no text.
     text: [String; 10],
     error: Option<String>,
+    /// The private key, by its index in the app's entries, that signs the
+    /// new key pair's certificate in place of the new key.
+    signer: Option<usize>,
 }
 
 impl Default for Form {
@@ -115,6 +118,7 @@ impl Default for Form {
             purpose: 0,
             text,
             error: None,
+            signer: None,
         }
     }
 }
@@ -126,6 +130,22 @@ pub enum Outcome {
 }
 
 impl Form {
+    /// The form titled `title` for a new key pair whose certificate is
+    /// signed by the private key at `signer` of the app's entries.
+    pub fn signed_by(title: String, signer: usize) -> Self {
+        Self {
+            title,
+            signer: Some(signer),
+            ..Self::default()
+        }
+    }
+
+    /// The entry that signs the new key pair's certificate, if not its own
+    /// key.
+    pub fn signer(&self) -> Option<usize> {
+        self.signer
+    }
+
     /// The form for a request named `title`, starting from the `subject`
     /// and the alternative `names` of the key's certificate.
     pub fn for_request(title: String, subject: &Name, names: &[GeneralName]) -> Self {
