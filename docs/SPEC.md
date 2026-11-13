@@ -897,7 +897,7 @@ any existing incomplete-entry warnings.
 - Only the key size is checked for weakness. The signature hash is not flagged,
   because the issued certificate is signed by the CA, not with the request's
   hash.
-- `x` exports the request; `X` does nothing. See [Exporting](#exporting).
+- `x` exports the request; `X` and `K` do nothing. See [Exporting](#exporting).
 - `a` and `p` show the request's ASN.1 structure and PEM encoding; `d` does
   nothing. See [ASN.1 and PEM views](#asn1-and-pem-views).
 
@@ -988,11 +988,17 @@ any existing incomplete-entry warnings.
 ### Exporting
 
 - `x` exports the certificate selected in the hierarchy; `X` exports every
-  certificate stored with the entry, leaf first. Neither does anything for an
-  entry without certificates. For a certificate request entry, `x` exports the
-  request and `X` does nothing.
+  certificate stored with the entry, leaf first; `K` exports the selected
+  certificate's public key. None does anything for an entry without
+  certificates. For a certificate request entry, `x` exports the request, and
+  `X` and `K` do nothing.
+- The public key is the certificate's SubjectPublicKeyInfo, cut out of the
+  certificate byte for byte as stored. No private key is read or decrypted.
+  When the certificate cannot be decoded far enough to find it, a red message
+  says that the public key could not be read, and no prompt opens.
 - A prompt replaces the detail shortcuts. It suggests `<alias>.pem`,
-  `<alias>-chain.pem`, or `<alias>.csr` for a request, in the open file's
+  `<alias>-chain.pem`, `<alias>-public-key.pem`, or `<alias>.csr` for a
+  request, in the open file's
   directory, shown as an absolute path with any `..` resolved. Characters
   other than letters, digits, `-`, `_`, and `.` in the alias become `_`, and a
   name that already exists gets a number, such as `server-2.pem`.
@@ -1001,9 +1007,10 @@ any existing incomplete-entry warnings.
   `Ctrl+U` clears the name, `Enter` saves, and `Esc` cancels without leaving the
   detail view. `Ctrl+C` still quits.
 - A relative name is resolved against the open file's directory.
-- A `.der` name (case-insensitive) saves one certificate or the request as raw
-  DER; a chain cannot be saved as DER. Any other name saves PEM `CERTIFICATE`
-  blocks, or a `CERTIFICATE REQUEST` block for a request, with 64-character
+- A `.der` name (case-insensitive) saves one certificate, the public key, or
+  the request as raw DER; a chain cannot be saved as DER. Any other name saves
+  PEM `CERTIFICATE` blocks, a `PUBLIC KEY` block for a public key, or a
+  `CERTIFICATE REQUEST` block for a request, with 64-character
   lines. The DER is written byte for byte as stored.
 - The file must not exist yet; it is never replaced. On success a green message
   names the saved file and the prompt closes. On failure a red message explains

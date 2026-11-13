@@ -21,7 +21,12 @@ use crown::asn1::pem;
 
 use crate::{
     asn1_dump,
-    certificate::{Summary, details::fingerprint, extensions::Extension, signature::Signature},
+    certificate::{
+        Summary,
+        details::fingerprint,
+        extensions::Extension,
+        signature::{Signature, subject_public_key_info},
+    },
     export::{self, ExportPrompt, Outcome, Scope},
     keystore::{Content, KeystoreEntry},
     path_bar,
@@ -212,13 +217,32 @@ impl EntryDetails {
             KeyCode::Esc => return true,
             KeyCode::Char(letter @ ('x' | 'X')) => {
                 if let Some(scope) = self.export_scope(letter == 'X') {
-                    let directory = path_bar::directory(&self.path);
-                    self.export = Some(ExportPrompt::new(scope, &directory, &self.alias));
+                    self.ask_export(scope);
+                }
+            }
+            KeyCode::Char('K') => {
+                if let View::Chain(chain) = &self.view
+                    && self.selected(chain).is_some()
+                {
+                    if self.export_items(Scope::PublicKey).is_empty() {
+                        self.message = Some((
+                            "The certificate's public key could not be read.".into(),
+                            true,
+                        ));
+                    } else {
+                        self.ask_export(Scope::PublicKey);
+                    }
                 }
             }
             code => self.handle_key(code),
         }
         false
+    }
+
+    /// Asks for the file name of an export of `scope`.
+    fn ask_export(&mut self, scope: Scope) {
+        let directory = path_bar::directory(&self.path);
+        self.export = Some(ExportPrompt::new(scope, &directory, &self.alias));
     }
 
     /// What `x` exports: the request, or the selected certificate. With
@@ -243,6 +267,12 @@ impl EntryDetails {
         match (&self.view, scope) {
             (View::Request(view), _) => vec![view.der.clone()],
             (View::Chain(chain), Scope::Chain) => chain.certificates.clone(),
+            // Cut out of the certificate as stored; no key is decrypted.
+            (View::Chain(chain), Scope::PublicKey) => self
+                .selected(chain)
+                .and_then(|index| subject_public_key_info(&chain.certificates[index]))
+                .map(|spki| vec![spki.to_vec()])
+                .unwrap_or_default(),
             (View::Chain(chain), _) => self
                 .selected(chain)
                 .map(|index| vec![chain.certificates[index].clone()])
@@ -378,7 +408,7 @@ impl EntryDetails {
         let area = frame.area();
         let (shortcuts, tree_title, details_title) = match &self.view {
             View::Chain(_) => (
-                "Tab Focus | ↑/↓ j/k Navigate | PgUp/PgDn Home/End Scroll\nd Diagnostics | a ASN.1 | p PEM | f SHA-256/SHA-1 | x Export certificate | X Export chain | Esc Back | q / Ctrl+C Quit",
+                "Tab Focus | ↑/↓ j/k Navigate | PgUp/PgDn Home/End Scroll | Esc Back | q / Ctrl+C Quit\nd Diagnostics | a ASN.1 | p PEM | f SHA-256/SHA-1 | x Export certificate | X Chain | K Public key",
                 "Certificate hierarchy",
                 match self.pane {
                     Pane::Details => "Certificate details",
@@ -850,6 +880,79 @@ mod tests {
             chain.signatures[0],
             Some(Signature::Unchecked("the certificate could not be decoded"))
         );
+    }
+
+    #[test]
+    fn public_keys_are_exported_as_stored_in_the_certificate() {
+        use crate::test_support::{
+            KEYTOOL_REQUEST, TestDirectory, ed25519_certificate, fixture_certificate_der,
+        };
+        use crown::x509::keys::{PublicKey, SubjectPublicKeyInfo};
+        use ratatui::crossterm::event::KeyModifiers;
+        let press = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
+        let directory = TestDirectory::new();
+        let data = entry(vec![
+            ed25519_certificate("leaf", "root", 3, 4),
+            fixture_certificate_der().to_vec(),
+            b"unreadable".to_vec(),
+        ]);
+        let mut view = EntryDetails::new(&data, &directory.path().join("store.jks"));
+        assert!(draw(&mut view, 120, 40).contains("X Chain | K Public key"));
+
+        // The leaf's key, as PEM under the suggested name.
+        view.handle_event(press(KeyCode::Char('K')));
+        assert!(draw(&mut view, 200, 40).contains("Save public key to: "));
+        let pem_path = directory.path().join("test-entry-public-key.pem");
+        assert_eq!(Path::new(&view.export.as_ref().unwrap().path), pem_path);
+        view.handle_event(press(KeyCode::Enter));
+        assert!(!view.exporting());
+        assert!(draw(&mut view, 200, 40).contains("Saved public key to '"));
+        let blocks = pem::parse(&std::fs::read_to_string(&pem_path).unwrap()).unwrap();
+        assert_eq!((blocks.len(), blocks[0].label.as_str()), (1, "PUBLIC KEY"));
+        let key = SubjectPublicKeyInfo::parse(&blocks[0].data).unwrap();
+        assert!(matches!(
+            key.public_key,
+            PublicKey::Ed25519(public) if public == crown::ed25519::public_from_secret(&[3; 32])
+        ));
+
+        // The next certificate's key, as DER, byte for byte.
+        view.handle_key(KeyCode::Up);
+        view.handle_event(press(KeyCode::Char('K')));
+        view.handle_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        for ch in "ec.der".chars() {
+            view.handle_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        view.handle_event(press(KeyCode::Enter));
+        let der = std::fs::read(directory.path().join("ec.der")).unwrap();
+        let parsed = crown::x509::cert::Certificate::parse(fixture_certificate_der()).unwrap();
+        assert_eq!(der, parsed.subject_public_key_info().encode());
+        assert!(
+            fixture_certificate_der()
+                .windows(der.len())
+                .any(|window| window == der)
+        );
+
+        // An unreadable certificate has no key to export.
+        view.handle_key(KeyCode::Up);
+        view.handle_event(press(KeyCode::Char('K')));
+        assert!(!view.exporting());
+        assert_eq!(
+            view.message,
+            Some((
+                "The certificate's public key could not be read.".into(),
+                true
+            ))
+        );
+
+        // Nothing is asked without a certificate, or for a request.
+        let mut view = EntryDetails::new(&entry(vec![]), Path::new(""));
+        view.handle_event(press(KeyCode::Char('K')));
+        assert!(!view.exporting() && view.message.is_none());
+        let file = crate::certificate_file::parse(KEYTOOL_REQUEST).unwrap();
+        let mut view = EntryDetails::new(&file.entries[0], Path::new(""));
+        view.handle_event(press(KeyCode::Char('K')));
+        assert!(!view.exporting() && view.message.is_none());
+        assert!(!draw(&mut view, 120, 40).contains("K Public key"));
     }
 
     #[test]

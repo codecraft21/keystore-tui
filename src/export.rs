@@ -1,4 +1,5 @@
-//! Saving certificates and certificate requests to new PEM or DER files.
+//! Saving certificates, public keys, and certificate requests to new PEM or
+//! DER files.
 //! Existing files are never replaced.
 use std::{
     fs::{self, OpenOptions},
@@ -19,6 +20,8 @@ pub enum Scope {
     Request,
     /// A private key, with its certificates when the file name asks for them.
     KeyPair,
+    /// The public key (SubjectPublicKeyInfo) of the selected certificate.
+    PublicKey,
 }
 
 impl Scope {
@@ -28,13 +31,14 @@ impl Scope {
             Self::Chain => "chain",
             Self::Request => "certificate request",
             Self::KeyPair => "key pair",
+            Self::PublicKey => "public key",
         }
     }
 
     /// The suggested file name extension.
     fn extension(self) -> &'static str {
         match self {
-            Self::Certificate | Self::Chain => "pem",
+            Self::Certificate | Self::Chain | Self::PublicKey => "pem",
             Self::Request => "csr",
             Self::KeyPair => "p12",
         }
@@ -43,7 +47,7 @@ impl Scope {
     /// The suggested name when the alias gives none.
     fn default_stem(self) -> &'static str {
         match self {
-            Self::Certificate | Self::Chain => "certificate",
+            Self::Certificate | Self::Chain | Self::PublicKey => "certificate",
             Self::Request => "request",
             Self::KeyPair => "key",
         }
@@ -55,6 +59,7 @@ impl Scope {
             Self::Certificate | Self::Chain => "CERTIFICATE",
             Self::Request => "CERTIFICATE REQUEST",
             Self::KeyPair => "PRIVATE KEY",
+            Self::PublicKey => "PUBLIC KEY",
         }
     }
 }
@@ -73,8 +78,8 @@ pub struct ExportPrompt {
 }
 
 impl ExportPrompt {
-    /// Suggests `<alias>.pem`, `<alias>-chain.pem`, or `<alias>.csr` in
-    /// `directory`, numbered to avoid names that already exist. Enter resolves
+    /// Suggests `<alias>.pem`, `<alias>-chain.pem`, `<alias>-public-key.pem`,
+    /// or `<alias>.csr` in `directory`, numbered to avoid names that already exist. Enter resolves
     /// the name against `directory` once, so the suggestion includes the
     /// directory only when it is absolute.
     pub fn new(scope: Scope, directory: &Path, alias: &str) -> Self {
@@ -91,8 +96,10 @@ impl ExportPrompt {
         if stem.trim_matches('.').is_empty() {
             stem = scope.default_stem().into();
         }
-        if scope == Scope::Chain {
-            stem.push_str("-chain");
+        match scope {
+            Scope::Chain => stem.push_str("-chain"),
+            Scope::PublicKey => stem.push_str("-public-key"),
+            _ => {}
         }
         let extension = scope.extension();
         let name = (1..100)
@@ -213,6 +220,15 @@ mod tests {
         );
         let prompt = ExportPrompt::new(Scope::Request, directory.path(), "server");
         assert_eq!(Path::new(&prompt.path), directory.path().join("server.csr"));
+        let prompt = ExportPrompt::new(Scope::PublicKey, directory.path(), "..");
+        assert_eq!(
+            Path::new(&prompt.path),
+            directory.path().join("certificate-public-key.pem")
+        );
+        assert_eq!(
+            (Scope::PublicKey.label(), Scope::PublicKey.pem_label()),
+            ("public key", "PUBLIC KEY")
+        );
     }
 
     #[test]

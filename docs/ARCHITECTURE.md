@@ -34,12 +34,12 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/certificate/extensions.rs` | Decoding X.509 extensions into display lines |
 | `src/certificate/security.rs` | Weak key-size and signature-hash checks |
 | `src/certificate/diagnostics.rs` | Offline stored-chain validity, issuer and CA constraint diagnostics; no trust decisions |
-| `src/certificate/signature.rs` | Checking a certificate's signature with its issuer's public key, and a request's with its own |
+| `src/certificate/signature.rs` | Checking a certificate's signature with its issuer's public key, and a request's with its own; finding a certificate's SubjectPublicKeyInfo |
 | `src/entry_details.rs` | The full-screen detail view: layout, keys, the bottom pane (details, diagnostics, ASN.1, PEM), export, and shared detail formatting |
 | `src/entry_details/chain.rs` | A stored chain's hierarchy and certificate details |
 | `src/entry_details/request.rs` | A certificate request's details, shown in place of a hierarchy |
 | `src/asn1_dump.rs` | The ASN.1 structure dump of a certificate or request, hiding challenge passwords |
-| `src/export.rs` | The export name prompt and writing PEM/DER certificate and request files |
+| `src/export.rs` | The export name prompt and writing PEM/DER certificate, public key, and request files |
 | `src/test_support.rs`, `src/tests.rs` | Unit-test helpers, synthetic keystores, and tests |
 | `tests/terminal_smoke/` | Unix PTY smoke tests against the built binary: the harness (`pty.rs`, `screen.rs`, `fixtures.rs`), tests grouped by SPEC section, each linking the sections it checks, and the link check (`spec.rs`) |
 | `tests/fixtures/` | Generated keystore fixtures; see its `README.md` for how they were made |
