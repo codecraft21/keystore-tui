@@ -1,6 +1,6 @@
 //! Generating a key pair with a self-signed certificate: the key
-//! algorithms, the form asking what the certificate holds, and adding the
-//! result to the open keystore.
+//! algorithms, and adding the result to the open keystore once its form is
+//! filled in.
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crown::{
@@ -16,22 +16,16 @@ use crown::{
     rsa::{RsaPrivateKey, der::rsa_private_key_der},
     x509::keys::encode_ec_private_key,
 };
-use ratatui::{
-    Frame,
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    layout::{Constraint, Layout},
-    style::{Color, Style},
-    text::Line,
-    widgets::{Block, Clear, Paragraph, Wrap},
-};
+use ratatui::crossterm::event::KeyEvent;
 use zeroize::Zeroizing;
 
 use crate::{
     App,
+    certificate_form::{Form, Outcome},
     editing::{Action, AliasPrompt},
     key_import::Key,
     save::OsRng,
-    signing::{self, Purpose, Subject},
+    signing,
 };
 
 /// The kind and size of a generated key.
@@ -182,234 +176,11 @@ fn rsa(bits: usize, rng: &mut impl Rng) -> CryptoResult<Key> {
     Ok(pkcs8(&algorithm, &key))
 }
 
-const ALGORITHM: usize = 0;
-const COMMON_NAME: usize = 1;
-const ORGANIZATION: usize = 2;
-const UNIT: usize = 3;
-const LOCALITY: usize = 4;
-const STATE: usize = 5;
-const COUNTRY: usize = 6;
-const DAYS: usize = 7;
-const NAMES: usize = 8;
-const PURPOSE: usize = 9;
-
-const LABELS: [&str; 10] = [
-    "Algorithm",
-    "Common name (CN)",
-    "Organization (O)",
-    "Org. unit (OU)",
-    "Locality (L)",
-    "State (ST)",
-    "Country (C)",
-    "Valid for (days)",
-    "Alternative names",
-    "Purpose",
-];
-
-/// The form's size, with its border.
-const WIDTH: u16 = 72;
-const HEIGHT: u16 = 16;
-/// Where the values start in a row.
-const VALUE_COLUMN: usize = 22;
-
-/// The form asking for a new key pair's algorithm and certificate fields.
-pub struct Form {
-    selected: usize,
-    /// An index into `Algorithm::ALL`.
-    algorithm: usize,
-    /// An index into `Purpose::ALL`.
-    purpose: usize,
-    /// What was typed, by field; the two choices have no text.
-    text: [String; 10],
-    error: Option<String>,
-}
-
-impl Default for Form {
-    fn default() -> Self {
-        let mut text: [String; 10] = Default::default();
-        text[DAYS] = "365".into();
-        Self {
-            selected: ALGORITHM,
-            algorithm: 3,
-            purpose: 0,
-            text,
-            error: None,
-        }
-    }
-}
-
 /// A filled-in form whose key pair is not generated yet.
 pub struct Pending {
     form: Form,
     algorithm: Algorithm,
     request: signing::Request,
-}
-
-pub enum Outcome {
-    Editing,
-    Cancelled,
-    Submitted(Algorithm, signing::Request),
-}
-
-impl Form {
-    pub fn handle_key(&mut self, key: KeyEvent) -> Outcome {
-        self.error = None;
-        match key.code {
-            KeyCode::Esc => return Outcome::Cancelled,
-            KeyCode::Enter => match self.request() {
-                Ok(request) => {
-                    return Outcome::Submitted(Algorithm::ALL[self.algorithm], request);
-                }
-                Err((field, error)) => {
-                    self.selected = field;
-                    self.error = Some(error);
-                }
-            },
-            KeyCode::Up | KeyCode::BackTab => {
-                self.selected = (self.selected + LABELS.len() - 1) % LABELS.len();
-            }
-            KeyCode::Down | KeyCode::Tab => self.selected = (self.selected + 1) % LABELS.len(),
-            _ => self.edit(key),
-        }
-        Outcome::Editing
-    }
-
-    /// Changes the selected field: a choice with the arrows, a text by typing.
-    fn edit(&mut self, key: KeyEvent) {
-        let choice = match self.selected {
-            ALGORITHM => Some((&mut self.algorithm, Algorithm::ALL.len())),
-            PURPOSE => Some((&mut self.purpose, Purpose::ALL.len())),
-            _ => None,
-        };
-        let text = &mut self.text[self.selected];
-        match (key.code, choice) {
-            (KeyCode::Left, Some((value, count))) => *value = (*value + count - 1) % count,
-            (KeyCode::Right, Some((value, count))) => *value = (*value + 1) % count,
-            (KeyCode::Backspace, None) => {
-                text.pop();
-            }
-            (KeyCode::Char('u'), None) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                text.clear();
-            }
-            (KeyCode::Char(ch), None) if crate::is_text_input(key.modifiers) => text.push(ch),
-            _ => {}
-        }
-    }
-
-    /// What the form asks for, or the first field that is wrong and why.
-    fn request(&self) -> Result<signing::Request, (usize, String)> {
-        let field = |index: usize| self.text[index].trim();
-        if field(COMMON_NAME).is_empty() {
-            return Err((COMMON_NAME, "A common name is required.".into()));
-        }
-        let country = field(COUNTRY).to_ascii_uppercase();
-        if !country.is_empty()
-            && (country.len() != 2 || !country.bytes().all(|byte| byte.is_ascii_uppercase()))
-        {
-            return Err((
-                COUNTRY,
-                "The country is a two-letter code, such as CH.".into(),
-            ));
-        }
-        let days = field(DAYS)
-            .parse()
-            .ok()
-            .filter(|days| (1..=36500).contains(days))
-            .ok_or((
-                DAYS,
-                "The validity is a number of days from 1 to 36500.".into(),
-            ))?;
-        let names = signing::alternative_names(field(NAMES)).map_err(|error| (NAMES, error))?;
-        Ok(signing::Request {
-            subject: Subject {
-                common_name: field(COMMON_NAME),
-                organization: field(ORGANIZATION),
-                unit: field(UNIT),
-                locality: field(LOCALITY),
-                state: field(STATE),
-                country: &country,
-            }
-            .name(),
-            days,
-            names,
-            purpose: Purpose::ALL[self.purpose],
-        })
-    }
-
-    /// What the selected field is for.
-    fn hint(&self) -> &'static str {
-        match self.selected {
-            ALGORITHM => "The key's algorithm and size. RSA 4096 takes a few seconds.",
-            COMMON_NAME => "Required: who the certificate is for, such as a host name.",
-            COUNTRY => "Optional: a two-letter country code, such as CH.",
-            DAYS => "How many days the certificate is valid, from now.",
-            NAMES => "Optional, separated by commas: DNS names, IP addresses, or emails.",
-            PURPOSE => Purpose::ALL[self.purpose].summary(),
-            _ => "Optional.",
-        }
-    }
-
-    /// Draws the form over the middle of the main view.
-    pub fn draw(&self, frame: &mut Frame) {
-        let screen = frame.area();
-        if screen.width < WIDTH || screen.height < HEIGHT {
-            frame.render_widget(Clear, screen);
-            frame.render_widget(
-                Paragraph::new("Resize terminal for the key pair form. Esc Cancel | Ctrl+C Quit")
-                    .wrap(Wrap { trim: false }),
-                screen,
-            );
-            return;
-        }
-        let area = screen.centered(Constraint::Length(WIDTH), Constraint::Length(HEIGHT));
-        let block = Block::bordered().title(" Generate key pair ");
-        let inner = block.inner(area);
-        frame.render_widget(Clear, area);
-        frame.render_widget(block, area);
-        let [fields, _, hint, error] = Layout::vertical([
-            Constraint::Length(LABELS.len() as u16),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .areas(inner);
-        let width = usize::from(inner.width);
-        let rows = LABELS.iter().enumerate().map(|(index, label)| {
-            let selected = index == self.selected;
-            let value = match index {
-                ALGORITHM => format!("< {} >", Algorithm::ALL[self.algorithm].label()),
-                PURPOSE => format!("< {} >", Purpose::ALL[self.purpose].label()),
-                // Show the end of a text too long for the row.
-                _ => {
-                    let cursor = if selected { "_" } else { "" };
-                    let room = width - VALUE_COLUMN - cursor.len();
-                    let skipped = self.text[index].chars().count().saturating_sub(room);
-                    let shown: String = self.text[index].chars().skip(skipped).collect();
-                    format!("{shown}{cursor}")
-                }
-            };
-            let row = format!(" {label:<20} {value}");
-            if selected {
-                Line::styled(
-                    format!("{row:<width$}"),
-                    Style::default()
-                        .fg(Color::Rgb(0, 0, 0))
-                        .bg(Color::Rgb(175, 255, 255))
-                        .bold(),
-                )
-            } else {
-                Line::from(row)
-            }
-        });
-        frame.render_widget(Paragraph::new(rows.collect::<Vec<_>>()), fields);
-        frame.render_widget(Paragraph::new(format!(" {}", self.hint())), hint);
-        frame.render_widget(
-            Paragraph::new(format!(" {}", self.error.as_deref().unwrap_or_default()))
-                .style(Style::default().fg(Color::Red))
-                .wrap(Wrap { trim: false }),
-            error,
-        );
-    }
 }
 
 impl Pending {
@@ -438,7 +209,7 @@ impl App {
             Outcome::Submitted(algorithm, request) => {
                 if let Some(form) = self.generating.take() {
                     self.alias_prompt = Some(AliasPrompt {
-                        alias: form.text[COMMON_NAME].trim().to_lowercase(),
+                        alias: form.common_name().to_lowercase(),
                         action: Action::Generate(Box::new(Pending {
                             form,
                             algorithm,
@@ -503,10 +274,13 @@ impl App {
 #[cfg(test)]
 mod tests {
     use crown::x509::cert::Certificate;
-    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
-    use crate::{key_import::matching_chain, test_support::TestRng};
+    use crate::{
+        key_import::matching_chain,
+        signing::{Purpose, Subject},
+        test_support::TestRng,
+    };
 
     /// Deterministic bytes that vary enough for primes to be found.
     struct Mixed(u64);
@@ -601,141 +375,5 @@ mod tests {
         assert!(factor(&Bn::from_u64(15), &[Zeroizing::new(Vec::new())]).is_none());
         let seven = [Zeroizing::new(vec![0x07])];
         assert!(factor(&Bn::from_u64(15), &seven).is_none());
-    }
-
-    fn press(form: &mut Form, code: KeyCode) -> Outcome {
-        form.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
-    }
-
-    fn type_text(form: &mut Form, text: &str) {
-        for ch in text.chars() {
-            press(form, KeyCode::Char(ch));
-        }
-    }
-
-    fn screen(form: &Form, width: u16, height: u16) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| form.draw(frame)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        buffer
-            .content
-            .chunks(usize::from(width))
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    #[test]
-    fn the_form_moves_between_fields_and_changes_choices() {
-        let mut form = Form::default();
-        let shown = screen(&form, 80, 24);
-        assert!(shown.contains(" Generate key pair "));
-        assert!(shown.contains("Algorithm            < EC P-256 >"));
-        assert!(shown.contains("Valid for (days)     365"));
-        assert!(shown.contains("Purpose              < None >"));
-        assert!(shown.contains("RSA 4096 takes a few seconds."));
-
-        press(&mut form, KeyCode::Right);
-        press(&mut form, KeyCode::Right);
-        assert!(screen(&form, 80, 24).contains("< EC P-521 >"));
-        for _ in 0..3 {
-            press(&mut form, KeyCode::Left);
-        }
-        assert!(screen(&form, 80, 24).contains("< RSA 4096 >"));
-        // Typing does nothing to a choice.
-        type_text(&mut form, "x");
-        press(&mut form, KeyCode::Backspace);
-        assert!(screen(&form, 80, 24).contains("< RSA 4096 >"));
-
-        // Up from the first field wraps to the last, and Down back.
-        press(&mut form, KeyCode::Up);
-        assert!(screen(&form, 80, 24).contains("No key usage extensions."));
-        press(&mut form, KeyCode::Left);
-        assert!(screen(&form, 80, 24).contains("< Code signing >"));
-        press(&mut form, KeyCode::Tab);
-        press(&mut form, KeyCode::Down);
-        type_text(&mut form, "q host");
-        assert!(screen(&form, 80, 24).contains("Common name (CN)     q host_"));
-        press(&mut form, KeyCode::Backspace);
-        assert!(screen(&form, 80, 24).contains("q hos_"));
-        form.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
-        // Arrows and chords do nothing to a text.
-        press(&mut form, KeyCode::Left);
-        form.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT));
-        assert!(screen(&form, 80, 24).contains("Common name (CN)     _ "));
-        press(&mut form, KeyCode::BackTab);
-        assert!(screen(&form, 80, 24).contains("RSA 4096 takes"));
-        assert!(matches!(press(&mut form, KeyCode::Esc), Outcome::Cancelled));
-    }
-
-    #[test]
-    fn the_form_names_the_first_wrong_field() {
-        let mut form = Form::default();
-        let rejected = |form: &mut Form| {
-            assert!(matches!(press(form, KeyCode::Enter), Outcome::Editing));
-            (form.selected, form.error.clone().unwrap())
-        };
-        assert_eq!(
-            rejected(&mut form),
-            (COMMON_NAME, "A common name is required.".into())
-        );
-        assert!(screen(&form, 80, 24).contains("A common name is required."));
-        type_text(&mut form, " Host ");
-        // The error clears on the next key.
-        assert!(!screen(&form, 80, 24).contains("A common name is required."));
-
-        form.selected = COUNTRY;
-        for country in ["c", "c1", "che"] {
-            form.text[COUNTRY] = country.into();
-            assert!(rejected(&mut form).1.contains("two-letter"));
-        }
-        form.text[COUNTRY] = "ch".into();
-        for days in ["", "0", "36501", "soon"] {
-            form.text[DAYS] = days.into();
-            assert_eq!(rejected(&mut form).0, DAYS);
-        }
-        form.text[DAYS] = "90".into();
-        form.text[NAMES] = "host.test,,".into();
-        assert_eq!(rejected(&mut form).0, NAMES);
-        form.text[NAMES] = "host.test, 10.0.0.1".into();
-        form.text[ORGANIZATION] = "Example".into();
-        form.purpose = 1;
-
-        let Outcome::Submitted(algorithm, request) = press(&mut form, KeyCode::Enter) else {
-            panic!("the form is complete");
-        };
-        assert_eq!(algorithm, Algorithm::Ec(CurveId::P256));
-        let subject: Vec<_> = request
-            .subject
-            .iter_attributes()
-            .map(|attribute| attribute.text().unwrap())
-            .collect();
-        assert_eq!(subject, ["CH", "Example", "Host"]);
-        assert_eq!((request.days, request.names.len()), (90, 2));
-        assert_eq!(request.purpose, Purpose::TlsServer);
-    }
-
-    #[test]
-    fn the_form_shows_the_end_of_long_text_and_needs_room() {
-        let mut form = Form {
-            selected: NAMES,
-            ..Form::default()
-        };
-        form.text[NAMES] = format!("{}.test", "a".repeat(60));
-        let shown = screen(&form, 72, 16);
-        assert!(shown.contains(&format!("Alternative names    {}.test_", "a".repeat(42))));
-        assert!(shown.contains("Optional, separated by commas"));
-        form.selected = DAYS;
-        assert!(screen(&form, 72, 16).contains(&format!(" {}.test│", "a".repeat(43))));
-        assert!(screen(&form, 72, 16).contains("How many days"));
-        form.selected = COUNTRY;
-        assert!(screen(&form, 72, 16).contains("such as CH"));
-        form.selected = STATE;
-        assert!(screen(&form, 72, 16).contains(" Optional. "));
-        for (width, height) in [(71, 16), (72, 15)] {
-            let small = screen(&form, width, height);
-            assert!(small.contains("Resize terminal for the key pair form."));
-            assert!(!small.contains("Generate key pair"));
-        }
     }
 }

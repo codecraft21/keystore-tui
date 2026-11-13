@@ -1,5 +1,6 @@
-//! Building certificates signed with a PKCS #8 private key: the subject
-//! name, the extensions of a purpose, and a self-signed certificate.
+//! Building certificates and certificate requests signed with a PKCS #8
+//! private key: the subject name, the extensions of a purpose, a
+//! self-signed certificate, and a PKCS #10 request.
 use std::net::IpAddr;
 
 use crown::{
@@ -11,7 +12,9 @@ use crown::{
     rng::Rng,
     x509::{
         algorithm::{Hash, SignatureAlgorithm},
+        attribute::Attribute,
         cert::CertificateBuilder,
+        csr::CertificationRequest,
         extensions::{
             BasicConstraints, ExtendedKeyUsage, Extension, GeneralName, KeyUsage,
             encode_general_names,
@@ -229,10 +232,11 @@ fn serial(rng: &mut impl Rng) -> Vec<u8> {
     serial
 }
 
-/// What a self-signed certificate holds besides its key.
+/// What a certificate or a certificate request holds besides its key.
 pub struct Request {
     pub subject: Name,
-    /// How many days the certificate is valid, from now.
+    /// How many days a certificate is valid, from now; a request has no
+    /// validity.
     pub days: u32,
     pub names: Vec<GeneralName>,
     pub purpose: Purpose,
@@ -283,6 +287,48 @@ pub fn self_signed(
         .sign(&key, rng)
         .map(|certificate| certificate.encode())
         .map_err(|error| format!("The certificate could not be signed: {error}."))
+}
+
+/// The DER of a PKCS #10 certificate request for the PKCS #8 private key
+/// `key`, signed with that key. The purpose's extensions and the alternative
+/// names are asked for in an extension request, when there are any.
+pub fn request(key: &[u8], request: &Request, rng: &mut impl Rng) -> Result<Vec<u8>, String> {
+    let key = PrivateKeyInfo::parse(key)
+        .and_then(|info| info.decode())
+        .map_err(|_| UNSUPPORTED_KEY)?;
+    let algorithm = signature_algorithm(&key)?;
+    let public = key
+        .public_key()
+        .and_then(|public| SubjectPublicKeyInfo::from_public_key(&public))
+        .map_err(|_| UNSUPPORTED_KEY)?;
+    let mut extensions = request
+        .purpose
+        .extensions(matches!(key, PrivateKey::Rsa(_)));
+    if !request.names.is_empty() {
+        extensions.push(Extension::new(
+            object(oid::OID_SUBJECT_ALT_NAME),
+            false,
+            encode_general_names(&request.names),
+        ));
+    }
+    let mut attributes = Vec::new();
+    if !extensions.is_empty() {
+        let extensions: Vec<u8> = extensions.iter().flat_map(Extension::encode).collect();
+        attributes.push(Attribute::new(
+            object(oid::OID_PKCS9_EXTENSION_REQUEST),
+            vec![der::sequence(&extensions)],
+        ));
+    }
+    CertificationRequest::build(
+        request.subject.clone(),
+        public,
+        attributes,
+        algorithm,
+        &key,
+        rng,
+    )
+    .map(|request| request.encode())
+    .map_err(|error| format!("The certificate request could not be signed: {error}."))
 }
 
 #[cfg(test)]
@@ -467,6 +513,39 @@ mod tests {
         for purpose in Purpose::ALL {
             assert!(!purpose.label().is_empty());
             assert!(purpose.summary().ends_with('.'));
+        }
+    }
+
+    #[test]
+    fn a_request_verifies_and_asks_for_its_extensions() {
+        let mut asked = request(Purpose::TlsClient);
+        asked.names = alternative_names("example.test, 10.0.0.5").unwrap();
+        let der = super::request(&ed25519_pkcs8(3), &asked, &mut TestRng(0)).unwrap();
+        let parsed = CertificationRequest::parse(&der).unwrap();
+        assert_eq!(parsed.verify_signature(), Ok(true));
+        assert_eq!(parsed.info().subject, asked.subject);
+        let extensions = parsed.extensions().unwrap();
+        let oids: Vec<_> = extensions
+            .iter()
+            .map(|extension| extension.oid.to_dotted_string())
+            .collect();
+        assert_eq!(oids, ["2.5.29.15", "2.5.29.37", "2.5.29.17"]);
+        // The app reads its own request like any other.
+        let shown = crate::certificate_request::Request::parse(&der).unwrap();
+        assert_eq!(shown.subject, asked.subject);
+        assert_eq!(shown.extensions.len(), 3);
+
+        // Without a purpose or names there is nothing to ask for.
+        let der = super::request(&ed25519_pkcs8(3), &request(Purpose::None), &mut TestRng(0));
+        let parsed = CertificationRequest::parse(&der.unwrap()).unwrap();
+        assert_eq!(parsed.verify_signature(), Ok(true));
+        assert!(parsed.info().attributes.is_empty());
+
+        for key in [synthetic_pkcs8(&[1, 2, 3]), vec![1, 2, 3]] {
+            assert_eq!(
+                super::request(&key, &request(Purpose::None), &mut TestRng(0)),
+                Err(UNSUPPORTED_KEY.into())
+            );
         }
     }
 

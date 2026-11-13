@@ -39,6 +39,9 @@ All notable changes to keystore-tui are listed here. Versions follow
   validity in days, alternative names, and a purpose such as TLS server or
   certificate authority. The key gets a self-signed certificate and is stored
   under the keystore's password.
+- Make a certificate request with `c` on a private key. The form starts from
+  the key's certificate; the request is saved to a new `.csr` file, or as
+  DER under a `.der` name.
 - The editing shortcuts are now shown on two lines, one for the keystore and
   one for the selected entry.
 - PKCS12 keystores are saved with AES-256-CBC and HMAC-SHA256, whatever they

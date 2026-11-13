@@ -120,6 +120,7 @@ certificates whose names match another certificate or key.
 | `g` | Generate a key pair with a self-signed certificate |
 | `i` | Import a trusted certificate, a key pair, or another keystore's entries from a file |
 | `e` | Export the selected private key, alone or with its certificates |
+| `c` | Make a certificate request (CSR) for the selected private key |
 | `r` | Rename the selected entry |
 | `d` / `Delete` | Delete the selected entry |
 | `w` | Save the changes to the opened file |
@@ -156,6 +157,12 @@ next to the app name, but nothing changes on disk until you save.
   signing. Press `Enter`, then confirm or edit the alias; `Esc` there goes
   back to the form. The new key gets a self-signed certificate and is stored
   under the keystore's password.
+- **Make a certificate request:** press `c` on a private key. The form
+  starts from the key's certificate; change the subject or the alternative
+  names if the request should differ, and choose a purpose to ask for key
+  usage extensions. Press `Enter`, edit the file name, and press `Enter`
+  again: a `.der` name saves DER, any other name PEM. Send the file to your
+  certificate authority. The keystore is not changed.
 - **Import a trusted certificate:** press `i`, choose a file holding one
   certificate (PEM, DER, or PKCS#7) in the browser, then confirm or edit the
   suggested alias and press `Enter`.
