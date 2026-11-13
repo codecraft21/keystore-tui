@@ -45,6 +45,8 @@ All notable changes to keystore-tui are listed here. Versions follow
 - Import a certificate authority's reply with `R` on a private key: the
   issued certificate and its issuers, from the file and from the keystore,
   replace the key's certificate chain.
+- Edit a private key's certificate chain with `C`: append the issuer of its
+  last certificate from a file, or remove the last certificate.
 - The editing shortcuts are now shown on two lines, one for the keystore and
   one for the selected entry.
 - PKCS12 keystores are saved with AES-256-CBC and HMAC-SHA256, whatever they

@@ -25,6 +25,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Generating key pairs](#generating-key-pairs)
   - [Making certificate requests](#making-certificate-requests)
   - [Importing a CA reply](#importing-a-ca-reply)
+  - [Editing a certificate chain](#editing-a-certificate-chain)
   - [Copying entries from another keystore](#copying-entries-from-another-keystore)
   - [Exporting private keys](#exporting-private-keys)
   - [Changing the password](#changing-the-password)
@@ -76,7 +77,7 @@ document and the usage reference, and also the README if its overview changes.
   pairs](#generating-key-pairs).
 - The following are out of scope for now: importing anything but a trusted
   certificate, a key pair, or another keystore's entries, keystore editing other than [deleting](#deleting-entries) and
-  [renaming](#renaming-entries) entries, [generating key pairs](#generating-key-pairs), and [importing a CA reply](#importing-a-ca-reply), and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
+  [renaming](#renaming-entries) entries, [generating key pairs](#generating-key-pairs), [importing a CA reply](#importing-a-ca-reply), and [editing a certificate chain](#editing-a-certificate-chain), and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
   features; each one updates this section when it ships.
 
 ## Command-line startup
@@ -330,7 +331,7 @@ any existing incomplete-entry warnings.
 - JKS, JCEKS, and PKCS12 keystores can be changed. In the entry list of one,
   two lines above the shortcuts show `Keystore: n New | g Generate | i Import
   | w Save | W Save as | p Password` and `Entry: e Export | c Request | R
-  CA reply | r Rename | d Delete | P Key password`.
+  CA reply | C Chain | r Rename | d Delete | P Key password`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
   keys do nothing when no entry is selected.
@@ -343,7 +344,7 @@ any existing incomplete-entry warnings.
   chain certificates that no other entry uses, which would otherwise be
   listed as entries of their own. Certificates another key's chain needs, and
   trusted certificates, stay.
-- For a certificate file, `d`, `Delete`, `r`, `i`, `g`, `c`, `R`, `p`, `w`, and `W` show a
+- For a certificate file, `d`, `Delete`, `r`, `i`, `g`, `c`, `R`, `C`, `p`, `w`, and `W` show a
   red message that only keystores can be changed. A PKCS12 keystore whose
   entry list is incomplete (see [PKCS12
   compatibility](#pkcs12-compatibility)) cannot be changed either, because
@@ -569,6 +570,35 @@ any existing incomplete-entry warnings.
 - Whether the certificates are trusted or valid is not checked; the
   [chain diagnostics](#offline-chain-diagnostics) of the entry show what the
   new chain looks like.
+
+### Editing a certificate chain
+
+- In a keystore, `C` on a private key shows `Chain of '<alias>': <n>
+  certificates` above `a Append from file | x Remove last | Esc Cancel |
+  Ctrl+C Quit`. On another kind of entry a red message says that only a
+  private key has a chain to edit. The private key is not decrypted.
+- `Esc` leaves the chain as it is. `a` and `x` act as below; every other
+  key, including `q`, does nothing. `Ctrl+C` still quits.
+- `a` opens the file browser, titled `Certificate to append to the chain of
+  '<alias>'`, to choose a PEM, DER, or PKCS#7 file holding one certificate,
+  as for a [certificate import](#importing-certificates). The certificate is
+  added after the chain's last one when its subject is that certificate's
+  issuer and that certificate's signature does not fail under its key; a
+  signature that cannot be checked does not stop it. Otherwise a red message
+  says that it did not issue the last certificate. A certificate already in
+  the chain is refused.
+- `x` removes the chain's last certificate. The first one, the key's own
+  certificate, stays: on a chain of one, a red message says so.
+- Either change is made in memory, as for a [CA
+  reply](#importing-a-ca-reply): the key and, in JKS and JCEKS, the creation
+  date stay as they were, and nothing is written until the keystore is
+  saved. A green message names the certificate and the entry.
+- A PKCS12 keystore lists a key's chain from the certificates it holds, so a
+  certificate that it also holds elsewhere, for example as a trusted
+  certificate, cannot be removed from a chain: the change is refused with
+  the message of a chain that would not be listed again.
+- Whether the certificates are trusted or valid is not checked; the [chain
+  diagnostics](#offline-chain-diagnostics) show what is wrong with a chain.
 
 ### Copying entries from another keystore
 
