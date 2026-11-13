@@ -43,7 +43,7 @@ opens standalone certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`,
   belong to no key are listed as `Certificate` entries.
 - Creates and edits JKS, JCEKS, and PKCS12 keystores: generate an RSA, EC, or
   Ed25519 key pair with a self-signed certificate, make a certificate request
-  for a private key, import a trusted certificate
+  for a private key and import the CA's reply, import a trusted certificate
   or a key pair (PEM or PKCS #8), copy entries from another keystore, export
   a private key with or
   without its certificates, rename or delete an entry, or change the keystore password or a key's
@@ -86,10 +86,10 @@ certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
 ## Limitations
 
 - Editing is limited to generating a key pair with a self-signed certificate,
-  making a certificate request for a private key,
+  making a certificate request for a private key, importing a CA's reply,
   importing a trusted certificate, a key pair, or
   another keystore's entries, exporting a private key, renaming or deleting
-  an entry, and changing passwords. A CA's reply cannot be imported yet, and secret
+  an entry, and changing passwords. A certificate chain cannot be edited by hand yet, and secret
   keys cannot change their password, be converted, copied, or exported. More editing is planned for release 1.1; see the
   [roadmap](docs/ROADMAP.md).
 - PKCS12 keystores are saved with AES-256 and HMAC-SHA256, which Java 8 builds

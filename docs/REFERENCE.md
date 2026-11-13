@@ -121,6 +121,7 @@ certificates whose names match another certificate or key.
 | `i` | Import a trusted certificate, a key pair, or another keystore's entries from a file |
 | `e` | Export the selected private key, alone or with its certificates |
 | `c` | Make a certificate request (CSR) for the selected private key |
+| `R` | Import a CA reply: replace the selected private key's certificate chain with the issued one |
 | `r` | Rename the selected entry |
 | `d` / `Delete` | Delete the selected entry |
 | `w` | Save the changes to the opened file |
@@ -163,6 +164,12 @@ next to the app name, but nothing changes on disk until you save.
   usage extensions. Press `Enter`, edit the file name, and press `Enter`
   again: a `.der` name saves DER, any other name PEM. Send the file to your
   certificate authority. The keystore is not changed.
+- **Import a CA reply:** press `R` on the private key the certificate was
+  issued for and choose the file the certificate authority sent (PEM, DER,
+  or PKCS#7). The certificate must hold the key's public key. Its chain is
+  completed from the file's other certificates and, where they end, from
+  certificates already in the keystore, so import the authority's
+  certificates first (`i`) if the reply holds only your own.
 - **Import a trusted certificate:** press `i`, choose a file holding one
   certificate (PEM, DER, or PKCS#7) in the browser, then confirm or edit the
   suggested alias and press `Enter`.

@@ -15,6 +15,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate or a key pair under the typed alias |
 | `src/generate.rs` | Generating a key pair: the RSA, EC, and Ed25519 keys as PKCS #8, and adding the result with its certificate under the typed alias |
 | `src/certificate_form.rs` | The form asking what a new key pair's certificate or a certificate request holds, and its checks |
+| `src/ca_reply.rs` | Importing a CA reply: building the issued chain from the reply file and the keystore's certificates, and replacing a private key's chain with it |
 | `src/new_request.rs` | Making a certificate request for a private key: starting the form from its certificate, the file name prompt, and writing the request |
 | `src/signing.rs` | Certificates and requests signed with a PKCS #8 key: the subject name, the extensions of a purpose, alternative names, the signature algorithm of a key type, a self-signed certificate, and a PKCS #10 request |
 | `src/key_export.rs` | Exporting a private key, alone or with its certificates, to a new PKCS12, PEM, or DER file, and its name prompt |
@@ -22,7 +23,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/copy_entries.rs` | Copying entries from another keystore: the list in which they are chosen, and adding them to the open keystore |
 | `src/new_password.rs` | Typing a new password twice, changing the open keystore's password or a key's password, and creating a new keystore file |
 | `src/save.rs` | The open keystore's writable form and password, converting it to another format, the "save as" and new-keystore name prompt, and replacing a file atomically |
-| `src/keystore.rs` | JKS and JCEKS parsing, integrity check (SHA-1), and writing entries back as stored, renamed, or added; the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
+| `src/keystore.rs` | JKS and JCEKS parsing, integrity check (SHA-1), and writing entries back as stored, renamed, added, or with another certificate chain; the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
 | `src/key_protection.rs` | Java's password protection of private keys in JKS (SHA-1 keystream) and JCEKS (`PBEWithMD5AndTripleDES`): recovering a key and protecting it again |
 | `src/java_serialization.rs` | Skipping a serialized Java object (a JCEKS secret key) without deserializing it |
 | `src/pkcs12.rs` | PKCS12 parsing, MAC verification, and decryption of safe contents (AES and legacy PBE); listing entries from bags; editing bags, re-encrypting keys for a new password, and writing bags back with PBES2 and a new MAC |

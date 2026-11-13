@@ -42,6 +42,9 @@ All notable changes to keystore-tui are listed here. Versions follow
 - Make a certificate request with `c` on a private key. The form starts from
   the key's certificate; the request is saved to a new `.csr` file, or as
   DER under a `.der` name.
+- Import a certificate authority's reply with `R` on a private key: the
+  issued certificate and its issuers, from the file and from the keystore,
+  replace the key's certificate chain.
 - The editing shortcuts are now shown on two lines, one for the keystore and
   one for the selected entry.
 - PKCS12 keystores are saved with AES-256-CBC and HMAC-SHA256, whatever they

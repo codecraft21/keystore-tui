@@ -221,7 +221,7 @@ impl FilePicker {
 
     /// Draws the browser under another title, when it picks a file for
     /// something other than opening it.
-    pub(crate) fn draw_titled(&mut self, frame: &mut Frame, title: &'static str) {
+    pub(crate) fn draw_titled(&mut self, frame: &mut Frame, title: &str) {
         let area = frame.area().inner(Margin {
             horizontal: 2,
             vertical: 1,

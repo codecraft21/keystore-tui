@@ -119,48 +119,58 @@ pub fn certificate_pem(der: &[u8]) -> String {
     )
 }
 
-/// PEM text of a key pair: the Ed25519 key made from the synthetic secret
-/// `[7; 32]`, as PKCS #8, and its self-signed certificate, `imported`.
-pub fn key_pair_pem() -> String {
+/// A certificate named `subject` for the Ed25519 key made from the synthetic
+/// secret `[key; 32]`, issued by `issuer` and signed with `[issuer_key; 32]`.
+pub fn ed25519_certificate(subject: &str, issuer: &str, key: u8, issuer_key: u8) -> Vec<u8> {
     use crown::{
-        asn1::{Asn1Time, der, oid::ObjectIdentifier, pem},
+        asn1::{Asn1Time, der, oid::ObjectIdentifier},
         ed25519,
         x509::name::Name,
     };
-    let secret = [7; 32];
     let algorithm = der::sequence(&der::oid(
         &ObjectIdentifier::new(&[1, 3, 101, 112]).unwrap(),
     ));
-    let key = der::sequence(
-        &[
-            der::integer(&[0]),
-            algorithm.clone(),
-            der::octet_string(&der::octet_string(&secret)),
-        ]
-        .concat(),
-    );
-    let name = Name::from_common_name("imported").encode();
     let validity = [
         der::utc_time(&Asn1Time::from_unix(1_700_000_000, true)),
         der::utc_time(&Asn1Time::from_unix(2_000_000_000, true)),
     ]
     .concat();
-    let public = ed25519::public_from_secret(&secret);
+    let public = ed25519::public_from_secret(&[key; 32]);
     let tbs = der::sequence(
         &[
             der::explicit(0, &der::integer_i64(2)),
             der::integer_i64(1),
             algorithm.clone(),
-            name.clone(),
+            Name::from_common_name(issuer).encode(),
             der::sequence(&validity),
-            name,
+            Name::from_common_name(subject).encode(),
             der::sequence(&[algorithm.clone(), der::bit_string(0, &public)].concat()),
         ]
         .concat(),
     );
-    let signature = ed25519::sign(&secret, &tbs);
-    let certificate = der::sequence(&[tbs, algorithm, der::bit_string(0, &signature)].concat());
-    pem::encode("PRIVATE KEY", &key) + &pem::encode("CERTIFICATE", &certificate)
+    let signature = ed25519::sign(&[issuer_key; 32], &tbs);
+    der::sequence(&[tbs, algorithm, der::bit_string(0, &signature)].concat())
+}
+
+/// PEM text of a key pair: the Ed25519 key made from the synthetic secret
+/// `[7; 32]`, as PKCS #8, and its self-signed certificate, `imported`.
+pub fn key_pair_pem() -> String {
+    use crown::asn1::{der, oid::ObjectIdentifier, pem};
+    let key = der::sequence(
+        &[
+            der::integer(&[0]),
+            der::sequence(&der::oid(
+                &ObjectIdentifier::new(&[1, 3, 101, 112]).unwrap(),
+            )),
+            der::octet_string(&der::octet_string(&[7; 32])),
+        ]
+        .concat(),
+    );
+    pem::encode("PRIVATE KEY", &key)
+        + &pem::encode(
+            "CERTIFICATE",
+            &ed25519_certificate("imported", "imported", 7, 7),
+        )
 }
 
 /// The DER inside a single PEM block, whatever its label.

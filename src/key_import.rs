@@ -153,7 +153,7 @@ fn pkcs8(algorithm: &[u64], parameters: &[u8], key: &[u8]) -> Key {
 }
 
 /// The certificate chains in the certificate file content `data`.
-fn chains(data: &[u8]) -> Chains {
+pub(crate) fn chains(data: &[u8]) -> Chains {
     certificate_file::parse(data)
         .map(|file| file.entries)
         .unwrap_or_default()
@@ -189,7 +189,7 @@ pub fn matching_chain(
 }
 
 /// The file's name, as shown in messages.
-fn name(path: &Path) -> String {
+pub(crate) fn name(path: &Path) -> String {
     path.file_name()
         .unwrap_or(path.as_os_str())
         .to_string_lossy()

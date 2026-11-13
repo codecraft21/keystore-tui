@@ -24,6 +24,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Importing key pairs](#importing-key-pairs)
   - [Generating key pairs](#generating-key-pairs)
   - [Making certificate requests](#making-certificate-requests)
+  - [Importing a CA reply](#importing-a-ca-reply)
   - [Copying entries from another keystore](#copying-entries-from-another-keystore)
   - [Exporting private keys](#exporting-private-keys)
   - [Changing the password](#changing-the-password)
@@ -67,13 +68,15 @@ document and the usage reference, and also the README if its overview changes.
   keystore (see [Copying entries from another
   keystore](#copying-entries-from-another-keystore)), and when a private key
   is exported under a password. A private key is also decrypted in memory to
-  sign a certificate request; see [Making certificate
-  requests](#making-certificate-requests). A new private key is made only in memory, and
+  sign a certificate request (see [Making certificate
+  requests](#making-certificate-requests)) and to work out its public key
+  for a certificate authority's reply (see [Importing a CA
+  reply](#importing-a-ca-reply)). A new private key is made only in memory, and
   is encrypted with the keystore's password at once; see [Generating key
   pairs](#generating-key-pairs).
 - The following are out of scope for now: importing anything but a trusted
   certificate, a key pair, or another keystore's entries, keystore editing other than [deleting](#deleting-entries) and
-  [renaming](#renaming-entries) entries and [generating key pairs](#generating-key-pairs), and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
+  [renaming](#renaming-entries) entries, [generating key pairs](#generating-key-pairs), and [importing a CA reply](#importing-a-ca-reply), and clipboard actions. The [ROADMAP](ROADMAP.md) lists the planned write
   features; each one updates this section when it ships.
 
 ## Command-line startup
@@ -326,8 +329,8 @@ any existing incomplete-entry warnings.
 
 - JKS, JCEKS, and PKCS12 keystores can be changed. In the entry list of one,
   two lines above the shortcuts show `Keystore: n New | g Generate | i Import
-  | w Save | W Save as | p Password` and `Entry: e Export | c Request | r
-  Rename | d Delete | P Key password`.
+  | w Save | W Save as | p Password` and `Entry: e Export | c Request | R
+  CA reply | r Rename | d Delete | P Key password`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
   keys do nothing when no entry is selected.
@@ -340,7 +343,7 @@ any existing incomplete-entry warnings.
   chain certificates that no other entry uses, which would otherwise be
   listed as entries of their own. Certificates another key's chain needs, and
   trusted certificates, stay.
-- For a certificate file, `d`, `Delete`, `r`, `i`, `g`, `c`, `p`, `w`, and `W` show a
+- For a certificate file, `d`, `Delete`, `r`, `i`, `g`, `c`, `R`, `p`, `w`, and `W` show a
   red message that only keystores can be changed. A PKCS12 keystore whose
   entry list is incomplete (see [PKCS12
   compatibility](#pkcs12-compatibility)) cannot be changed either, because
@@ -529,6 +532,43 @@ any existing incomplete-entry warnings.
   extension request with the purpose's extensions and then the alternative
   names; otherwise it has no attributes.
 - A green message names the entry and the file. The keystore is not changed.
+
+### Importing a CA reply
+
+- In a keystore, `R` replaces the selected private key's certificate chain
+  with the one a certificate authority issued. On another kind of entry a
+  red message says that only a private key takes a reply. The key must be
+  one that the keystore's password unlocks, in PKCS #8 form, as for an
+  [export](#exporting-private-keys).
+- The file browser opens, titled `CA reply for '<alias>'`, to choose a PEM,
+  DER, or PKCS#7 certificate file. `Esc` gives up.
+- The reply's certificate is the one in the file holding the key's public
+  key, which is worked out from the private key as for an [imported key
+  pair](#importing-key-pairs). Without one, a red message says that no
+  certificate in the file holds the public key of the entry, and nothing
+  changes. A file without certificates is refused too.
+- The new chain is that certificate followed by its issuers among the file's
+  other certificates, found by issuer and subject names, in whatever order
+  the file holds them. Where the file's certificates end before a
+  self-issued one, the chain goes on in the same way with certificates the
+  keystore holds, in any entry. An issuer is never guessed between several
+  candidates: the chain ends there. Certificates outside the chain are left
+  out.
+- The entry's chain is replaced in memory; the private key is not changed,
+  and in JKS and JCEKS the entry keeps its creation date. A green message
+  such as `Replaced the certificate chain of '<alias>' with the 3
+  certificates from '<file name>'.` reports it. Nothing is written until the
+  keystore is saved.
+- When the new chain is the one the entry already has, a green message says
+  that nothing changed, and the keystore is not marked as modified.
+- In PKCS12 the key and its new certificate are named with the entry's alias
+  and share a new local key ID, and the old chain's certificates that no
+  other entry uses are dropped. A reply whose certificate already belongs to
+  another private key is refused, as is a chain the keystore would not list
+  again as given.
+- Whether the certificates are trusted or valid is not checked; the
+  [chain diagnostics](#offline-chain-diagnostics) of the entry show what the
+  new chain looks like.
 
 ### Copying entries from another keystore
 
