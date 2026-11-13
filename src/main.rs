@@ -2,6 +2,7 @@ mod asn1_dump;
 mod canonical_path;
 mod certificate;
 mod certificate_file;
+mod certificate_form;
 mod certificate_request;
 mod copy_entries;
 mod editing;
@@ -16,6 +17,7 @@ mod key_import;
 mod key_protection;
 mod keystore;
 mod new_password;
+mod new_request;
 mod path_bar;
 mod pkcs12;
 mod save;
@@ -132,10 +134,12 @@ struct App {
     /// A key pair import waiting for a password or a certificate file.
     key_import: Option<key_import::KeyImport>,
     /// The form for a new key pair, while it is filled in.
-    generating: Option<generate::Form>,
+    generating: Option<certificate_form::Form>,
     /// The alias and the filled-in form of the key pair to generate once
     /// the screen says so.
     generation: Option<(String, Box<generate::Pending>)>,
+    /// A certificate request being made for a private key.
+    requesting: Option<new_request::NewRequest>,
     /// The result of the last edit or save, and whether it failed. Cleared
     /// on the next key.
     message: Option<(String, bool)>,
@@ -262,6 +266,8 @@ impl App {
             self.handle_alias(key);
         } else if self.generating.is_some() {
             self.handle_generate(key);
+        } else if self.requesting.is_some() {
+            self.handle_request(key);
         } else if self.new_password.is_some() {
             self.handle_new_password(key);
         } else if let Some(prompt) = &mut self.save_as {
@@ -287,6 +293,7 @@ impl App {
                 KeyCode::Char('r') if is_text_input(key.modifiers) => self.ask_rename(),
                 KeyCode::Char('i') if is_text_input(key.modifiers) => self.ask_import(),
                 KeyCode::Char('g') if is_text_input(key.modifiers) => self.ask_generate(),
+                KeyCode::Char('c') if is_text_input(key.modifiers) => self.ask_request(),
                 KeyCode::Char('e') if is_text_input(key.modifiers) => self.ask_key_export(),
                 KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
                 KeyCode::Char('W') if is_text_input(key.modifiers) => {
@@ -448,6 +455,7 @@ impl App {
             || self.key_export.is_some()
             || self.copying.is_some()
             || self.generating.is_some()
+            || self.requesting.is_some()
             || self
                 .entry_details
                 .as_ref()
@@ -617,6 +625,7 @@ impl App {
         self.copying = None;
         self.generating = None;
         self.generation = None;
+        self.requesting = None;
         self.message = None;
     }
 
@@ -847,7 +856,12 @@ impl App {
             frame.render_widget(Paragraph::new(shortcuts), help);
             let error = self.message.as_ref().map(|(message, _)| message.as_str());
             selection.draw(frame, &self.entries, error);
-        } else if let Some(form) = &self.generating {
+        } else if let Some(form) = self.generating.as_ref().or(self
+            .requesting
+            .as_ref()
+            .filter(|request| request.naming.is_none())
+            .map(|request| &request.form))
+        {
             frame.render_widget(Paragraph::new(shortcuts), help);
             form.draw(frame);
         } else {
@@ -937,7 +951,19 @@ impl App {
                 Line::from(vec![label.bold(), format!("{}_", prompt.alias).into()]),
                 "Enter Confirm | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
             ]
-        } else if self.generating.is_some() {
+        } else if let Some((_, prompt)) = self
+            .requesting
+            .as_ref()
+            .and_then(|request| request.naming.as_ref())
+        {
+            vec![
+                Line::from(vec![
+                    "Save certificate request as: ".bold(),
+                    format!("{}_", prompt.path).into(),
+                ]),
+                "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Back | Ctrl+C Quit".into(),
+            ]
+        } else if self.generating.is_some() || self.requesting.is_some() {
             vec![
                 "Up/Down Tab Field | Left/Right Change | Enter Next | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
             ]
@@ -946,7 +972,7 @@ impl App {
         } else if self.document.is_some() && self.file_picker.is_none() {
             vec![
                 "Keystore: n New | g Generate | i Import | w Save | W Save as | p Password".into(),
-                "Entry: e Export | r Rename | d Delete | P Key password".into(),
+                "Entry: e Export | c Request | r Rename | d Delete | P Key password".into(),
                 LIST.into(),
             ]
         } else {

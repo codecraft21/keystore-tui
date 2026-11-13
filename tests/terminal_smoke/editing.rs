@@ -80,7 +80,7 @@ fn rename_import_save_and_quit_restores_terminal() {
     )
     .unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "Entry: e Export | r Rename"]);
+    app.expect(&["root-cert", "Entry: e Export | c Request | r Rename"]);
     app.send(b"r");
     app.expect(&["New alias for 'root-cert': root-cert_"]);
     app.send(b"\x15q"); // Ctrl+U clears; `q` is typed, not a quit.
@@ -290,7 +290,7 @@ fn import_key_pair_save_and_quit_restores_terminal() {
     fs::write(&path, &original).unwrap();
     fs::write(directory.join("pair.pem"), key_pair_pem()).unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "Entry: e Export | r Rename"]);
+    app.expect(&["root-cert", "Entry: e Export | c Request | r Rename"]);
     app.send(b"i");
     app.expect(&["Import certificate or key pair from file", "pair.pem"]);
     app.send(b"pair\r");
@@ -349,6 +349,40 @@ fn generate_key_pair_save_and_quit_restores_terminal() {
     let saved = fs::read(&path).unwrap();
     assert_eq!(&saved[8..12], &2_u32.to_be_bytes());
     app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Making certificate requests](../../docs/SPEC.md#making-certificate-requests),
+/// [Generating key pairs](../../docs/SPEC.md#generating-key-pairs),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn make_certificate_request_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    fs::write(&path, empty_password_fixture()).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "c Request"]);
+    // A trusted certificate has no key to sign with.
+    app.send(b"c");
+    app.expect(&["Only a private key can sign a certificate request."]);
+    // Three steps right of EC P-256 is Ed25519.
+    app.send(b"g\x1b[C\x1b[C\x1b[C\x1b[Bq.smoke\r");
+    app.expect(&["Alias for the generated key pair: q.smoke_"]);
+    app.send(b"\r");
+    app.expect(&["Generated Ed25519 key pair 'q.smoke'."]);
+    app.send(b"c");
+    app.expect(&["Certificate request for 'q.smoke'", "q.smoke_"]);
+    app.send(b"\r");
+    app.expect(&["Save certificate request as:", "A .der name saves DER"]);
+    // `q` is typed into the name, not a quit.
+    app.send(b"\x15q.csr\r");
+    app.expect(&["Saved a certificate request for 'q.smoke' to"]);
+    let request = fs::read_to_string(directory.join("q.csr")).unwrap();
+    assert!(request.starts_with("-----BEGIN CERTIFICATE REQUEST-----"));
+    // The request changed nothing; the generated key is still unsaved.
+    app.send(b"q");
+    app.expect(&["Quit without saving the changes?"]);
+    app.send(b"y");
     app.assert_restored();
 }
 

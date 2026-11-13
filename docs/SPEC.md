@@ -23,6 +23,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Importing certificates](#importing-certificates)
   - [Importing key pairs](#importing-key-pairs)
   - [Generating key pairs](#generating-key-pairs)
+  - [Making certificate requests](#making-certificate-requests)
   - [Copying entries from another keystore](#copying-entries-from-another-keystore)
   - [Exporting private keys](#exporting-private-keys)
   - [Changing the password](#changing-the-password)
@@ -50,8 +51,9 @@ document and the usage reference, and also the README if its overview changes.
   file only when the user saves it; see [Saving](#saving). Certificate files
   and requests are never written or modified.
 - The other files it writes are new exports: certificates and requests (see
-  [Exporting](#exporting)) and private keys (see [Exporting private
-  keys](#exporting-private-keys)).
+  [Exporting](#exporting)), private keys (see [Exporting private
+  keys](#exporting-private-keys)), and new certificate requests (see [Making
+  certificate requests](#making-certificate-requests)).
 - It runs without Java or `keytool` installed.
 - Private and secret keys are never displayed. A private key is written
   unencrypted only by an export that the user confirms; see [Exporting
@@ -64,7 +66,9 @@ document and the usage reference, and also the README if its overview changes.
   [Importing key pairs](#importing-key-pairs)) or copied from another
   keystore (see [Copying entries from another
   keystore](#copying-entries-from-another-keystore)), and when a private key
-  is exported under a password. A new private key is made only in memory, and
+  is exported under a password. A private key is also decrypted in memory to
+  sign a certificate request; see [Making certificate
+  requests](#making-certificate-requests). A new private key is made only in memory, and
   is encrypted with the keystore's password at once; see [Generating key
   pairs](#generating-key-pairs).
 - The following are out of scope for now: importing anything but a trusted
@@ -322,8 +326,8 @@ any existing incomplete-entry warnings.
 
 - JKS, JCEKS, and PKCS12 keystores can be changed. In the entry list of one,
   two lines above the shortcuts show `Keystore: n New | g Generate | i Import
-  | w Save | W Save as | p Password` and `Entry: e Export | r Rename | d
-  Delete | P Key password`.
+  | w Save | W Save as | p Password` and `Entry: e Export | c Request | r
+  Rename | d Delete | P Key password`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
   keys do nothing when no entry is selected.
@@ -336,7 +340,7 @@ any existing incomplete-entry warnings.
   chain certificates that no other entry uses, which would otherwise be
   listed as entries of their own. Certificates another key's chain needs, and
   trusted certificates, stay.
-- For a certificate file, `d`, `Delete`, `r`, `i`, `g`, `p`, `w`, and `W` show a
+- For a certificate file, `d`, `Delete`, `r`, `i`, `g`, `c`, `p`, `w`, and `W` show a
   red message that only keystores can be changed. A PKCS12 keystore whose
   entry list is incomplete (see [PKCS12
   compatibility](#pkcs12-compatibility)) cannot be changed either, because
@@ -496,6 +500,35 @@ any existing incomplete-entry warnings.
   empty password, a red message says why and the generated key is discarded.
 - In a terminal smaller than the form, a resize hint is shown instead; `Esc`
   and `Ctrl+C` still work.
+
+### Making certificate requests
+
+- In a keystore, `c` makes a PKCS #10 certificate request for the selected
+  private key, signed with that key. On another kind of entry a red message
+  says that only a private key can sign a request. The key must be one that
+  the keystore's password unlocks, in PKCS #8 form, as for an
+  [export](#exporting-private-keys), and its certificate must be readable.
+- A form titled `Certificate request for '<alias>'` opens. It is the form of
+  [Generating key pairs](#generating-key-pairs) without the algorithm and the
+  validity, and works the same way. It starts from the key's certificate: the
+  subject name's fields, and the DNS names, IP addresses, and email addresses
+  among its alternative names. The purpose starts at `None`.
+- While the subject's fields are left as they were, the request holds the
+  certificate's subject exactly, including attributes the form has no field
+  for. Once a field is changed, the subject is made of the form's fields
+  alone, and a common name is required.
+- `Enter` then asks `Save certificate request as:`, suggesting `<alias>.csr`
+  next to the opened file, as the [request export](#exporting) does. A
+  `.der` name writes DER and any other name PEM. `Esc` returns to the form
+  as it was filled in. An existing file is never replaced: a red message
+  asks for another name.
+- The request is version 1 and holds the key's public key. It is signed with
+  the algorithm a [generated key pair](#generating-key-pairs)'s certificate
+  uses for that type of key; an Ed448 key signs with Ed448. When a purpose
+  other than `None` or alternative names are given, the request holds one
+  extension request with the purpose's extensions and then the alternative
+  names; otherwise it has no attributes.
+- A green message names the entry and the file. The keystore is not changed.
 
 ### Copying entries from another keystore
 

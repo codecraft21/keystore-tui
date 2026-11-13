@@ -63,7 +63,7 @@ import and the `RSA PRIVATE KEY` and `EC PRIVATE KEY` ones on export.
 
 ### Tier 3: certificate lifecycle
 
-Done: item 12.
+Done: items 12 and 13.
 
 12. **Generate key pair with a self-signed certificate:** RSA, EC, and Ed25519,
     with a subject name, validity period, and basic extensions (subject

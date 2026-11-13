@@ -1933,7 +1933,9 @@ fn renaming_an_entry_keeps_alias_order_and_is_written_on_save() {
         rendered
             .contains("Keystore: n New | g Generate | i Import | w Save | W Save as | p Password")
     );
-    assert!(rendered.contains("Entry: e Export | r Rename | d Delete | P Key password"));
+    assert!(
+        rendered.contains("Entry: e Export | c Request | r Rename | d Delete | P Key password")
+    );
     press(&mut app, KeyCode::Char('r'));
     assert!(screen(&mut app, 120, 24).contains("New alias for 'root-cert': root-cert_"));
     // Letters are typed into the alias instead of quitting.
@@ -2061,17 +2063,17 @@ fn rename_and_import_need_an_editable_keystore() {
     fs::write(&path, test_support::BUNDLE_PEM).unwrap();
     let mut app = App::default();
     app.open_file(path);
-    for key in ['r', 'i', 'g'] {
+    for key in ['r', 'i', 'g', 'c'] {
         press(&mut app, KeyCode::Char(key));
         assert!(app.alias_prompt.is_none() && app.file_picker.is_none());
-        assert!(app.generating.is_none());
+        assert!(app.generating.is_none() && app.requesting.is_none());
         assert!(red_text(&mut app).contains(NOT_EDITABLE), "{key}");
     }
     let mut app = App::default();
-    for key in ['r', 'i', 'g'] {
+    for key in ['r', 'i', 'g', 'c'] {
         press(&mut app, KeyCode::Char(key));
         assert!(app.message.is_none() && app.file_picker.is_none());
-        assert!(app.generating.is_none());
+        assert!(app.generating.is_none() && app.requesting.is_none());
     }
 }
 
@@ -2466,7 +2468,7 @@ fn exporting_a_private_key_writes_a_new_protected_file() {
     let directory = TestDirectory::new();
     let (mut app, _, key) = keystore_with_keys(&directory, "store.jks");
     let file = |name: &str| directory.path().join(name);
-    assert!(screen(&mut app, 120, 24).contains("Entry: e Export | r Rename"));
+    assert!(screen(&mut app, 120, 24).contains("Entry: e Export | c Request | r Rename"));
     // Only a private key that the keystore's password unlocks is exported.
     press(&mut app, KeyCode::Char('e'));
     assert!(red_text(&mut app).contains("Only private keys are exported with e"));
@@ -2803,7 +2805,7 @@ fn pkcs12_keystores_are_edited_and_saved_like_the_others() {
     app.open_file(path.clone());
     type_password(&mut app, "changeit");
     press(&mut app, KeyCode::Enter);
-    assert!(screen(&mut app, 120, 24).contains("Entry: e Export | r Rename"));
+    assert!(screen(&mut app, 120, 24).contains("Entry: e Export | c Request | r Rename"));
 
     press(&mut app, KeyCode::Char('r'));
     type_alias(&mut app, "Renamed");
@@ -3380,4 +3382,148 @@ fn key_pairs_are_generated_into_pkcs12_keystores_with_a_password() {
     app.document = None;
     assert!(app.finish_generation());
     assert!(red_text(&mut app).contains("No keystore is open."));
+}
+
+#[test]
+fn a_certificate_request_is_made_for_a_private_key() {
+    use crown::x509::csr::CertificationRequest;
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    let stored = fs::read(&path).unwrap();
+
+    // Only a private key that the keystore's password unlocks can sign.
+    press(&mut app, KeyCode::Char('c'));
+    assert!(red_text(&mut app).contains("Only a private key can sign a certificate request."));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char('c'));
+    assert!(red_text(&mut app).contains("No request made: the key 'server-key'"));
+    assert!(app.requesting.is_none());
+
+    fill_key_pair_form(&mut app, "Host.test");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.finish_generation(), "{:?}", app.message);
+    press(&mut app, KeyCode::Char('c'));
+    let rendered = screen(&mut app, 120, 30);
+    assert!(rendered.contains(" Certificate request for 'host.test' "));
+    assert!(rendered.contains("Common name (CN)     Host.test_"));
+    assert!(rendered.contains("Up/Down Tab Field | Left/Right Change | Enter Next"));
+    // Letters are typed into the form, and Esc closes it.
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    press(&mut app, KeyCode::Esc);
+    assert!(app.requesting.is_none());
+
+    // The file name is asked next; Esc goes back to the form.
+    press(&mut app, KeyCode::Char('c'));
+    press(&mut app, KeyCode::Enter);
+    let expected = directory.path().join("host.test.csr");
+    let rendered = screen(&mut app, 200, 30);
+    assert!(rendered.contains(&format!(
+        "Save certificate request as: {}_",
+        expected.display()
+    )));
+    assert!(rendered.contains("A .der name saves DER, any other PEM | Enter Save"));
+    assert!(!rendered.contains(" Certificate request for 'host.test' "));
+    press(&mut app, KeyCode::Esc);
+    assert!(screen(&mut app, 120, 30).contains(" Certificate request for 'host.test' "));
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.message,
+        Some((
+            format!(
+                "Saved a certificate request for 'host.test' to '{}'.",
+                expected.display()
+            ),
+            false
+        ))
+    );
+    assert!(app.requesting.is_none());
+    let text = fs::read_to_string(&expected).unwrap();
+    assert!(text.starts_with("-----BEGIN CERTIFICATE REQUEST-----"));
+    let request = CertificationRequest::from_pem(&text).unwrap();
+    assert_eq!(request.verify_signature(), Ok(true));
+    assert_eq!(request.info().subject.common_name().unwrap(), "Host.test");
+    // The request holds the public key of the entry's certificate.
+    let leaf = &app.entries[app.selected_entry().unwrap()].certificates()[0];
+    assert_eq!(
+        request.info().subject_public_key_info.encode(),
+        crown::x509::cert::Certificate::parse(leaf)
+            .unwrap()
+            .subject_public_key_info()
+            .encode()
+    );
+    // The keystore file is not touched.
+    assert_eq!(fs::read(&path).unwrap(), stored);
+
+    // A .der name writes DER, and an existing file is never replaced.
+    press(&mut app, KeyCode::Char('c'));
+    press(&mut app, KeyCode::Enter);
+    type_alias(&mut app, "request.der");
+    let der = fs::read(directory.path().join("request.der")).unwrap();
+    assert_eq!(
+        CertificationRequest::parse(&der)
+            .unwrap()
+            .verify_signature(),
+        Ok(true)
+    );
+    press(&mut app, KeyCode::Char('c'));
+    press(&mut app, KeyCode::Enter);
+    type_alias(&mut app, "request.der");
+    assert!(red_text(&mut app).contains("already exists; choose another name."));
+    assert!(app.requesting.is_some());
+    // A keystore closed in between has no key to sign with.
+    app.document = None;
+    type_alias(&mut app, "late.csr");
+    assert!(red_text(&mut app).contains("No keystore is open."));
+    assert!(!directory.path().join("late.csr").exists());
+}
+
+#[test]
+fn a_request_needs_a_readable_key_and_certificate() {
+    let directory = TestDirectory::new();
+    let (mut app, _) = editing(&directory);
+    // A key whose certificate is not a certificate.
+    let key = test_support::ed25519_pkcs8(4);
+    app.document
+        .as_mut()
+        .unwrap()
+        .import_key_pair(&mut app.entries, "broken".into(), &key, &[vec![0x30, 0]])
+        .unwrap();
+    app.refresh_visible();
+    press(&mut app, KeyCode::Char('c'));
+    assert!(red_text(&mut app).contains("No request made: the key's certificate cannot be read."));
+
+    // A key that stops being readable after the form is not signed with.
+    let leaf = test_support::ed25519_certificate("late", "late", 6, 6);
+    let to = app
+        .document
+        .as_mut()
+        .unwrap()
+        .import_key_pair(
+            &mut app.entries,
+            "late".into(),
+            &test_support::ed25519_pkcs8(6),
+            &[leaf],
+        )
+        .unwrap();
+    app.refresh_visible();
+    let row = app.visible.iter().position(|&index| index == to).unwrap();
+    app.entries_state.select(Some(row));
+    press(&mut app, KeyCode::Char('c'));
+    assert!(app.requesting.is_some(), "{:?}", app.message);
+    press(&mut app, KeyCode::Enter);
+    // Deleting the two entries before it puts a key that does not open,
+    // 'server-key', at the place the request was started for.
+    assert_eq!(to, 1);
+    let document = app.document.as_mut().unwrap();
+    document.remove(&mut app.entries, 0);
+    document.remove(&mut app.entries, 0);
+    assert_eq!(app.entries[to].alias, "server-key");
+    app.refresh_visible();
+    press(&mut app, KeyCode::Enter);
+    assert!(
+        red_text(&mut app).contains("No request made: the key '"),
+        "{:?}",
+        app.message
+    );
 }
