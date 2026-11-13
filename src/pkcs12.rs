@@ -369,6 +369,7 @@ const ANY_EXTENDED_KEY_USAGE: &[u64] = &[2, 5, 29, 37, 0];
 /// A verified store's bags, for writing it back. Each bag keeps its original
 /// bytes, so encrypted keys are written exactly as they were read and are
 /// never decrypted. Only bags whose alias changes are rebuilt.
+#[derive(Clone)]
 pub struct Writable {
     bags: Vec<MetadataBag>,
     /// Whether each safe, by a bag's `safe` index, is written encrypted.
@@ -575,6 +576,45 @@ impl Writable {
         Ok(self.relist())
     }
 
+    /// Replaces the certificate chain, leaf first, of the private key
+    /// listed at `index` under `alias`, and returns the new listing. The
+    /// key stays encrypted as it is; it and its new certificate are named
+    /// `alias` and share a new local key ID. The old chain's certificates
+    /// that no other entry uses are dropped, as when a key is removed.
+    pub fn set_chain(
+        &mut self,
+        index: usize,
+        alias: &str,
+        chain: &[Vec<u8>],
+    ) -> Result<Vec<KeystoreEntry>, WriteError> {
+        const NOT_REBUILT: WriteError = "the entry could not be rebuilt";
+        let (leaf, issuers) = chain.split_first().ok_or("the chain is empty")?;
+        let key = self.sources[index]
+            .first()
+            .map(|&bag| &self.bags[bag])
+            .filter(|bag| matches!(bag.bag, Bag::ShroudedKey(_)))
+            .ok_or("not a private key entry")?;
+        let id: [u8; 20] = Sha1::digest(leaf).into();
+        let key_id = attribute(oid::OID_PKCS9_LOCAL_KEY_ID, &der::octet_string(&id));
+        let raw = with_friendly_name(&key.raw, alias)
+            .and_then(|raw| with_attribute(&raw, oid::OID_PKCS9_LOCAL_KEY_ID, key_id.clone()))
+            .map_err(|_| NOT_REBUILT)?;
+        let mut rebuilt = parse_metadata_bag(&raw).ok().flatten().ok_or(NOT_REBUILT)?;
+        rebuilt.safe = key.safe;
+        self.remove(index);
+        self.push_certificate(leaf, vec![friendly_name_attribute(alias), key_id])?;
+        for issuer in issuers {
+            let held = self.bags.iter().any(|bag| {
+                bag.certificate_der.as_deref() == Some(issuer) && bag.attributes.is_empty()
+            });
+            if !held {
+                self.push_certificate(issuer, vec![])?;
+            }
+        }
+        self.bags.push(rebuilt);
+        Ok(self.relist())
+    }
+
     /// The PKCS #8 encoding of the private key listed at `index`, decrypted
     /// in memory with the store's password, or `None` if that fails.
     pub fn private_key(&self, index: usize) -> Option<Zeroizing<Vec<u8>>> {
@@ -723,20 +763,30 @@ fn friendly_name_attribute(alias: &str) -> Vec<u8> {
 /// The bag `raw` with `alias` as its only friendly name. The bag's value
 /// and other attributes keep their bytes.
 fn with_friendly_name(raw: &[u8], alias: &str) -> Result<Vec<u8>, CryptoError> {
+    with_attribute(
+        raw,
+        oid::OID_PKCS9_FRIENDLY_NAME,
+        friendly_name_attribute(alias),
+    )
+}
+
+/// The bag `raw` with `attribute` as its only attribute of the type `arcs`.
+/// The bag's value and other attributes keep their bytes.
+fn with_attribute(raw: &[u8], arcs: &[u64], attribute: Vec<u8>) -> Result<Vec<u8>, CryptoError> {
     let mut reader = Reader::new(raw);
     let mut bag = reader.read_sequence()?;
     let id = bag.read_raw_tlv()?;
     let value = bag.read_raw_tlv()?;
-    let mut attributes = vec![friendly_name_attribute(alias)];
+    let mut attributes = vec![attribute];
     if !bag.is_empty() {
         let mut set = bag.read_set()?;
         while !set.is_empty() {
             let attribute = set.read_raw_tlv()?;
-            let is_name = Reader::new(attribute)
+            let replaced = Reader::new(attribute)
                 .read_sequence()?
                 .read_oid()?
-                .matches(oid::OID_PKCS9_FRIENDLY_NAME);
-            if !is_name {
+                .matches(arcs);
+            if !replaced {
                 attributes.push(attribute.to_vec());
             }
         }
@@ -748,6 +798,7 @@ fn with_friendly_name(raw: &[u8], alias: &str) -> Result<Vec<u8>, CryptoError> {
     ))
 }
 
+#[derive(Clone)]
 struct MetadataBag {
     metadata: SafeBag,
     certificate_der: Option<Vec<u8>>,

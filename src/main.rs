@@ -1,4 +1,5 @@
 mod asn1_dump;
+mod ca_reply;
 mod canonical_path;
 mod certificate;
 mod certificate_file;
@@ -138,6 +139,9 @@ struct App {
     /// The alias and the filled-in form of the key pair to generate once
     /// the screen says so.
     generation: Option<(String, Box<generate::Pending>)>,
+    /// The private key, by its index in `entries`, whose CA reply the file
+    /// browser is choosing.
+    reply: Option<usize>,
     /// A certificate request being made for a private key.
     requesting: Option<new_request::NewRequest>,
     /// The result of the last edit or save, and whether it failed. Cleared
@@ -242,11 +246,14 @@ impl App {
                 if !picker.clear_filter() {
                     self.file_picker = None;
                     self.importing = false;
+                    self.reply = None;
                     self.cancel_key_import();
                 }
             } else if let Some(path) = picker.handle_key(key) {
                 self.file_picker = None;
-                if std::mem::take(&mut self.importing) {
+                if let Some(index) = self.reply.take() {
+                    self.import_reply(index, &path);
+                } else if std::mem::take(&mut self.importing) {
                     self.import_file(&path);
                 } else {
                     self.open_file(path);
@@ -294,6 +301,7 @@ impl App {
                 KeyCode::Char('i') if is_text_input(key.modifiers) => self.ask_import(),
                 KeyCode::Char('g') if is_text_input(key.modifiers) => self.ask_generate(),
                 KeyCode::Char('c') if is_text_input(key.modifiers) => self.ask_request(),
+                KeyCode::Char('R') if is_text_input(key.modifiers) => self.ask_reply(),
                 KeyCode::Char('e') if is_text_input(key.modifiers) => self.ask_key_export(),
                 KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
                 KeyCode::Char('W') if is_text_input(key.modifiers) => {
@@ -626,6 +634,7 @@ impl App {
         self.generating = None;
         self.generation = None;
         self.requesting = None;
+        self.reply = None;
         self.message = None;
     }
 
@@ -845,7 +854,10 @@ impl App {
             frame.render_widget(path_bar::line(path), path_area);
         }
         if let Some(picker) = &mut self.file_picker {
-            if self.key_import.is_some() {
+            if let Some(index) = self.reply {
+                let title = format!(" CA reply for '{}' ", self.entries[index].alias);
+                picker.draw_titled(frame, &title);
+            } else if self.key_import.is_some() {
                 picker.draw_titled(frame, " Certificate file of the imported key ");
             } else if self.importing {
                 picker.draw_titled(frame, " Import certificate or key pair from file ");
@@ -972,7 +984,8 @@ impl App {
         } else if self.document.is_some() && self.file_picker.is_none() {
             vec![
                 "Keystore: n New | g Generate | i Import | w Save | W Save as | p Password".into(),
-                "Entry: e Export | c Request | r Rename | d Delete | P Key password".into(),
+                "Entry: e Export | c Request | R CA reply | r Rename | d Delete | P Key password"
+                    .into(),
                 LIST.into(),
             ]
         } else {

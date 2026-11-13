@@ -174,6 +174,23 @@ impl Writable {
         Ok(())
     }
 
+    /// Replaces the certificate chain, leaf first, of the private-key entry
+    /// listed at `index`. Its key, its creation date, and its place in the
+    /// file stay as they were.
+    pub fn set_chain(&mut self, index: usize, chain: &[Vec<u8>]) -> Result<(), Error> {
+        let entry = &self.entries[index].1;
+        let span = protected_key_span(entry).ok_or(Error::Invalid("not a private key entry"))?;
+        let mut rebuilt = entry[..span.end].to_vec();
+        let count = u32::try_from(chain.len())
+            .map_err(|_| Error::Invalid("the chain is too long for a keystore"))?;
+        rebuilt.extend_from_slice(&count.to_be_bytes());
+        for certificate in chain {
+            self.push_certificate(&mut rebuilt, certificate)?;
+        }
+        self.entries[index].1 = rebuilt;
+        Ok(())
+    }
+
     /// Gives the entry listed at `index` another alias and lists it at `to`.
     /// The rest of the entry, and its place in the file, stay as they were.
     pub fn rename(&mut self, index: usize, alias: &str, to: usize) -> Result<(), Error> {

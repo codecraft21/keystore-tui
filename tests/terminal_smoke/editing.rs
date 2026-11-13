@@ -4,8 +4,8 @@ use std::ffi::OsStr;
 use std::fs;
 
 use crate::fixtures::{
-    TempDir, certificate_pem, empty_password_fixture, fixture_certificate, key_keystore,
-    key_pair_pem, triage_keystore, with_empty_password_digest,
+    TempDir, certificate_pem, ed25519_certificate, empty_password_fixture, fixture_certificate,
+    key_keystore, key_pair_pem, triage_keystore, with_empty_password_digest,
 };
 use crate::pty::PtyApp;
 
@@ -80,7 +80,7 @@ fn rename_import_save_and_quit_restores_terminal() {
     )
     .unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "Entry: e Export | c Request | r Rename"]);
+    app.expect(&["root-cert", "Entry: e Export | c Request | R CA reply"]);
     app.send(b"r");
     app.expect(&["New alias for 'root-cert': root-cert_"]);
     app.send(b"\x15q"); // Ctrl+U clears; `q` is typed, not a quit.
@@ -290,7 +290,7 @@ fn import_key_pair_save_and_quit_restores_terminal() {
     fs::write(&path, &original).unwrap();
     fs::write(directory.join("pair.pem"), key_pair_pem()).unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "Entry: e Export | c Request | r Rename"]);
+    app.expect(&["root-cert", "Entry: e Export | c Request | R CA reply"]);
     app.send(b"i");
     app.expect(&["Import certificate or key pair from file", "pair.pem"]);
     app.send(b"pair\r");
@@ -383,6 +383,41 @@ fn make_certificate_request_and_quit_restores_terminal() {
     app.send(b"q");
     app.expect(&["Quit without saving the changes?"]);
     app.send(b"y");
+    app.assert_restored();
+}
+
+/// SPEC: [Importing a CA reply](../../docs/SPEC.md#importing-a-ca-reply),
+/// [Saving](../../docs/SPEC.md#saving),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn import_ca_reply_save_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    fs::write(&path, empty_password_fixture()).unwrap();
+    fs::write(directory.join("pair.pem"), key_pair_pem()).unwrap();
+    // The reply: the key's certificate issued by a CA, then the CA's own.
+    let reply = certificate_pem(&ed25519_certificate("imported", "smoke ca", 7, 9))
+        + &certificate_pem(&ed25519_certificate("smoke ca", "smoke ca", 9, 9));
+    fs::write(directory.join("reply.pem"), reply).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "R CA reply"]);
+    app.send(b"R");
+    app.expect(&["Only a private key takes a CA reply"]);
+    app.send(b"i");
+    app.expect(&["Import certificate or key pair from file", "pair.pem"]);
+    app.send(b"pair\r");
+    app.expect(&["Alias for the imported key pair: imported_"]);
+    app.send(b"\r");
+    app.expect(&["Imported key pair as 'imported'."]);
+    app.send(b"R");
+    app.expect(&["CA reply for 'imported'", "reply.pem"]);
+    app.send(b"reply\r");
+    app.expect(&["Replaced the certificate chain of 'imported' with the 2 certificates"]);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+    let saved = fs::read(&path).unwrap();
+    assert!(saved.windows(8).any(|window| window == b"smoke ca"));
+    app.send(b"q");
     app.assert_restored();
 }
 

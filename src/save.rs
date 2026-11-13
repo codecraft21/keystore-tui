@@ -292,6 +292,66 @@ impl Document {
         }
     }
 
+    /// Replaces the certificate chain of the private key listed at `index`
+    /// with `chain`, leaf first, and returns where the entry is listed. The
+    /// key itself is not touched.
+    pub fn replace_chain(
+        &mut self,
+        entries: &mut Vec<KeystoreEntry>,
+        index: usize,
+        chain: &[Vec<u8>],
+    ) -> Result<usize, String> {
+        let failed = |error: String| format!("Not replaced: {error}.");
+        let leaf = chain
+            .first()
+            .ok_or_else(|| failed("the chain is empty".into()))?;
+        match self {
+            Self::Jks { writable, .. } => {
+                writable
+                    .set_chain(index, chain)
+                    .map_err(|error| failed(error.to_string()))?;
+                let entry = &mut entries[index];
+                entry.certificate = certificate::summarize(leaf);
+                entry.content = Content::Certificates {
+                    kind: Kind::PrivateKey,
+                    certificates: chain.to_vec(),
+                };
+                entry.chain_warning = None;
+                Ok(index)
+            }
+            Self::Pkcs12(writable) => {
+                // As for an imported key pair, a certificate pairs with
+                // one key only.
+                if let Some(held) = entries.iter().enumerate().find(|(other, entry)| {
+                    *other != index
+                        && entry.kind() == Kind::PrivateKey.label()
+                        && entry.certificates().first() == Some(leaf)
+                }) {
+                    return Err(failed(format!(
+                        "the certificate already belongs to the key '{}'",
+                        held.1.alias
+                    )));
+                }
+                let alias = entries[index].alias.clone();
+                // Changed on a copy, which is kept only if it lists the
+                // chain as it was given.
+                let mut changed = writable.clone();
+                let listed = changed
+                    .set_chain(index, &alias, chain)
+                    .map_err(|error| failed(error.to_owned()))?;
+                let to = listed_at(&listed, &alias);
+                if listed.get(to).map(KeystoreEntry::certificates) != Some(chain) {
+                    return Err(failed(
+                        "the keystore would not list this chain again, for example because it holds another certificate with an issuer's name".into(),
+                    ));
+                }
+                *writable = changed;
+                *entries = listed;
+                Ok(to)
+            }
+        }
+    }
+
     /// The keystore file, after checking that it reads back as `entries`.
     fn encode(&self, entries: &[KeystoreEntry]) -> Result<Vec<u8>, String> {
         let (data, read_back) = match self {
