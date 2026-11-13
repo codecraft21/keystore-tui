@@ -1,6 +1,7 @@
 //! Signing with a private-key entry as a certificate authority: the menu
-//! of what to sign, and signing a certificate request from a file into a
-//! new certificate file.
+//! of what to sign, signing a certificate request from a file into a new
+//! certificate file, and signing a certificate revocation list into a new
+//! file.
 use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
@@ -12,6 +13,7 @@ use crate::{
     App, MAX_KEYSTORE_SIZE,
     certificate::{self, signature},
     certificate_file, certificate_form, certificate_request,
+    crl_form::{self, CrlForm},
     export::{self, ExportPrompt, Scope},
     key_import,
     keystore::{Content, Kind},
@@ -33,6 +35,23 @@ pub struct Signing {
     pub naming: Option<(signing::Terms, bool, ExportPrompt)>,
 }
 
+/// A certificate revocation list being signed with the private key at
+/// `signer` of the app's entries.
+pub struct Revoking {
+    signer: usize,
+    pub form: CrlForm,
+    /// What the form asked for and the file name being typed, once the form
+    /// is filled in.
+    pub naming: Option<(signing::Revocations, ExportPrompt)>,
+}
+
+/// The current time, in seconds since the Unix epoch.
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as i64)
+}
+
 /// The single certificate request in the content `data` of the file named
 /// `file`, once its own signature is verified.
 fn verified_request(file: &str, data: &[u8]) -> Result<Vec<u8>, String> {
@@ -42,7 +61,7 @@ fn verified_request(file: &str, data: &[u8]) -> Result<Vec<u8>, String> {
         .into_iter()
         .filter_map(|entry| match entry.content {
             Content::Request(request) => Some(request),
-            Content::Certificates { .. } => None,
+            Content::Certificates { .. } | Content::Crl(_) => None,
         })
         .collect();
     let request = match requests.len() {
@@ -131,7 +150,8 @@ impl App {
     }
 
     /// `r` chooses a certificate request to sign, `g` fills in the form of a
-    /// new key pair to sign, and `Esc` signs nothing.
+    /// new key pair to sign, `l` that of a revocation list, and `Esc` signs
+    /// nothing.
     pub(crate) fn handle_sign_menu(&mut self, key: KeyEvent) {
         let Some(index) = self.sign_menu else {
             return;
@@ -151,8 +171,94 @@ impl App {
                 );
                 self.generating = Some(certificate_form::Form::signed_by(title, index));
             }
+            KeyCode::Char('l') if crate::is_text_input(key.modifiers) => {
+                self.sign_menu = None;
+                let title = format!(
+                    " Revocation list signed by '{}' ",
+                    self.entries[index].alias
+                );
+                self.revoking = Some(Revoking {
+                    signer: index,
+                    form: CrlForm::new(title, now()),
+                    naming: None,
+                });
+            }
             _ => {}
         }
+    }
+
+    /// Fills in the form, then types the revocation list's file name and
+    /// writes it.
+    pub(crate) fn handle_revoking(&mut self, key: KeyEvent) {
+        let Some(revoking) = &mut self.revoking else {
+            return;
+        };
+        let Some((_, prompt)) = &mut revoking.naming else {
+            match revoking.form.handle_key(key) {
+                crl_form::Outcome::Editing => {}
+                crl_form::Outcome::Cancelled => self.revoking = None,
+                crl_form::Outcome::Submitted(list) => {
+                    let directory = self
+                        .keystore_path
+                        .as_deref()
+                        .map(path_bar::directory)
+                        .unwrap_or_default();
+                    let alias = &self.entries[revoking.signer].alias;
+                    let prompt = ExportPrompt::new(Scope::Crl, &directory, alias);
+                    revoking.naming = Some((list, prompt));
+                }
+            }
+            return;
+        };
+        match prompt.handle_key(key) {
+            export::Outcome::Editing => {}
+            // Back to the form, as it was filled in.
+            export::Outcome::Cancelled => revoking.naming = None,
+            export::Outcome::Save(path) => {
+                if let Some(revoking) = self.revoking.take() {
+                    match self.write_revocation_list(&revoking, &path) {
+                        Ok(message) => self.message = Some((message, false)),
+                        Err(error) => {
+                            self.message = Some((error, true));
+                            self.revoking = Some(revoking);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Signs the revocation list and writes it to the new file `path`: DER
+    /// for a `.der` name, PEM otherwise.
+    fn write_revocation_list(&self, revoking: &Revoking, path: &Path) -> Result<String, String> {
+        let (Some(document), Some((list, _))) = (&self.document, &revoking.naming) else {
+            return Err("No keystore is open.".into());
+        };
+        let entry = &self.entries[revoking.signer];
+        let alias = &entry.alias;
+        let key = document
+            .private_key(revoking.signer)
+            .map_err(|error| format!("Nothing signed: the key '{alias}' {error}."))?;
+        let issuer = signing::Issuer {
+            key: &key,
+            certificate: entry
+                .certificates()
+                .first()
+                .ok_or("The signing key has no certificate.")?,
+        };
+        save::OsRng::default().check()?;
+        let mut rng = save::OsRng::default();
+        let signed = signing::revocation_list(list, &issuer, &mut rng)?;
+        rng.check()?;
+        export::save(path, &[signed], Scope::Crl.pem_label())?;
+        Ok(format!(
+            "Signed a revocation list of {} with '{alias}' and saved it to '{}'.",
+            match list.revoked.len() {
+                1 => "1 certificate".into(),
+                count => format!("{count} certificates"),
+            },
+            path.display()
+        ))
     }
 
     /// Opens the form for signing the request in the file at `path` with
@@ -248,11 +354,13 @@ impl App {
         };
         save::OsRng::default().check()?;
         let mut rng = save::OsRng::default();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs() as i64);
-        let certificate =
-            signing::request_certificate(&signing.request, terms.clone(), &issuer, now, &mut rng)?;
+        let certificate = signing::request_certificate(
+            &signing.request,
+            terms.clone(),
+            &issuer,
+            now(),
+            &mut rng,
+        )?;
         rng.check()?;
         let mut items = vec![certificate];
         if *with_chain {

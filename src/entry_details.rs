@@ -1,6 +1,7 @@
 //! Full-screen, read-only entry inspection, independent of the entry table state.
 //! A certificate request entry shows the request in place of a hierarchy.
 mod chain;
+mod crl;
 mod request;
 
 use std::{
@@ -32,6 +33,7 @@ use crate::{
     path_bar,
 };
 use chain::ChainView;
+use crl::CrlView;
 use request::RequestView;
 
 /// An indented section; each extension's title is followed by its decoded values.
@@ -115,6 +117,7 @@ fn hierarchy_row(label: String, weak: bool, signature: Option<Signature>) -> Row
 enum View {
     Chain(ChainView),
     Request(RequestView),
+    Crl(CrlView),
 }
 
 /// What the bottom pane shows. Each key toggles its pane and the details.
@@ -160,13 +163,15 @@ impl EntryDetails {
             Content::Request(der) => {
                 View::Request(RequestView::new(der, entry.certificate.clone()))
             }
+            Content::Crl(der) => View::Crl(CrlView::new(der)),
         };
         let mut details = Self {
             alias: entry.alias.clone(),
             kind: entry.kind(),
             hierarchy: TableState::default(),
-            // A request has no hierarchy to navigate, so its details take the keys.
-            details_focused: matches!(view, View::Request(_)),
+            // A request or a revocation list has no hierarchy to navigate,
+            // so its details take the keys.
+            details_focused: !matches!(view, View::Chain(_)),
             view,
             sha1: false,
             pane: Pane::Details,
@@ -251,6 +256,7 @@ impl EntryDetails {
     fn export_scope(&self, whole_chain: bool) -> Option<Scope> {
         match &self.view {
             View::Request(_) => (!whole_chain).then_some(Scope::Request),
+            View::Crl(_) => (!whole_chain).then_some(Scope::Crl),
             View::Chain(chain) => {
                 self.selected(chain)?;
                 Some(if whole_chain {
@@ -266,6 +272,7 @@ impl EntryDetails {
     fn export_items(&self, scope: Scope) -> Vec<Vec<u8>> {
         match (&self.view, scope) {
             (View::Request(view), _) => vec![view.der.clone()],
+            (View::Crl(view), _) => vec![view.der.clone()],
             (View::Chain(chain), Scope::Chain) => chain.certificates.clone(),
             // Cut out of the certificate as stored; no key is decrypted.
             (View::Chain(chain), Scope::PublicKey) => self
@@ -291,7 +298,7 @@ impl EntryDetails {
     fn rows(&self) -> usize {
         match &self.view {
             View::Chain(chain) => chain.certificates.len(),
-            View::Request(_) => 1,
+            View::Request(_) | View::Crl(_) => 1,
         }
     }
 
@@ -353,6 +360,7 @@ impl EntryDetails {
             (_, Pane::Pem) => self.encoding_text(true),
             (View::Chain(chain), Pane::Diagnostics) => chain.diagnostics(now),
             (View::Request(view), _) => view.text(text, self.sha1),
+            (View::Crl(view), _) => view.text(text, self.sha1),
             (View::Chain(chain), _) => chain.text(text, self.selected(chain), now, self.sha1),
         }
     }
@@ -362,6 +370,7 @@ impl EntryDetails {
     fn encoding(&self) -> Option<(&[u8], &'static str, bool)> {
         match &self.view {
             View::Request(view) => Some((&view.der, Scope::Request.pem_label(), true)),
+            View::Crl(view) => Some((&view.der, Scope::Crl.pem_label(), false)),
             View::Chain(chain) => self.selected(chain).map(|index| {
                 (
                     chain.certificates[index].as_slice(),
@@ -426,6 +435,15 @@ impl EntryDetails {
                     Pane::Details | Pane::Diagnostics => "Request details",
                 },
             ),
+            View::Crl(_) => (
+                "Tab Focus | ↑/↓ j/k Scroll | PgUp/PgDn Home/End Scroll\na ASN.1 | p PEM | f SHA-256/SHA-1 | x Export revocation list | Esc Back | q / Ctrl+C Quit",
+                "Revocation list",
+                match self.pane {
+                    Pane::Asn1 => "Revocation list ASN.1",
+                    Pane::Pem => "Revocation list PEM",
+                    Pane::Details | Pane::Diagnostics => "Revocation list details",
+                },
+            ),
         };
         let minimum = Paragraph::new(shortcuts)
             .wrap(Wrap { trim: false })
@@ -475,6 +493,7 @@ impl EntryDetails {
         let rows = match &self.view {
             View::Chain(chain) => chain.hierarchy_rows(),
             View::Request(view) => vec![view.hierarchy_row()],
+            View::Crl(view) => vec![view.hierarchy_row()],
         };
         if rows.is_empty() {
             frame.render_widget(
@@ -953,6 +972,84 @@ mod tests {
         view.handle_event(press(KeyCode::Char('K')));
         assert!(!view.exporting() && view.message.is_none());
         assert!(!draw(&mut view, 120, 40).contains("K Public key"));
+    }
+
+    #[test]
+    fn revocation_list_entries_show_the_list_and_export_it() {
+        use crate::test_support::{TestDirectory, ed25519_crl};
+        use ratatui::crossterm::event::KeyModifiers;
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let der = ed25519_crl();
+        let file = crate::certificate_file::parse(&der).unwrap();
+        let directory = TestDirectory::new();
+        let mut view = EntryDetails::new(&file.entries[0], &directory.path().join("ca.crl"));
+        // There is no chain to diagnose and no public key to export.
+        view.handle_key(KeyCode::Char('d'));
+        assert_eq!(view.pane, Pane::Details);
+        assert!(view.details_focused);
+        let screen = draw(&mut view, 120, 60);
+        assert!(screen.contains(" Revocation list "));
+        assert!(screen.contains(" Revocation list details [focused] "));
+        assert!(screen.contains("> CN=ca [unchecked]"));
+        assert!(screen.contains("x Export revocation list"));
+        let text = view.text(0).to_string();
+        for expected in [
+            "Alias: ca\nType: Revocation list\n\nVersion: 2\n\nIssuer: CN=ca\n\nThis Update: 2026-01-01 00:00:00 UTC\n\nNext Update: 2026-01-31 00:00:00 UTC\n\nSignature Algorithm: Ed25519\nSignature: not checked (the issuer's certificate is not part of a revocation list).\n\nFingerprint (SHA-256): ",
+            "Extensions:\n  Authority Key Identifier (2.5.29.35)\n",
+            "  CRL Number (2.5.29.20)\n    7\n",
+            "Revoked certificates (2):\n  Serial Number: 0x01A4\n    Revoked: 2026-01-01 00:00:00 UTC\n    Reason Code: keyCompromise\n  Serial Number: 0x0F\n    Revoked: 2026-01-01 00:00:00 UTC\n",
+            "Whether the list is current, and whether its issuer is trusted, is not checked.",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in {text}");
+        }
+        view.handle_key(KeyCode::Char('f'));
+        assert!(view.text(0).to_string().contains("Fingerprint (SHA-1)"));
+        view.handle_key(KeyCode::Char('a'));
+        assert!(draw(&mut view, 120, 60).contains(" Revocation list ASN.1 [focused] "));
+        view.handle_key(KeyCode::Char('p'));
+        let screen = draw(&mut view, 120, 60);
+        assert!(screen.contains(" Revocation list PEM [focused] "));
+        assert!(screen.contains("-----BEGIN X509 CRL-----"));
+
+        for key in ['X', 'K'] {
+            assert!(!view.handle_event(press(KeyCode::Char(key))));
+            assert!(!view.exporting() && view.message.is_none());
+        }
+        view.handle_event(press(KeyCode::Char('x')));
+        let prompt = view.export.as_ref().unwrap();
+        assert_eq!(prompt.scope, Scope::Crl);
+        let path = directory.path().join("ca.crl");
+        assert_eq!(Path::new(&prompt.path), path);
+        view.handle_event(press(KeyCode::Enter));
+        assert!(!view.exporting());
+        let blocks = pem::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(blocks[0].label, "X509 CRL");
+        assert_eq!(blocks[0].data, der);
+
+        // A list that cannot be decoded, and one without revoked
+        // certificates or a next update.
+        let unreadable = KeystoreEntry {
+            content: Content::Crl(b"junk".to_vec()),
+            ..entry(vec![])
+        };
+        let mut view = EntryDetails::new(&unreadable, Path::new(""));
+        assert!(draw(&mut view, 100, 50).contains("Revocation list (unreadable or unnamed)"));
+        let text = view.text(0).to_string();
+        assert!(text.contains("Revocation list could not be decoded.\n\nFingerprint (SHA-256): "));
+        // The same list with its next update and its entries cut out.
+        let list = crown::x509::crl::CertificateList::parse(&der).unwrap();
+        let mut tbs = list.tbs().clone();
+        tbs.next_update = None;
+        tbs.revoked_certificates.clear();
+        let algorithm = tbs.signature.encode();
+        let bare = der::sequence(&[tbs.encode(), algorithm, der::bit_string(0, &[0; 64])].concat());
+        let bare = KeystoreEntry {
+            content: Content::Crl(bare),
+            ..entry(vec![])
+        };
+        let text = EntryDetails::new(&bare, Path::new("")).text(0).to_string();
+        assert!(text.contains("Next Update: None\n"));
+        assert!(text.contains("Revoked certificates (0): None\n"));
     }
 
     #[test]

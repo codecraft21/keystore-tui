@@ -37,6 +37,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Converting a keystore](#converting-a-keystore)
 - [Entry details](#entry-details)
   - [Certificate requests](#certificate-requests)
+  - [Revocation lists](#revocation-lists)
   - [Weak cryptography](#weak-cryptography)
   - [Extensions](#extensions)
   - [Certificate hierarchy](#certificate-hierarchy)
@@ -50,13 +51,16 @@ document and the usage reference, and also the README if its overview changes.
 ## Scope
 
 - The app reads Java KeyStore (JKS), JCEKS, and PKCS12 files, standalone
-  certificate files, and PKCS#10 certificate requests. It changes a keystore
+  certificate files, PKCS#10 certificate requests, and certificate
+  revocation lists. It changes a keystore
   file only when the user saves it; see [Saving](#saving). Certificate files
   and requests are never written or modified.
 - The other files it writes are new exports: certificates and requests (see
   [Exporting](#exporting)), private keys (see [Exporting private
-  keys](#exporting-private-keys)), and new certificate requests (see [Making
-  certificate requests](#making-certificate-requests)).
+  keys](#exporting-private-keys)), new certificate requests (see [Making
+  certificate requests](#making-certificate-requests)), and the certificates
+  and revocation lists a private key signs (see [Signing
+  certificates](#signing-certificates)).
 - It runs without Java or `keytool` installed.
 - Private and secret keys are never displayed. A private key is written
   unencrypted only by an export that the user confirms; see [Exporting
@@ -71,7 +75,9 @@ document and the usage reference, and also the README if its overview changes.
   keystore](#copying-entries-from-another-keystore)), and when a private key
   is exported under a password. A private key is also decrypted in memory to
   sign a certificate request (see [Making certificate
-  requests](#making-certificate-requests)) and to work out its public key
+  requests](#making-certificate-requests)), to sign certificates and
+  revocation lists as a certificate authority (see [Signing
+  certificates](#signing-certificates)), and to work out its public key
   for a certificate authority's reply (see [Importing a CA
   reply](#importing-a-ca-reply)). A new private key is made only in memory, and
   is encrypted with the keystore's password at once; see [Generating key
@@ -123,7 +129,7 @@ any existing incomplete-entry warnings.
   directory.
 - It lists directories, then files whose extension is `.jks`, `.jceks`, `.p12`,
   `.pfx`, `.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`, `.csr`, `.p10`,
-  `.key`, or `.p8` (case-insensitive). The last two are private key files,
+  `.crl`, `.key`, or `.p8` (case-insensitive). The last two are private key files,
   listed for [importing key pairs](#importing-key-pairs). It also lists the Java truststore names `cacerts` and
   `jssecacerts`, case-insensitively. Directories come first.
 - Paths are shown as users type them: on Windows, without the verbatim `\\?\`
@@ -238,6 +244,8 @@ any existing incomplete-entry warnings.
   - PEM blocks labelled `CERTIFICATE REQUEST` or `NEW CERTIFICATE REQUEST`
     (as `keytool -certreq` writes), and a single DER PKCS#10 request, which
     must be one complete DER element
+  - PEM blocks labelled `X509 CRL`, and a single DER certificate revocation
+    list, which must be one complete DER element
 - Text outside PEM blocks is ignored. Other PEM blocks, such as private keys,
   are not decoded; a persistent yellow warning says some were skipped.
 - A malformed PEM block, invalid Base64, or a file without any certificate or
@@ -248,7 +256,11 @@ any existing incomplete-entry warnings.
   keeps that order). The alias is the subject common name, else the whole
   subject, else `Certificate N` or `Certificate request N` for its position in
   the file. Requests are never part of a certificate's chain.
-- A file with exactly one certificate or request opens straight into its
+- Each revocation list is one entry of type `Revocation list`, in file order
+  too. Its alias is the issuer's common name, else the whole issuer name,
+  else `Revocation list N`. It is never part of a chain; see [Revocation
+  lists](#revocation-lists).
+- A file with exactly one certificate, request, or revocation list opens straight into its
   detail screen, whether it is opened from the command line or the file
   browser. `Esc` returns to the entry list, which then shows that one entry.
   A file with several entries opens on the entry list. Keystores always open on
@@ -277,6 +289,7 @@ any existing incomplete-entry warnings.
   in its chain. In PKCS12, that is the certificate that shares the key's local
   key ID.
 - Secret keys and unreadable certificates show `-` in the certificate columns.
+- A revocation list shows `-` in the certificate columns.
 - A certificate request shows its public key's algorithm and size, and `-`
   under Expires. Its Crypto column checks only the key size; see
   [Certificate requests](#certificate-requests).
@@ -608,8 +621,9 @@ any existing incomplete-entry warnings.
   key can sign certificates. The key must be one that the keystore's
   password unlocks, in PKCS #8 form, as for an
   [export](#exporting-private-keys), and its certificate must be readable.
-- `Sign with '<alias>':` is shown above `r Request file | g New key pair |
-  Esc Cancel | Ctrl+C Quit`. `Esc` signs nothing. `r` and `g` act as below;
+- `Sign with '<alias>':` is shown above `r Request file | g New key pair | l
+  Revocation list | Esc Cancel | Ctrl+C Quit`. `Esc` signs nothing. `r`, `g`,
+  and `l` act as below;
   every other key, including `q`, does nothing. `Ctrl+C` still quits.
 - Signing is not refused when the signer's certificate is not a certificate
   authority's, but the first line then ends with a yellow warning: `Warning:
@@ -689,6 +703,49 @@ any existing incomplete-entry warnings.
   The green message ends with `, signed by '<alias>'.`
 - When the signer's key can no longer be read once the alias is accepted, a
   red message says so and no key pair is added.
+
+**Signing a revocation list**
+
+- `l` opens a form titled `Revocation list signed by '<alias>'` over the
+  list, 72 columns by 12 rows, with one text field per row:
+  - `Revoked serials`: optional. Serial numbers in hex, separated by commas,
+    each written as the serial number of a [signed
+    request](#signing-certificates) is. A reason may follow a serial number
+    after `=`, such as `01A4=keyCompromise`: `unspecified`, `keyCompromise`,
+    `cACompromise`, `affiliationChanged`, `superseded`,
+    `cessationOfOperation`, `certificateHold`, `privilegeWithdrawn`, or
+    `aACompromise`, in any letter case. A serial number is listed once.
+  - `This update (UTC)`: starts at the current time, such as `2026-11-13
+    15:40:00`. A time is a date as `YYYY-MM-DD`, alone for midnight or
+    followed by `HH:MM` or `HH:MM:SS`, with or without `UTC` after it, from
+    the year 1950 on.
+  - `Next update (UTC)`: starts 30 days after the current time, and must be
+    later than this update.
+  - `CRL number`: a whole number, starting at `1`.
+- `Up` / `Down` or `Shift+Tab` / `Tab` move between the fields, wrapping at
+  either end. Every character without `Ctrl` or `Alt` is typed, including
+  `q`; `Backspace` deletes a character and `Ctrl+U` clears the field. A text
+  too long for its row shows its end, and a line below the fields says what
+  the field is for. `Esc` closes the form and signs nothing; `Ctrl+C` still
+  quits.
+- `Enter` checks the form. The first field that is wrong is selected and a
+  red message says why; the message clears on the next key.
+- `Enter` then asks `Save revocation list as:`, suggesting `<alias>.crl` next
+  to the opened keystore, as an [export](#exporting) does. A `.der` name
+  writes DER and any other name a PEM `X509 CRL` block. `Esc` returns to the
+  form as it was filled in. An existing file is never replaced: a red
+  message asks for another name.
+- The list is version 2. Its issuer is the signer's subject, and it is
+  signed as the certificates above are, including the check against the
+  signer's certificate. It holds an authority key identifier, as those
+  certificates do, and then the CRL number; neither is critical. Each serial
+  number is revoked at the time of this update, and has a reason code when
+  a reason was given.
+- A green message such as `Signed a revocation list of 2 certificates with
+  '<alias>' and saved it to '<path>'.` reports it. The keystore is not
+  changed.
+- In a terminal smaller than the form, a resize hint is shown instead; `Esc`
+  and `Ctrl+C` still work.
 
 ### Copying entries from another keystore
 
@@ -991,6 +1048,35 @@ any existing incomplete-entry warnings.
 - `a` and `p` show the request's ASN.1 structure and PEM encoding; `d` does
   nothing. See [ASN.1 and PEM views](#asn1-and-pem-views).
 
+### Revocation lists
+
+- A revocation list entry opens in the same full-screen view. The top pane,
+  titled "Revocation list", has one row: the list's issuer (or `Revocation
+  list (unreadable or unnamed)`) followed by `[unchecked]`. The bottom pane,
+  titled "Revocation list details", has focus when the view opens, so `Up` /
+  `Down` scroll it.
+- The details show, in order:
+  - alias and type
+  - version (the stored value plus one, as for certificates; 1 without one)
+  - issuer
+  - "This Update" and "Next Update" in UTC; `None` without a next update
+  - signature algorithm, and a line saying that the signature is not checked,
+    because the issuer's certificate is not part of a revocation list
+  - fingerprint, SHA-256 or SHA-1 as for certificates, over the list's bytes
+  - "Extensions:", decoded as in [Extensions](#extensions)
+  - "Revoked certificates (N):", with for each one its serial number in hex,
+    the time it was revoked, and its entry extensions by name, such as
+    `Reason Code: keyCompromise`; `Revoked certificates (0): None` for an
+    empty list
+  - a closing note that whether the list is current, and whether its issuer
+    is trusted, is not checked.
+- A list that cannot be decoded shows "Revocation list could not be
+  decoded." and its fingerprint.
+- `x` exports the list; `X`, `K`, and `d` do nothing. See
+  [Exporting](#exporting).
+- `a` and `p` show the list's ASN.1 structure and its PEM encoding, an `X509
+  CRL` block. See [ASN.1 and PEM views](#asn1-and-pem-views).
+
 ### Weak cryptography
 
 - A certificate is weak when either:
@@ -1019,6 +1105,8 @@ any existing incomplete-entry warnings.
   | Key Usage | Named usages on one line (Digital Signature, Certificate Sign, ...); unknown bits as `Bit N` |
   | Extended Key Usage | `serverAuth`, `clientAuth`, `codeSigning`, `emailProtection`, `timeStamping`, `OCSPSigning`, `anyExtendedKeyUsage`; others as dotted OIDs |
   | Basic Constraints | CA flag and path length (`unlimited` for a CA without one) |
+  | CRL Number | The number in decimal (in a revocation list) |
+  | Reason Code | The reason's name, such as `keyCompromise`, or `Reason N` for an unknown code (in a revocation list) |
   | Subject / Authority Key Identifier | Key identifiers in hex; the authority's issuer names and serial when present |
   | CRL Distribution Points | Distribution point names (usually URIs) and CRL issuers; reasons and relative names in hex |
   | Authority Information Access | OCSP and CA Issuers locations |
@@ -1081,7 +1169,8 @@ any existing incomplete-entry warnings.
   certificate stored with the entry, leaf first; `K` exports the selected
   certificate's public key. None does anything for an entry without
   certificates. For a certificate request entry, `x` exports the request, and
-  `X` and `K` do nothing.
+  `X` and `K` do nothing. For a revocation list entry, `x` exports the list,
+  suggesting `<alias>.crl`, and `X` and `K` do nothing.
 - The public key is the certificate's SubjectPublicKeyInfo, cut out of the
   certificate byte for byte as stored. No private key is read or decrypted.
   When the certificate cannot be decoded far enough to find it, a red message
@@ -1097,9 +1186,11 @@ any existing incomplete-entry warnings.
   `Ctrl+U` clears the name, `Enter` saves, and `Esc` cancels without leaving the
   detail view. `Ctrl+C` still quits.
 - A relative name is resolved against the open file's directory.
-- A `.der` name (case-insensitive) saves one certificate, the public key, or
+- A `.der` name (case-insensitive) saves one certificate, the public key,
+  the revocation list, or
   the request as raw DER; a chain cannot be saved as DER. Any other name saves
-  PEM `CERTIFICATE` blocks, a `PUBLIC KEY` block for a public key, or a
+  PEM `CERTIFICATE` blocks, a `PUBLIC KEY` block for a public key, an `X509
+  CRL` block for a revocation list, or a
   `CERTIFICATE REQUEST` block for a request, with 64-character
   lines. The DER is written byte for byte as stored.
 - The file must not exist yet; it is never replaced. On success a green message

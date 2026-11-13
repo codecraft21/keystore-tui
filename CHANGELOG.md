@@ -52,6 +52,11 @@ All notable changes to keystore-tui are listed here. Versions follow
   choosing the validity, the serial number, and which requested extensions
   to copy, or `g` to generate a key pair whose certificate that key signs.
   A signer whose certificate is not a CA's gives a warning.
+- Sign a certificate revocation list with `S`, then `l`: type the revoked
+  serial numbers, with a reason if you like, the two update times, and the
+  CRL number. The list is saved to a new `.crl` file.
+- Open certificate revocation lists (`.crl`, PEM or DER) to see their issuer,
+  update times, extensions, and revoked certificates.
 - Export a certificate's public key with `K` in the detail view, as a PEM
   `PUBLIC KEY` file or as DER under a `.der` name. The key comes from the
   certificate, so no private key is read.

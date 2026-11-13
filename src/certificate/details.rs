@@ -135,6 +135,11 @@ pub fn fingerprint(encoding: &[u8], sha1: bool) -> String {
 }
 
 /// INTEGER content is signed two's complement and is not limited to machine integers.
+/// A positive serial number's magnitude in hex, such as `0x01A4`.
+pub fn serial_hex(magnitude: &[u8]) -> String {
+    serial_text(&[&[0], magnitude].concat(), true)
+}
+
 pub(super) fn serial_text(bytes: &[u8], hex: bool) -> String {
     let negative = bytes.first().is_some_and(|byte| byte & 0x80 != 0);
     let mut magnitude = bytes.to_vec();

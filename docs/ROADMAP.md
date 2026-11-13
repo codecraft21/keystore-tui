@@ -76,8 +76,9 @@ Done: all four items.
 
 ### Tier 4: certificate authority and niche features
 
-Done: items 16 and 18. A signed request is saved as PEM or DER; a PKCS #7
-(`.p7b`) reply is not written. Still open: items 17 and 19.
+Done: items 16, 18, and 19. A signed request is saved as PEM or DER; a
+PKCS #7 (`.p7b`) reply is not written. Revocation lists are also opened for
+reading; their signature is not checked. Still open: item 17.
 
 16. **Sign a certificate signing request** with a key-pair entry, and **sign a
     new key pair** with an existing one.

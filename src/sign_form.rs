@@ -290,7 +290,7 @@ impl SignForm {
 /// The bytes of the serial number typed in hex, with or without `0x` and
 /// colons; `None` for an empty one. A serial number is positive and at most
 /// 20 bytes long as encoded.
-fn serial(text: &str) -> Result<Option<Vec<u8>>, &'static str> {
+pub(crate) fn serial(text: &str) -> Result<Option<Vec<u8>>, &'static str> {
     const WRONG: &str = "The serial number is 1 to 20 bytes in hex, such as 01:A4, and not zero.";
     let text = text.trim();
     if text.is_empty() {

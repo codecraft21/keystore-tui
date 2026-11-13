@@ -1,7 +1,8 @@
 //! Building certificates and certificate requests signed with a PKCS #8
 //! private key: the subject name, the extensions of a purpose, a
 //! self-signed certificate, a certificate issued by another key for a new
-//! key or for a certificate request, and a PKCS #10 request.
+//! key or for a certificate request, a certificate revocation list, and a
+//! PKCS #10 request.
 use std::net::IpAddr;
 
 use crown::{
@@ -15,10 +16,11 @@ use crown::{
         algorithm::{Hash, SignatureAlgorithm},
         attribute::Attribute,
         cert::{Certificate, CertificateBuilder},
+        crl::{CertificateList, RevokedCertificate},
         csr::CertificationRequest,
         extensions::{
-            AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage, Extension, GeneralName,
-            KeyUsage, encode_general_names,
+            AuthorityKeyIdentifier, BasicConstraints, CrlNumber, CrlReason, ExtendedKeyUsage,
+            Extension, GeneralName, KeyUsage, encode_general_names,
         },
         keys::{PrivateKey, PrivateKeyInfo, SubjectPublicKeyInfo},
         name::{AttributeTypeAndValue, Name, Rdn},
@@ -280,6 +282,96 @@ fn public_key(key: &PrivateKey) -> Result<SubjectPublicKeyInfo, String> {
         .map_err(|_| UNSUPPORTED_KEY.into())
 }
 
+/// An issuer's decoded key and certificate, and the authority key
+/// identifier extension of what it signs.
+fn issuing(issuer: &Issuer) -> Result<(PrivateKey, Certificate, Extension), String> {
+    let key = decode(issuer.key)?;
+    let certificate = Certificate::parse(issuer.certificate)
+        .map_err(|_| "The signing key's certificate cannot be read.")?;
+    // The issuer's own identifier when it has one, as verifiers compare the
+    // two; else the usual digest of its public key.
+    let identifier = certificate
+        .tbs()
+        .subject_key_identifier()
+        .map_or_else(
+            || certificate.subject_public_key_info().key_identifier(),
+            Ok,
+        )
+        .map_err(|_| UNSUPPORTED_KEY)?;
+    let authority = Extension::new(
+        object(oid::OID_AUTHORITY_KEY_IDENTIFIER),
+        false,
+        AuthorityKeyIdentifier {
+            key_identifier: Some(identifier),
+            authority_cert_issuer: None,
+            authority_cert_serial: None,
+        }
+        .encode(),
+    );
+    Ok((key, certificate, authority))
+}
+
+const KEY_MISMATCH: &str = "The signing key does not match its certificate.";
+
+/// A revoked serial number, with its reason if it has one.
+pub type Revoked = (Vec<u8>, Option<CrlReason>);
+
+/// What a certificate revocation list holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Revocations {
+    pub this_update: Asn1Time,
+    pub next_update: Asn1Time,
+    /// The list's number, which counts up from one list to the next.
+    pub number: u64,
+    /// The revoked serial numbers, each with its reason if it has one.
+    /// Each is revoked at the time of this update.
+    pub revoked: Vec<Revoked>,
+}
+
+/// The DER of a version 2 certificate revocation list holding `list`,
+/// signed by `issuer`.
+pub fn revocation_list(
+    list: &Revocations,
+    issuer: &Issuer,
+    rng: &mut impl Rng,
+) -> Result<Vec<u8>, String> {
+    let (key, certificate, authority) = issuing(issuer)?;
+    let number = Extension::new(
+        object(oid::OID_CRL_NUMBER),
+        false,
+        CrlNumber {
+            number: list.number.to_be_bytes().to_vec(),
+        }
+        .encode(),
+    );
+    let revoked = list
+        .revoked
+        .iter()
+        .map(|(serial, reason)| {
+            let entry = RevokedCertificate::new(serial.clone(), list.this_update);
+            match reason {
+                Some(reason) => entry.reason(*reason),
+                None => entry,
+            }
+        })
+        .collect();
+    let signed = CertificateList::build(
+        certificate.subject().clone(),
+        list.this_update,
+        Some(list.next_update),
+        revoked,
+        vec![authority, number],
+        signature_algorithm(&key)?,
+        &key,
+        rng,
+    )
+    .map_err(|error| format!("The revocation list could not be signed: {error}."))?;
+    if signed.verify_signature(certificate.public_key()) != Ok(true) {
+        return Err(KEY_MISMATCH.into());
+    }
+    Ok(signed.encode())
+}
+
 /// What a certificate holds, whoever signs it.
 struct Content {
     subject: Name,
@@ -311,29 +403,8 @@ fn certificate(
     )];
     let issuing = match issuer {
         Some(issuer) => {
-            let key = decode(issuer.key)?;
-            let certificate = Certificate::parse(issuer.certificate)
-                .map_err(|_| "The signing key's certificate cannot be read.")?;
-            // The issuer's own identifier when it has one, as verifiers
-            // compare the two; else the usual digest of its public key.
-            let authority = certificate
-                .tbs()
-                .subject_key_identifier()
-                .map_or_else(
-                    || certificate.subject_public_key_info().key_identifier(),
-                    Ok,
-                )
-                .map_err(|_| UNSUPPORTED_KEY)?;
-            extensions.push(Extension::new(
-                object(oid::OID_AUTHORITY_KEY_IDENTIFIER),
-                false,
-                AuthorityKeyIdentifier {
-                    key_identifier: Some(authority),
-                    authority_cert_issuer: None,
-                    authority_cert_serial: None,
-                }
-                .encode(),
-            ));
+            let (key, certificate, authority) = issuing(issuer)?;
+            extensions.push(authority);
             Some((key, certificate))
         }
         None => None,
@@ -364,7 +435,7 @@ fn certificate(
     if let Some((_, certificate)) = &issuing
         && signed.verify_signature(certificate.public_key()) != Ok(true)
     {
-        return Err("The signing key does not match its certificate.".into());
+        return Err(KEY_MISMATCH.into());
     }
     Ok(signed.encode())
 }
@@ -764,6 +835,78 @@ mod tests {
         assert_eq!(
             request_certificate(&[0x30, 0], terms, &issuer, NOW, &mut TestRng(0)),
             Err("The certificate request cannot be read.".into())
+        );
+    }
+
+    #[test]
+    fn a_revocation_list_names_and_verifies_with_its_issuer() {
+        let (key, certificate) = authority();
+        let issuer = Issuer {
+            key: &key,
+            certificate: &certificate,
+        };
+        let list = Revocations {
+            this_update: Asn1Time::from_unix(NOW, true),
+            next_update: Asn1Time::from_unix(NOW + 86_400, true),
+            number: 258,
+            revoked: vec![
+                (vec![1, 0xa4], Some(CrlReason::Superseded)),
+                (vec![0xff], None),
+            ],
+        };
+        let der = revocation_list(&list, &issuer, &mut TestRng(0)).unwrap();
+        let parsed = CertificateList::parse(&der).unwrap();
+        let ca = Certificate::parse(&certificate).unwrap();
+        assert_eq!(parsed.verify_signature(ca.public_key()), Ok(true));
+        let tbs = parsed.tbs();
+        // Version 2, as a list with extensions is.
+        assert_eq!(tbs.version, Some(1));
+        assert_eq!(tbs.issuer.encode(), ca.subject().encode());
+        assert_eq!(tbs.this_update.to_unix(), NOW);
+        assert_eq!(tbs.next_update.unwrap().to_unix(), NOW + 86_400);
+        let order: Vec<_> = tbs
+            .extensions
+            .iter()
+            .map(|extension| (extension.oid.to_dotted_string(), extension.critical))
+            .collect();
+        assert_eq!(
+            order,
+            [("2.5.29.35".into(), false), ("2.5.29.20".into(), false)]
+        );
+        assert_eq!(
+            AuthorityKeyIdentifier::parse(&tbs.extensions[0].value)
+                .unwrap()
+                .key_identifier,
+            ca.tbs().subject_key_identifier()
+        );
+        assert_eq!(
+            CrlNumber::parse(&tbs.extensions[1].value).unwrap().to_u64(),
+            Some(258)
+        );
+        let revoked = &tbs.revoked_certificates;
+        assert_eq!(revoked.len(), 2);
+        assert_eq!(revoked[0].serial_number, [1, 0xa4]);
+        assert_eq!(revoked[0].revocation_date, list.this_update);
+        assert_eq!(revoked[0].extensions.len(), 1);
+        assert_eq!(revoked[1].serial_number, [0xff]);
+        assert!(revoked[1].extensions.is_empty());
+        assert!(parsed.is_revoked(&[0xff]).is_some());
+
+        // A key that is not the certificate's, and a key that cannot sign.
+        let sign = |key: &[u8], certificate: &[u8]| {
+            revocation_list(&list, &Issuer { key, certificate }, &mut TestRng(0))
+        };
+        assert_eq!(
+            sign(&ed25519_pkcs8(8), &certificate),
+            Err(KEY_MISMATCH.into())
+        );
+        assert_eq!(
+            sign(&key, &[0x30, 0]),
+            Err("The signing key's certificate cannot be read.".into())
+        );
+        assert_eq!(
+            sign(&synthetic_pkcs8(&[1]), &certificate),
+            Err(UNSUPPORTED_KEY.into())
         );
     }
 

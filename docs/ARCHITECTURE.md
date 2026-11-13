@@ -7,8 +7,9 @@ Module responsibilities and dependencies for keystore-tui. See
 | --- | --- |
 | `src/startup.rs` | Command-line arguments (`--version`, `--help`), startup loading, and hidden terminal password input |
 | `src/main.rs` | App state, event loop, main view rendering, password prompt, deleting entries and confirmation questions, file loading (size limit, format detection), terminal setup and restoration |
-| `src/certificate_file.rs` | PEM, DER, and PKCS#7 certificate files (including requests), and chain linking within a file |
+| `src/certificate_file.rs` | PEM, DER, and PKCS#7 certificate files (including requests and revocation lists), and chain linking within a file |
 | `src/chain_edit.rs` | Editing a private key's chain: the append-or-remove question, checking that a certificate issued the chain's last one, and replacing the chain |
+| `src/revocation_list.rs` | Certificate revocation lists, read for display: issuer, update times, extensions, and revoked certificates |
 | `src/certificate_request.rs` | PKCS#10 certificate requests: fields, requested extensions, and attributes |
 | `src/file_picker.rs` | The keystore file browser |
 | `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |
@@ -18,8 +19,9 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/certificate_form.rs` | The form asking what a new key pair's certificate or a certificate request holds, its checks, and the private key that signs a new key pair, if any |
 | `src/ca_reply.rs` | Importing a CA reply: building the issued chain from the reply file and the keystore's certificates, and replacing a private key's chain with it |
 | `src/new_request.rs` | Making a certificate request for a private key: starting the form from its certificate, the file name prompt, and writing the request |
-| `src/signing.rs` | Certificates and requests signed with a PKCS #8 key: the subject name, the extensions of a purpose, alternative names, the signature algorithm of a key type, a self-signed certificate, a certificate issued by another key for a new key or for a request, the warning for a signer that is not a CA, and a PKCS #10 request |
-| `src/sign.rs` | Signing with a private key as a certificate authority: the menu of what to sign, reading and verifying a request file, and writing its certificate to a new file |
+| `src/signing.rs` | Certificates and requests signed with a PKCS #8 key: the subject name, the extensions of a purpose, alternative names, the signature algorithm of a key type, a self-signed certificate, a certificate issued by another key for a new key or for a request, a revocation list, the warning for a signer that is not a CA, and a PKCS #10 request |
+| `src/sign.rs` | Signing with a private key as a certificate authority: the menu of what to sign, reading and verifying a request file and writing its certificate to a new file, and writing a signed revocation list to a new file |
+| `src/crl_form.rs` | The form asking what a revocation list holds: revoked serial numbers with reasons, update times, and the CRL number |
 | `src/sign_form.rs` | The form asking how a request is signed: validity, serial number, what the file holds, and which requested extensions are copied |
 | `src/key_export.rs` | Exporting a private key, alone or with its certificates, to a new PKCS12, PEM, or DER file, and its name prompt |
 | `src/key_import.rs` | Importing a key pair: finding the private key in a PEM or PKCS #8 file, or a keystore to copy from, the file's password prompt, and matching a key to its certificate chain |
@@ -40,8 +42,9 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/entry_details.rs` | The full-screen detail view: layout, keys, the bottom pane (details, diagnostics, ASN.1, PEM), export, and shared detail formatting |
 | `src/entry_details/chain.rs` | A stored chain's hierarchy and certificate details |
 | `src/entry_details/request.rs` | A certificate request's details, shown in place of a hierarchy |
+| `src/entry_details/crl.rs` | A revocation list's details, shown in place of a hierarchy |
 | `src/asn1_dump.rs` | The ASN.1 structure dump of a certificate or request, hiding challenge passwords |
-| `src/export.rs` | The export name prompt and writing PEM/DER certificate, public key, and request files |
+| `src/export.rs` | The export name prompt and writing PEM/DER certificate, public key, request, and revocation list files |
 | `src/test_support.rs`, `src/tests.rs` | Unit-test helpers, synthetic keystores, and tests |
 | `tests/terminal_smoke/` | Unix PTY smoke tests against the built binary: the harness (`pty.rs`, `screen.rs`, `fixtures.rs`), tests grouped by SPEC section, each linking the sections it checks, and the link check (`spec.rs`) |
 | `tests/fixtures/` | Generated keystore fixtures; see its `README.md` for how they were made |
@@ -58,7 +61,7 @@ Dependencies are deliberately few:
 - `sha1` for the JKS and JCEKS integrity digest and the JKS key protector.
 - `crown` for ASN.1, PEM, X.509, PKCS#7, PKCS12 (MAC and PBE), signature
   verification (certificates and requests), key generation, and signing
-  certificates and requests. It generates RSA keys without giving out their private parts,
+  certificates, requests, and revocation lists. It generates RSA keys without giving out their private parts,
   so `generate.rs` works them out again from the modulus and the random
   candidates the generator drew.
 - `zeroize` for wiping passwords, including the one kept for saving.

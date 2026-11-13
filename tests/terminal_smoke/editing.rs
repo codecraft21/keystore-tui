@@ -585,3 +585,49 @@ fn sign_request_and_key_pair_then_quit_restores_terminal() {
     app.send(b"q");
     app.assert_restored();
 }
+
+/// SPEC: [Signing certificates](../../docs/SPEC.md#signing-certificates),
+/// [Revocation lists](../../docs/SPEC.md#revocation-lists),
+/// [Certificate files](../../docs/SPEC.md#certificate-files),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn sign_revocation_list_read_it_back_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    fs::write(&path, empty_password_fixture()).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "C Chain | S Sign | r Rename"]);
+    // A certificate authority, as in the test above.
+    app.send(b"g\x1b[A\x1b[C\x1b[C\x1b[C\x1b[C\x1b[B\x1b[Bsmoke ca\r");
+    app.expect(&["Alias for the generated key pair: smoke ca_"]);
+    app.send(b"\x15ca\r");
+    app.expect(&["Generated EC P-256 key pair 'ca'."]);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+
+    app.send(b"S");
+    app.expect(&["Sign with 'ca':", "l Revocation list"]);
+    app.send(b"l");
+    app.expect(&["Revocation list signed by 'ca'", "CRL number           1"]);
+    // `q` is typed, and is no serial number.
+    app.send(b"q\r");
+    app.expect(&["'q' is not a serial number"]);
+    app.send(b"\x7f01a4=keyCompromise\r");
+    app.expect(&["Save revocation list as:"]);
+    app.send(b"\x15q.crl\r"); // Ctrl+U clears the suggested absolute path.
+    app.expect(&["Signed a revocation list of 1 certificate with 'ca'"]);
+    let saved = fs::read_to_string(directory.join("q.crl")).unwrap();
+    assert!(saved.starts_with("-----BEGIN X509 CRL-----\n"));
+
+    // The new file opens into its details.
+    app.send(b"oq.crl\r");
+    app.expect(&[
+        "Revocation list details",
+        "Issuer: CN=smoke ca",
+        "x Export revocation list",
+    ]);
+    app.send(b"\x1b[F"); // End scrolls to the revoked certificates.
+    app.expect(&["Serial Number: 0x01A4", "Reason Code: keyCompromise"]);
+    app.send(b"q");
+    app.assert_restored();
+}
