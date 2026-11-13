@@ -5,6 +5,7 @@ mod certificate;
 mod certificate_file;
 mod certificate_form;
 mod certificate_request;
+mod chain_edit;
 mod copy_entries;
 mod editing;
 mod entry_details;
@@ -139,6 +140,11 @@ struct App {
     /// The alias and the filled-in form of the key pair to generate once
     /// the screen says so.
     generation: Option<(String, Box<generate::Pending>)>,
+    /// The private key, by its index in `entries`, whose chain is asked
+    /// about, and the one the file browser chooses a certificate to append
+    /// for.
+    chain_menu: Option<usize>,
+    appending: Option<usize>,
     /// The private key, by its index in `entries`, whose CA reply the file
     /// browser is choosing.
     reply: Option<usize>,
@@ -247,12 +253,15 @@ impl App {
                     self.file_picker = None;
                     self.importing = false;
                     self.reply = None;
+                    self.appending = None;
                     self.cancel_key_import();
                 }
             } else if let Some(path) = picker.handle_key(key) {
                 self.file_picker = None;
                 if let Some(index) = self.reply.take() {
                     self.import_reply(index, &path);
+                } else if let Some(index) = self.appending.take() {
+                    self.append_to_chain(index, &path);
                 } else if std::mem::take(&mut self.importing) {
                     self.import_file(&path);
                 } else {
@@ -271,6 +280,8 @@ impl App {
             self.handle_import_password(key);
         } else if self.alias_prompt.is_some() {
             self.handle_alias(key);
+        } else if self.chain_menu.is_some() {
+            self.handle_chain(key);
         } else if self.generating.is_some() {
             self.handle_generate(key);
         } else if self.requesting.is_some() {
@@ -302,6 +313,7 @@ impl App {
                 KeyCode::Char('g') if is_text_input(key.modifiers) => self.ask_generate(),
                 KeyCode::Char('c') if is_text_input(key.modifiers) => self.ask_request(),
                 KeyCode::Char('R') if is_text_input(key.modifiers) => self.ask_reply(),
+                KeyCode::Char('C') if is_text_input(key.modifiers) => self.ask_chain(),
                 KeyCode::Char('e') if is_text_input(key.modifiers) => self.ask_key_export(),
                 KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
                 KeyCode::Char('W') if is_text_input(key.modifiers) => {
@@ -463,6 +475,7 @@ impl App {
             || self.key_export.is_some()
             || self.copying.is_some()
             || self.generating.is_some()
+            || self.chain_menu.is_some()
             || self.requesting.is_some()
             || self
                 .entry_details
@@ -635,6 +648,8 @@ impl App {
         self.generation = None;
         self.requesting = None;
         self.reply = None;
+        self.chain_menu = None;
+        self.appending = None;
         self.message = None;
     }
 
@@ -857,6 +872,10 @@ impl App {
             if let Some(index) = self.reply {
                 let title = format!(" CA reply for '{}' ", self.entries[index].alias);
                 picker.draw_titled(frame, &title);
+            } else if let Some(index) = self.appending {
+                let alias = &self.entries[index].alias;
+                let title = format!(" Certificate to append to the chain of '{alias}' ");
+                picker.draw_titled(frame, &title);
             } else if self.key_import.is_some() {
                 picker.draw_titled(frame, " Certificate file of the imported key ");
             } else if self.importing {
@@ -975,6 +994,19 @@ impl App {
                 ]),
                 "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Back | Ctrl+C Quit".into(),
             ]
+        } else if let Some(index) = self.chain_menu {
+            let entry = &self.entries[index];
+            let chain = match entry.certificates().len() {
+                1 => "1 certificate".into(),
+                count => format!("{count} certificates"),
+            };
+            vec![
+                Line::from(vec![
+                    format!("Chain of '{}': ", entry.alias).bold(),
+                    chain.into(),
+                ]),
+                "a Append from file | x Remove last | Esc Cancel | Ctrl+C Quit".into(),
+            ]
         } else if self.generating.is_some() || self.requesting.is_some() {
             vec![
                 "Up/Down Tab Field | Left/Right Change | Enter Next | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
@@ -984,7 +1016,7 @@ impl App {
         } else if self.document.is_some() && self.file_picker.is_none() {
             vec![
                 "Keystore: n New | g Generate | i Import | w Save | W Save as | p Password".into(),
-                "Entry: e Export | c Request | R CA reply | r Rename | d Delete | P Key password"
+                "Entry: e Export | c Request | R CA reply | C Chain | r Rename | d Delete | P Key password"
                     .into(),
                 LIST.into(),
             ]

@@ -421,6 +421,54 @@ fn import_ca_reply_save_and_quit_restores_terminal() {
     app.assert_restored();
 }
 
+/// SPEC: [Editing a certificate chain](../../docs/SPEC.md#editing-a-certificate-chain),
+/// [Importing a CA reply](../../docs/SPEC.md#importing-a-ca-reply),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn edit_chain_save_and_ctrl_c_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    fs::write(&path, empty_password_fixture()).unwrap();
+    fs::write(directory.join("pair.pem"), key_pair_pem()).unwrap();
+    let ca = certificate_pem(&ed25519_certificate("smoke ca", "smoke ca", 9, 9));
+    let reply = certificate_pem(&ed25519_certificate("imported", "smoke ca", 7, 9));
+    fs::write(directory.join("ca.pem"), &ca).unwrap();
+    fs::write(directory.join("reply.pem"), reply + &ca).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "C Chain"]);
+    app.send(b"C");
+    app.expect(&["Only a private key has a certificate chain to edit."]);
+    app.send(b"ipair\r");
+    app.expect(&["Alias for the imported key pair: imported_"]);
+    app.send(b"\r");
+    app.expect(&["Imported key pair as 'imported'."]);
+    app.send(b"Rreply\r");
+    app.expect(&["Replaced the certificate chain of 'imported' with the 2 certificates"]);
+    app.send(b"C");
+    app.expect(&["Chain of 'imported': 2 certificates", "x Remove last"]);
+    // `q` does nothing here.
+    app.send(b"q");
+    assert_eq!(app.exited(), None);
+    app.send(b"x");
+    app.expect(&["Removed 'smoke ca' from the chain of 'imported'."]);
+    app.send(b"C");
+    app.expect(&["Chain of 'imported': 1 certificate"]);
+    app.send(b"a");
+    app.expect(&["Certificate to append to the chain of 'imported'", "ca.pem"]);
+    app.send(b"ca\r");
+    app.expect(&["Appended 'smoke ca' to the chain of 'imported'."]);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+    assert!(
+        fs::read(&path)
+            .unwrap()
+            .windows(8)
+            .any(|window| window == b"smoke ca")
+    );
+    app.send(b"\x03");
+    app.assert_restored();
+}
+
 /// SPEC: [Exporting private keys](../../docs/SPEC.md#exporting-private-keys),
 /// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
 #[test]

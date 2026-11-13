@@ -173,7 +173,7 @@ impl App {
 
 /// The DER of the single certificate in the content `data` of the file at
 /// `path`.
-fn read_certificate(path: &Path, data: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn read_certificate(path: &Path, data: &[u8]) -> Result<Vec<u8>, String> {
     let file = certificate_file::parse(data)
         .map_err(|error| format!("{} is not a certificate file: {error}", path.display()))?;
     let mut certificates: Vec<_> = file

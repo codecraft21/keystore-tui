@@ -8,6 +8,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/startup.rs` | Command-line arguments (`--version`, `--help`), startup loading, and hidden terminal password input |
 | `src/main.rs` | App state, event loop, main view rendering, password prompt, deleting entries and confirmation questions, file loading (size limit, format detection), terminal setup and restoration |
 | `src/certificate_file.rs` | PEM, DER, and PKCS#7 certificate files (including requests), and chain linking within a file |
+| `src/chain_edit.rs` | Editing a private key's chain: the append-or-remove question, checking that a certificate issued the chain's last one, and replacing the chain |
 | `src/certificate_request.rs` | PKCS#10 certificate requests: fields, requested extensions, and attributes |
 | `src/file_picker.rs` | The keystore file browser |
 | `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |

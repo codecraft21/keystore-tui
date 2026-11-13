@@ -122,6 +122,7 @@ certificates whose names match another certificate or key.
 | `e` | Export the selected private key, alone or with its certificates |
 | `c` | Make a certificate request (CSR) for the selected private key |
 | `R` | Import a CA reply: replace the selected private key's certificate chain with the issued one |
+| `C` | Edit the selected private key's certificate chain: append an issuer from a file, or remove the last certificate |
 | `r` | Rename the selected entry |
 | `d` / `Delete` | Delete the selected entry |
 | `w` | Save the changes to the opened file |
@@ -170,6 +171,13 @@ next to the app name, but nothing changes on disk until you save.
   completed from the file's other certificates and, where they end, from
   certificates already in the keystore, so import the authority's
   certificates first (`i`) if the reply holds only your own.
+- **Edit a certificate chain:** press `C` on a private key, then `a` to
+  append the issuer of the chain's last certificate from a file holding that
+  one certificate, or `x` to remove the last certificate. The key's own
+  certificate always stays. Use it to complete or shorten a chain that the
+  details' chain diagnostics complain about. In PKCS12, a certificate the
+  keystore also holds as a trusted certificate cannot be removed from a
+  chain.
 - **Import a trusted certificate:** press `i`, choose a file holding one
   certificate (PEM, DER, or PKCS#7) in the browser, then confirm or edit the
   suggested alias and press `Enter`.
