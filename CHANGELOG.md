@@ -47,6 +47,11 @@ All notable changes to keystore-tui are listed here. Versions follow
   replace the key's certificate chain.
 - Edit a private key's certificate chain with `C`: append the issuer of its
   last certificate from a file, or remove the last certificate.
+- Sign with a private key as a certificate authority: press `S`, then `r` to
+  sign a certificate request from a file into a new certificate file,
+  choosing the validity, the serial number, and which requested extensions
+  to copy, or `g` to generate a key pair whose certificate that key signs.
+  A signer whose certificate is not a CA's gives a warning.
 - Export a certificate's public key with `K` in the detail view, as a PEM
   `PUBLIC KEY` file or as DER under a `.der` name. The key comes from the
   certificate, so no private key is read.

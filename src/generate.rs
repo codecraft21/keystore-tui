@@ -1,6 +1,6 @@
-//! Generating a key pair with a self-signed certificate: the key
-//! algorithms, and adding the result to the open keystore once its form is
-//! filled in.
+//! Generating a key pair with a certificate, self-signed or signed by
+//! another private key of the keystore: the key algorithms, and adding the
+//! result to the open keystore once its form is filled in.
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crown::{
@@ -237,8 +237,13 @@ impl App {
             return false;
         };
         let algorithm = pending.algorithm;
-        let message = format!("Generated {} key pair '{alias}'.", algorithm.label());
-        match self.generate(alias, algorithm, &pending.request) {
+        let signer = pending.form.signer();
+        let mut message = format!("Generated {} key pair '{alias}'", algorithm.label());
+        if let Some(signer) = signer.and_then(|index| self.entries.get(index)) {
+            message.push_str(&format!(", signed by '{}'", signer.alias));
+        }
+        message.push('.');
+        match self.generate(alias, algorithm, &pending.request, signer) {
             Ok(to) => {
                 self.modified = true;
                 self.message = Some((message, false));
@@ -249,15 +254,34 @@ impl App {
         true
     }
 
-    /// Adds a new key pair with its self-signed certificate under `alias`,
-    /// and returns where it is listed.
+    /// Adds a new key pair under `alias` and returns where it is listed.
+    /// Its certificate is self-signed, or signed by the private key at
+    /// `signer`, whose chain then follows it.
     fn generate(
         &mut self,
         alias: String,
         algorithm: Algorithm,
         request: &signing::Request,
+        signer: Option<usize>,
     ) -> Result<usize, String> {
         let document = self.document.as_mut().ok_or("No keystore is open.")?;
+        let signer = match signer {
+            Some(index) => {
+                let entry = self.entries.get(index).ok_or("The signing key is gone.")?;
+                let key = document.private_key(index).map_err(|error| {
+                    format!("Nothing signed: the key '{}' {error}.", entry.alias)
+                })?;
+                Some((key, entry.certificates().to_vec()))
+            }
+            None => None,
+        };
+        let issuer = match &signer {
+            Some((key, chain)) => Some(signing::Issuer {
+                key,
+                certificate: chain.first().ok_or("The signing key has no certificate.")?,
+            }),
+            None => None,
+        };
         // Without random numbers the search for primes would never end.
         OsRng::default().check()?;
         let mut rng = OsRng::default();
@@ -265,9 +289,11 @@ impl App {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs() as i64);
-        let certificate = signing::self_signed(&key, request, now, &mut rng)?;
+        let certificate = signing::key_certificate(&key, request, issuer.as_ref(), now, &mut rng)?;
         rng.check()?;
-        document.import_key_pair(&mut self.entries, alias, &key, &[certificate])
+        let mut chain = vec![certificate];
+        chain.extend(signer.map(|(_, chain)| chain).unwrap_or_default());
+        document.import_key_pair(&mut self.entries, alias, &key, &chain)
     }
 }
 

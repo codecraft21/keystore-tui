@@ -14,11 +14,13 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |
 | `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
 | `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate or a key pair under the typed alias |
-| `src/generate.rs` | Generating a key pair: the RSA, EC, and Ed25519 keys as PKCS #8, and adding the result with its certificate under the typed alias |
-| `src/certificate_form.rs` | The form asking what a new key pair's certificate or a certificate request holds, and its checks |
+| `src/generate.rs` | Generating a key pair: the RSA, EC, and Ed25519 keys as PKCS #8, and adding the result with its certificate, self-signed or signed by another private key, under the typed alias |
+| `src/certificate_form.rs` | The form asking what a new key pair's certificate or a certificate request holds, its checks, and the private key that signs a new key pair, if any |
 | `src/ca_reply.rs` | Importing a CA reply: building the issued chain from the reply file and the keystore's certificates, and replacing a private key's chain with it |
 | `src/new_request.rs` | Making a certificate request for a private key: starting the form from its certificate, the file name prompt, and writing the request |
-| `src/signing.rs` | Certificates and requests signed with a PKCS #8 key: the subject name, the extensions of a purpose, alternative names, the signature algorithm of a key type, a self-signed certificate, and a PKCS #10 request |
+| `src/signing.rs` | Certificates and requests signed with a PKCS #8 key: the subject name, the extensions of a purpose, alternative names, the signature algorithm of a key type, a self-signed certificate, a certificate issued by another key for a new key or for a request, the warning for a signer that is not a CA, and a PKCS #10 request |
+| `src/sign.rs` | Signing with a private key as a certificate authority: the menu of what to sign, reading and verifying a request file, and writing its certificate to a new file |
+| `src/sign_form.rs` | The form asking how a request is signed: validity, serial number, what the file holds, and which requested extensions are copied |
 | `src/key_export.rs` | Exporting a private key, alone or with its certificates, to a new PKCS12, PEM, or DER file, and its name prompt |
 | `src/key_import.rs` | Importing a key pair: finding the private key in a PEM or PKCS #8 file, or a keystore to copy from, the file's password prompt, and matching a key to its certificate chain |
 | `src/copy_entries.rs` | Copying entries from another keystore: the list in which they are chosen, and adding them to the open keystore |

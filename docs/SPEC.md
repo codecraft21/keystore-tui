@@ -26,6 +26,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Making certificate requests](#making-certificate-requests)
   - [Importing a CA reply](#importing-a-ca-reply)
   - [Editing a certificate chain](#editing-a-certificate-chain)
+  - [Signing certificates](#signing-certificates)
   - [Copying entries from another keystore](#copying-entries-from-another-keystore)
   - [Exporting private keys](#exporting-private-keys)
   - [Changing the password](#changing-the-password)
@@ -331,7 +332,7 @@ any existing incomplete-entry warnings.
 - JKS, JCEKS, and PKCS12 keystores can be changed. In the entry list of one,
   two lines above the shortcuts show `Keystore: n New | g Generate | i Import
   | w Save | W Save as | p Password` and `Entry: e Export | c Request | R
-  CA reply | C Chain | r Rename | d Delete | P Key password`.
+  CA reply | C Chain | S Sign | r Rename | d Delete | P Key password`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
   keys do nothing when no entry is selected.
@@ -599,6 +600,95 @@ any existing incomplete-entry warnings.
   the message of a chain that would not be listed again.
 - Whether the certificates are trusted or valid is not checked; the [chain
   diagnostics](#offline-chain-diagnostics) show what is wrong with a chain.
+
+### Signing certificates
+
+- In a keystore, `S` signs with the selected private key as a certificate
+  authority. On another kind of entry a red message says that only a private
+  key can sign certificates. The key must be one that the keystore's
+  password unlocks, in PKCS #8 form, as for an
+  [export](#exporting-private-keys), and its certificate must be readable.
+- `Sign with '<alias>':` is shown above `r Request file | g New key pair |
+  Esc Cancel | Ctrl+C Quit`. `Esc` signs nothing. `r` and `g` act as below;
+  every other key, including `q`, does nothing. `Ctrl+C` still quits.
+- Signing is not refused when the signer's certificate is not a certificate
+  authority's, but the first line then ends with a yellow warning: `Warning:
+  its certificate is not a CA certificate.` when its basic constraints are
+  missing or do not mark a CA, or else `Warning: its key usage does not
+  allow signing certificates.` when it has a key usage without certificate
+  signing.
+- Every certificate signed this way is version 3. Its issuer is the signer's
+  subject, and it is signed with the algorithm a [generated key
+  pair](#generating-key-pairs)'s certificate uses for the signer's type of
+  key; an Ed448 key signs with Ed448. It holds a subject key identifier,
+  then an authority key identifier with the signer's subject key identifier,
+  or the SHA-1 digest of the signer's public key when its certificate has
+  none, and then its other extensions. The validity starts at the current
+  time. A signature that does not verify with the signer's certificate is
+  not kept: a red message says that the signing key does not match its
+  certificate.
+
+**Signing a certificate request**
+
+- `r` opens the file browser, titled `Certificate request to sign with
+  '<alias>'`, to choose a PEM or DER file holding one certificate request.
+  `Esc` gives up. A file without a request, or with several, is refused in
+  red.
+- The request's own signature is checked first, as in the [request
+  details](#certificate-requests). A request whose signature does not verify,
+  or cannot be checked, is not signed: a red message says why.
+- A form titled `Sign request with '<alias>'` opens over the list, 72 columns
+  by 16 rows. It shows the request's `Subject` and `Public key`, which the
+  certificate takes as they are, above these rows:
+  - `Valid for (days)`: from 1 to 36500, starting at `365`.
+  - `Serial number (hex)`: optional. Hex digits, with or without a leading
+    `0x` and colons, for a positive number of at most 20 bytes as encoded.
+    Left empty, the serial number is 16 random bytes, positive.
+  - `Save`: `Certificate and the signer's chain`, which it starts at, or
+    `Certificate only`.
+  - One row for each extension the request asks for, such as `[x] Subject
+    Alternative Name: DNS: example.test`, with ` [critical]` after the name
+    of a critical one. The certificate gets the extensions marked `[x]`, as
+    the request holds them and in its order. All start marked, except basic
+    constraints asking for a certificate authority. Subject and authority key
+    identifiers are not listed, because the signer sets them; an extension
+    repeated in the request is listed once, and one that cannot be read is
+    not listed.
+- `Up` / `Down` or `Shift+Tab` / `Tab` move between the rows, wrapping at
+  either end; seven rows are shown at once, scrolling with the selection.
+  `Left`, `Right`, or `Space` change `Save` and mark or unmark an extension.
+  In the two text rows every character without `Ctrl` or `Alt` is typed,
+  including `q`; `Backspace` deletes a character and `Ctrl+U` clears the
+  row. A line below says what the selected row is for. `Esc` closes the form
+  and signs nothing; `Ctrl+C` still quits.
+- `Enter` checks the form. The first row that is wrong is selected and a red
+  message says why; the message clears on the next key.
+- `Enter` then asks `Save certificate as:`, suggesting the request's file
+  name with a `.pem` extension, next to the opened keystore, as the
+  [certificate export](#exporting) does. `Esc` returns to the form as it was
+  filled in. A `.der` name writes the certificate alone as DER, and is
+  refused with the signer's chain; any other name writes PEM `CERTIFICATE`
+  blocks, the new certificate first and then the signer's chain when asked
+  for. An existing file is never replaced: a red message asks for another
+  name.
+- A green message names the request's file, the signer, and the new file.
+  The keystore is not changed.
+- In a terminal smaller than the form, a resize hint is shown instead; `Esc`
+  and `Ctrl+C` still work.
+
+**Signing a new key pair**
+
+- `g` opens the form of [Generating key pairs](#generating-key-pairs), titled
+  `Generate key pair signed by '<alias>'`. It works the same way, through the
+  alias prompt and the generation, with these differences.
+- The new key's certificate is signed by the selected private key, as
+  described above, with the subject, validity, random serial number,
+  alternative names, and purpose extensions of a generated key pair's
+  certificate.
+- The new entry's chain is that certificate followed by the signer's chain.
+  The green message ends with `, signed by '<alias>'.`
+- When the signer's key can no longer be read once the alias is accepted, a
+  red message says so and no key pair is added.
 
 ### Copying entries from another keystore
 
