@@ -282,6 +282,7 @@ explain the result below the signature algorithm.
 | `f` | Toggle SHA-256 / SHA-1 fingerprints; kept while switching certificates |
 | `x` | Export the selected certificate, or the certificate request |
 | `X` | Export the entry's whole chain, leaf first |
+| `K` | Export the selected certificate's public key |
 | `Esc` | Return to the entry list, preserving its selection and scroll position |
 | `q` / `Ctrl+C` | Quit |
 
@@ -344,13 +345,19 @@ show the request's [ASN.1 structure and PEM encoding](#asn1-and-pem-views).
 
 ## Exporting certificates
 
-Press `x` or `X` in the detail view, then edit the suggested file name and press
+Press `x`, `X`, or `K` in the detail view, then edit the suggested file name and press
 `Enter`. The suggestion is `<alias>.pem` (or `<alias>-chain.pem`) next to the
-open file, or `<alias>.csr` for a certificate request. A name ending in `.der`
-saves a single certificate or the request as DER; any other name saves PEM. Relative names are saved next to the open file. Every key,
+open file, `<alias>-public-key.pem` for a public key, or `<alias>.csr` for a
+certificate request. A name ending in `.der`
+saves a single certificate, the public key, or the request as DER; any other name saves PEM. Relative names are saved next to the open file. Every key,
 including `q`, is typed into the name; `Backspace` deletes a character,
 `Ctrl+U` clears the name, and `Esc` cancels. Existing files are never replaced:
 the save fails with a red message and you can choose another name.
+
+`K` saves the public key of the selected certificate as a SubjectPublicKeyInfo
+(a PEM `PUBLIC KEY` block, or DER), exactly as the certificate holds it. It
+works for trusted certificates and private-key entries alike, and never reads
+the private key. Check the file with `openssl pkey -pubin -in <file> -text -noout`.
 
 ## Quitting
 

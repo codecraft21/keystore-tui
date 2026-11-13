@@ -1,4 +1,4 @@
-//! Exporting certificates and certificate requests.
+//! Exporting certificates, public keys, and certificate requests.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -67,6 +67,32 @@ fn certificate_request_export_then_quit_restores_terminal() {
     let saved = fs::read_to_string(directory.join("q.csr")).unwrap();
     assert!(saved.starts_with("-----BEGIN CERTIFICATE REQUEST-----\n"));
     assert_eq!(pem_der(&saved), pem_der(&request));
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Exporting](../../docs/SPEC.md#exporting),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn public_key_export_then_quit_restores_terminal() {
+    let directory = TempDir::new();
+    fs::write(directory.join("certificate.der"), fixture_certificate()).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("certificate.der")]);
+    app.expect(&["Certificate details", "X Chain | K Public key"]);
+    app.send(b"K");
+    app.expect(&["Save public key to:"]);
+    app.send(b"\x15"); // Ctrl+U clears the suggested absolute path.
+    app.send(b"K.pem\r"); // Typed into the name.
+    app.expect(&["Saved public key to"]);
+    let saved = fs::read_to_string(directory.join("K.pem")).unwrap();
+    assert!(saved.starts_with("-----BEGIN PUBLIC KEY-----\n"));
+    let key = pem_der(&saved);
+    // The key is the certificate's own SubjectPublicKeyInfo.
+    assert!(
+        fixture_certificate()
+            .windows(key.len())
+            .any(|window| window == key)
+    );
     app.send(b"q");
     app.assert_restored();
 }

@@ -76,6 +76,8 @@ Done: all four items.
 
 ### Tier 4: certificate authority and niche features
 
+Done: item 18. Still open: items 16, 17, and 19.
+
 16. **Sign a certificate signing request** with a key-pair entry, and **sign a
     new key pair** with an existing one.
 17. **Secret keys:** generate, import, and export AES and HMAC keys (JCEKS and

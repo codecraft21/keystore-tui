@@ -35,7 +35,8 @@ opens standalone certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`,
 - Shows a certificate signing request's subject, public key, requested
   extensions, and attributes, and checks its signature with its own key.
 - Shows the raw ASN.1 structure and PEM encoding of a certificate or request.
-- Exports a certificate, a whole chain, or a request to a new PEM or DER file.
+- Exports a certificate, a whole chain, a public key, or a request to a new
+  PEM or DER file.
 - Detects the format from the file content, so a PKCS12 store renamed `.jks`
   still opens.
 - Opens PKCS12 files made by Java, OpenSSL, and other tools. Keys without a

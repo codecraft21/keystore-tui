@@ -45,7 +45,8 @@ fn signed(der: &[u8]) -> Option<Signed<'_>> {
     })
 }
 
-fn subject_public_key_info(der: &[u8]) -> Option<&[u8]> {
+/// A certificate's SubjectPublicKeyInfo, byte for byte as stored.
+pub fn subject_public_key_info(der: &[u8]) -> Option<&[u8]> {
     let mut fields = Reader::new(der)
         .read_sequence()
         .ok()?

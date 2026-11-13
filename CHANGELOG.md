@@ -47,6 +47,9 @@ All notable changes to keystore-tui are listed here. Versions follow
   replace the key's certificate chain.
 - Edit a private key's certificate chain with `C`: append the issuer of its
   last certificate from a file, or remove the last certificate.
+- Export a certificate's public key with `K` in the detail view, as a PEM
+  `PUBLIC KEY` file or as DER under a `.der` name. The key comes from the
+  certificate, so no private key is read.
 - The editing shortcuts are now shown on two lines, one for the keystore and
   one for the selected entry.
 - PKCS12 keystores are saved with AES-256-CBC and HMAC-SHA256, whatever they
