@@ -5,7 +5,7 @@ use zeroize::Zeroize;
 
 use crate::{
     certificate::{self, Summary},
-    certificate_request, java_serialization,
+    certificate_request, java_serialization, revocation_list,
 };
 
 pub(crate) const MAGIC: u32 = 0xfeed_feed;
@@ -66,6 +66,8 @@ pub enum Content {
     },
     /// A PKCS#10 certificate request's DER.
     Request(Vec<u8>),
+    /// A certificate revocation list's DER.
+    Crl(Vec<u8>),
 }
 
 /// The type of an entry that stores certificates (or none, for a secret key).
@@ -96,6 +98,7 @@ impl KeystoreEntry {
         match &self.content {
             Content::Certificates { kind, .. } => kind.label(),
             Content::Request(_) => certificate_request::KIND,
+            Content::Crl(_) => revocation_list::KIND,
         }
     }
 
@@ -103,7 +106,7 @@ impl KeystoreEntry {
     pub fn certificates(&self) -> &[Vec<u8>] {
         match &self.content {
             Content::Certificates { certificates, .. } => certificates,
-            Content::Request(_) => &[],
+            Content::Request(_) | Content::Crl(_) => &[],
         }
     }
 }

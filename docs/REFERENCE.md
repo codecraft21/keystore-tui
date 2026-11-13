@@ -56,7 +56,8 @@ Press `o` (or `Ctrl+O`) to open the file browser. It starts in the working
 directory, or in the current file's directory when you open another file. It
 shows directories first, then keystores (`.jks`, `.jceks`, `.p12`, `.pfx`),
 certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`), and
-certificate requests (`.csr`, `.p10`). Java truststores named `cacerts` or
+certificate requests (`.csr`, `.p10`), and certificate revocation lists
+(`.crl`). Java truststores named `cacerts` or
 `jssecacerts` also appear without a file extension. The first directory or
 file is selected when a directory opens.
 
@@ -103,10 +104,10 @@ certificates whose names match another certificate or key.
 | Column | Shows |
 | --- | --- |
 | Alias | The entry alias |
-| Type | Private key, Trusted certificate, Secret key, Certificate, or Certificate request |
+| Type | Private key, Trusted certificate, Secret key, Certificate, Certificate request, or Revocation list |
 | Algorithm | The certificate's public key algorithm (RSA, EC, DSA, Ed25519, ...) |
 | Key size | The key size in bits (RSA/DSA modulus, EC curve size) |
-| Expires | The certificate's expiry date (UTC): yellow within 30 days of expiry, red once it has passed; `-` for a request |
+| Expires | The certificate's expiry date (UTC): yellow within 30 days of expiry, red once it has passed; `-` for a request or a revocation list |
 | Crypto | `Weak`, in yellow, when the certificate's key is too short or its signature uses a broken hash |
 
 | Key | Action in the entry list |
@@ -123,7 +124,7 @@ certificates whose names match another certificate or key.
 | `c` | Make a certificate request (CSR) for the selected private key |
 | `R` | Import a CA reply: replace the selected private key's certificate chain with the issued one |
 | `C` | Edit the selected private key's certificate chain: append an issuer from a file, or remove the last certificate |
-| `S` | Sign with the selected private key: a certificate request from a file, or a new key pair |
+| `S` | Sign with the selected private key: a certificate request from a file, a new key pair, or a revocation list |
 | `r` | Rename the selected entry |
 | `d` / `Delete` | Delete the selected entry |
 | `w` | Save the changes to the opened file |
@@ -203,6 +204,14 @@ next to the app name, but nothing changes on disk until you save.
 - **Generate a key pair signed by another key:** press `S` on the signing
   private key, then `g`, and fill in the form as for `g`. The new entry's
   chain is its certificate followed by the signer's chain.
+- **Sign a revocation list:** press `S` on the private key of your
+  certificate authority, then `l`. Type the revoked serial numbers in hex,
+  separated by commas; a reason may follow each one, as in
+  `01A4=keyCompromise, 0F`. Adjust the two update times and the CRL number,
+  then edit the file name and press `Enter`. The list is written to a new
+  `.crl` file as PEM, or as DER under a `.der` name; the keystore is not
+  changed. Check the result with
+  `openssl crl -in ca.crl -text -noout -CAfile ca.pem`.
 - When the signer's certificate is not a certificate authority's, a yellow
   warning says so, and signing still works: other software may reject what
   it signs.
@@ -346,6 +355,16 @@ A certificate request's challenge password is never shown, not even in these
 views. When a request holds one, or has bytes that cannot be decoded, the ASN.1
 view leaves them out with a note, and the PEM view is not shown; press `x` to
 export the request instead.
+
+## Revocation lists
+
+A certificate revocation list (`.crl`, PEM or DER) opens in the same view. The
+details show its issuer, its two update times, its extensions, such as the
+CRL number, and each revoked certificate's serial number, revocation time, and
+reason. The signature is not checked, because the issuer's certificate is not
+part of the list, and neither is whether the list is current. `x` exports the
+list, and `a` and `p` show its [ASN.1 structure and PEM
+encoding](#asn1-and-pem-views).
 
 ## Certificate requests
 

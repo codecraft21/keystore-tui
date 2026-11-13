@@ -280,7 +280,7 @@ impl FilePicker {
             (no_match.as_str(), Color::Gray)
         } else if !self.entries.iter().any(|entry| !entry.is_directory) {
             (
-                "No keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts) or certificate (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10) files in this directory.",
+                "No keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts) or certificate (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10, .crl) files in this directory.",
                 Color::Gray,
             )
         } else {

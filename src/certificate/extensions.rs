@@ -33,6 +33,8 @@ const KNOWN: &[(&[u64], &str, Decoder)] = &[
         alternative_names,
     ),
     (&[2, 5, 29, 19], "Basic Constraints", basic_constraints),
+    (&[2, 5, 29, 20], "CRL Number", crl_number),
+    (&[2, 5, 29, 21], "Reason Code", reason_code),
     (
         &[2, 5, 29, 31],
         "CRL Distribution Points",
@@ -237,6 +239,29 @@ fn alternative_names(value: &[u8]) -> CryptoResult<Vec<String>> {
     general_names(content)
 }
 
+/// A revocation list's number, in decimal.
+fn crl_number(value: &[u8]) -> CryptoResult<Vec<String>> {
+    let mut reader = Reader::new(value);
+    let number = reader.read_expected(der::INTEGER)?;
+    reader.expect_end()?;
+    Ok(vec![serial_text(number, false)])
+}
+
+/// Why a certificate was revoked.
+fn reason_code(value: &[u8]) -> CryptoResult<Vec<String>> {
+    let mut reader = Reader::new(value);
+    let (tag, content) = reader.read_tlv()?;
+    reader.expect_end()?;
+    match content {
+        // An ENUMERATED of one byte.
+        &[code] if tag == Tag::universal(0x0a) => Ok(vec![
+            crown::x509::extensions::CrlReason::from_u8(code)
+                .map_or_else(|_| format!("Reason {code}"), |reason| reason.name().into()),
+        ]),
+        _ => Err(CryptoError::StrError("invalid reason code")),
+    }
+}
+
 fn subject_key_id(value: &[u8]) -> CryptoResult<Vec<String>> {
     let mut reader = Reader::new(value);
     let id = reader.read_octet_string()?;
@@ -433,6 +458,32 @@ mod tests {
             assert!(decode(&value[..end]).is_err(), "prefix {end}");
         }
         assert!(decode(&[value, &[0]].concat()).is_err(), "trailing data");
+    }
+
+    #[test]
+    fn revocation_list_extensions_show_numbers_and_reasons() {
+        let extension = |number: u64, value: &[u8]| {
+            Extension::parse(&der::sequence(
+                &[
+                    der::oid(&ObjectIdentifier::new(&[2, 5, 29, number]).unwrap()),
+                    der::octet_string(value),
+                ]
+                .concat(),
+            ))
+        };
+        let reason = |code: u8| extension(21, &[0x0a, 1, code]).lines;
+        assert_eq!(extension(20, &der::integer(&[1, 0])).lines, ["256"]);
+        assert_eq!(
+            extension(20, &[]).lines[0],
+            "Could not decode; value: (empty)"
+        );
+        assert_eq!(reason(1), ["keyCompromise"]);
+        assert_eq!(reason(4), ["superseded"]);
+        // A code that has no meaning, and values that are not a reason.
+        assert_eq!(reason(7), ["Reason 7"]);
+        for wrong in [&[0x02, 1, 1][..], &[0x0a, 2, 0, 1], &[0x0a, 1, 1, 0]] {
+            assert!(extension(21, wrong).lines[0].starts_with("Could not decode; value: "));
+        }
     }
 
     #[test]

@@ -181,7 +181,7 @@ pub(crate) fn read_certificate(path: &Path, data: &[u8]) -> Result<Vec<u8>, Stri
         .into_iter()
         .filter_map(|entry| match entry.content {
             Content::Certificates { certificates, .. } => certificates.into_iter().next(),
-            Content::Request(_) => None,
+            Content::Request(_) | Content::Crl(_) => None,
         })
         .collect();
     match certificates.len() {

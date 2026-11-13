@@ -7,6 +7,7 @@ mod certificate_form;
 mod certificate_request;
 mod chain_edit;
 mod copy_entries;
+mod crl_form;
 mod editing;
 mod entry_details;
 mod entry_list;
@@ -22,6 +23,7 @@ mod new_password;
 mod new_request;
 mod path_bar;
 mod pkcs12;
+mod revocation_list;
 mod save;
 mod sign;
 mod sign_form;
@@ -158,6 +160,8 @@ struct App {
     signing_request: Option<usize>,
     /// A certificate request being signed with a private key.
     signing: Option<sign::Signing>,
+    /// A revocation list being signed with a private key.
+    revoking: Option<sign::Revoking>,
     /// The result of the last edit or save, and whether it failed. Cleared
     /// on the next key.
     message: Option<(String, bool)>,
@@ -297,6 +301,8 @@ impl App {
             self.handle_sign_menu(key);
         } else if self.signing.is_some() {
             self.handle_signing(key);
+        } else if self.revoking.is_some() {
+            self.handle_revoking(key);
         } else if self.generating.is_some() {
             self.handle_generate(key);
         } else if self.requesting.is_some() {
@@ -495,6 +501,7 @@ impl App {
             || self.requesting.is_some()
             || self.sign_menu.is_some()
             || self.signing.is_some()
+            || self.revoking.is_some()
             || self
                 .entry_details
                 .as_ref()
@@ -671,6 +678,7 @@ impl App {
         self.sign_menu = None;
         self.signing_request = None;
         self.signing = None;
+        self.revoking = None;
         self.message = None;
     }
 
@@ -842,7 +850,7 @@ impl App {
         } else {
             frame.render_widget(
                 Paragraph::new(
-                    "No keystore selected.\n\nPress n to create a JKS, JCEKS, or PKCS12 keystore.\n\nPress o to open a keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts) or a certificate or request file (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10).",
+                    "No keystore selected.\n\nPress n to create a JKS, JCEKS, or PKCS12 keystore.\n\nPress o to open a keystore (.jks, .jceks, .p12, .pfx, cacerts, jssecacerts) or a certificate, request, or revocation list file (.pem, .crt, .cer, .der, .p7b, .p7c, .csr, .p10, .crl).",
                 )
                 .block(Block::bordered().title(" keystore-tui ".blue()))
                 .wrap(Wrap { trim: false }),
@@ -923,6 +931,9 @@ impl App {
         } else if let Some(signing) = self.signing.as_ref().filter(|s| s.naming.is_none()) {
             frame.render_widget(Paragraph::new(shortcuts), help);
             signing.form.draw(frame);
+        } else if let Some(revoking) = self.revoking.as_ref().filter(|r| r.naming.is_none()) {
+            frame.render_widget(Paragraph::new(shortcuts), help);
+            revoking.form.draw(frame);
         } else {
             frame.render_widget(Paragraph::new(shortcuts), help);
         }
@@ -1042,7 +1053,8 @@ impl App {
             }
             vec![
                 Line::from(title),
-                "r Request file | g New key pair | Esc Cancel | Ctrl+C Quit".into(),
+                "r Request file | g New key pair | l Revocation list | Esc Cancel | Ctrl+C Quit"
+                    .into(),
             ]
         } else if let Some((_, _, prompt)) = self
             .signing
@@ -1056,6 +1068,20 @@ impl App {
                 ]),
                 "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Back | Ctrl+C Quit".into(),
             ]
+        } else if let Some((_, prompt)) = self
+            .revoking
+            .as_ref()
+            .and_then(|revoking| revoking.naming.as_ref())
+        {
+            vec![
+                Line::from(vec![
+                    "Save revocation list as: ".bold(),
+                    format!("{}_", prompt.path).into(),
+                ]),
+                "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Back | Ctrl+C Quit".into(),
+            ]
+        } else if self.revoking.is_some() {
+            vec!["Up/Down Tab Field | Enter Next | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into()]
         } else if self.signing.is_some() {
             vec![
                 "Up/Down Tab Field | Left/Right Space Change | Enter Next | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),

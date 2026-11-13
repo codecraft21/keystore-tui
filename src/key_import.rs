@@ -160,7 +160,7 @@ pub(crate) fn chains(data: &[u8]) -> Chains {
         .into_iter()
         .filter_map(|entry| match entry.content {
             Content::Certificates { certificates, .. } => Some(certificates),
-            Content::Request(_) => None,
+            Content::Request(_) | Content::Crl(_) => None,
         })
         .collect()
 }

@@ -1,6 +1,6 @@
-//! Standalone certificate files: PEM or DER certificates, PKCS#7 bundles, and
-//! PKCS#10 certificate requests. Each certificate or request becomes one
-//! entry; a certificate's chain is assembled from the other certificates in
+//! Standalone certificate files: PEM or DER certificates, PKCS#7 bundles,
+//! PKCS#10 certificate requests, and certificate revocation lists. Each
+//! certificate, request, or list becomes one entry; a certificate's chain is assembled from the other certificates in
 //! the same file by matching issuer and subject names.
 use crown::{
     asn1::{Reader, der, oid, pem},
@@ -13,10 +13,13 @@ use crate::{
     certificate::{self, details::Details},
     certificate_request,
     keystore::{Content, KeystoreEntry, Kind},
+    revocation_list,
 };
 
 /// File name extensions offered by the file browser alongside keystores.
-pub const EXTENSIONS: &[&str] = &["pem", "crt", "cer", "der", "p7b", "p7c", "csr", "p10"];
+pub const EXTENSIONS: &[&str] = &[
+    "pem", "crt", "cer", "der", "p7b", "p7c", "csr", "p10", "crl",
+];
 
 pub struct CertificateFile {
     /// In file order.
@@ -26,10 +29,11 @@ pub struct CertificateFile {
     pub skipped: bool,
 }
 
-/// A certificate or request in file order, as exact DER.
+/// A certificate, request, or revocation list in file order, as exact DER.
 enum Item {
     Certificate(Vec<u8>),
     Request(Vec<u8>),
+    Crl(Vec<u8>),
 }
 
 pub fn is_pem(data: &[u8]) -> bool {
@@ -63,6 +67,7 @@ pub fn parse(data: &[u8]) -> Result<CertificateFile, &'static str> {
                 "CERTIFICATE REQUEST" | "NEW CERTIFICATE REQUEST" => {
                     items.push(Item::Request(block.data))
                 }
+                "X509 CRL" => items.push(Item::Crl(block.data)),
                 "PKCS7" | "CMS" => items.extend(
                     pkcs7_certificates(&block.data)?
                         .into_iter()
@@ -97,6 +102,8 @@ fn single_der_item(data: &[u8]) -> Option<Item> {
         Some(Item::Certificate(data.to_vec()))
     } else if certificate_request::summarize(data).is_some() {
         Some(Item::Request(data.to_vec()))
+    } else if revocation_list::List::parse(data).is_ok() {
+        Some(Item::Crl(data.to_vec()))
     } else {
         None
     }
@@ -163,11 +170,11 @@ fn entries(items: &[Item]) -> Vec<KeystoreEntry> {
         .iter()
         .map(|item| match item {
             Item::Certificate(der) => names(der),
-            Item::Request(_) => None,
+            Item::Request(_) | Item::Crl(_) => None,
         })
         .collect();
     let der = |index: usize| match &items[index] {
-        Item::Certificate(der) | Item::Request(der) => der,
+        Item::Certificate(der) | Item::Request(der) | Item::Crl(der) => der,
     };
     (0..items.len())
         .map(|index| {
@@ -177,6 +184,15 @@ fn entries(items: &[Item]) -> Vec<KeystoreEntry> {
                         .unwrap_or_else(|| format!("Certificate request {}", index + 1)),
                     certificate: certificate_request::summarize(request),
                     content: Content::Request(request.clone()),
+                    chain_warning: None,
+                };
+            }
+            if let Item::Crl(list) = &items[index] {
+                return KeystoreEntry {
+                    alias: revocation_list::issuer_name(list)
+                        .unwrap_or_else(|| format!("Revocation list {}", index + 1)),
+                    certificate: None,
+                    content: Content::Crl(list.clone()),
                     chain_warning: None,
                 };
             }
@@ -314,6 +330,42 @@ mod tests {
             assert_eq!(aliases(&file), ["leaf", "root"]);
             assert_eq!(file.entries[0].certificates(), [leaf.clone(), root.clone()]);
         }
+    }
+
+    #[test]
+    fn revocation_lists_are_listed_in_file_order_outside_chains() {
+        use crate::test_support::{TestRng, ed25519_certificate, ed25519_crl, ed25519_pkcs8};
+        let list = ed25519_crl();
+        let ca = ed25519_certificate("ca", "ca", 9, 9);
+        let text = [
+            pem::encode("X509 CRL", &list),
+            pem::encode("CERTIFICATE", &ca),
+        ]
+        .concat();
+        let file = parse(text.as_bytes()).unwrap();
+        assert!(!file.skipped);
+        assert_eq!(aliases(&file), ["ca", "ca"]);
+        assert_eq!(file.entries[0].kind(), revocation_list::KIND);
+        assert_eq!(file.entries[0].content, Content::Crl(list.clone()));
+        assert!(file.entries[0].certificate.is_none());
+        assert!(file.entries[0].certificates().is_empty());
+        assert_eq!(file.entries[1].certificates(), [ca]);
+        // DER is recognized by its content, and a list without an issuer
+        // name is named by its place.
+        let file = parse(&list).unwrap();
+        assert_eq!(file.entries[0].content, Content::Crl(list));
+        let empty = crate::signing::Revocations {
+            this_update: crown::asn1::Asn1Time::from_unix(0, true),
+            next_update: crown::asn1::Asn1Time::from_unix(1, true),
+            number: 1,
+            revoked: Vec::new(),
+        };
+        let issuer = crate::signing::Issuer {
+            key: &ed25519_pkcs8(9),
+            certificate: &ed25519_certificate("", "", 9, 9),
+        };
+        let unnamed = crate::signing::revocation_list(&empty, &issuer, &mut TestRng(0)).unwrap();
+        assert_eq!(aliases(&parse(&unnamed).unwrap()), ["Revocation list 1"]);
     }
 
     #[test]

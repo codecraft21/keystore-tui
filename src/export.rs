@@ -22,6 +22,8 @@ pub enum Scope {
     KeyPair,
     /// The public key (SubjectPublicKeyInfo) of the selected certificate.
     PublicKey,
+    /// A certificate revocation list.
+    Crl,
 }
 
 impl Scope {
@@ -32,6 +34,7 @@ impl Scope {
             Self::Request => "certificate request",
             Self::KeyPair => "key pair",
             Self::PublicKey => "public key",
+            Self::Crl => "revocation list",
         }
     }
 
@@ -41,6 +44,7 @@ impl Scope {
             Self::Certificate | Self::Chain | Self::PublicKey => "pem",
             Self::Request => "csr",
             Self::KeyPair => "p12",
+            Self::Crl => "crl",
         }
     }
 
@@ -50,6 +54,7 @@ impl Scope {
             Self::Certificate | Self::Chain | Self::PublicKey => "certificate",
             Self::Request => "request",
             Self::KeyPair => "key",
+            Self::Crl => "revocation-list",
         }
     }
 
@@ -60,6 +65,7 @@ impl Scope {
             Self::Request => "CERTIFICATE REQUEST",
             Self::KeyPair => "PRIVATE KEY",
             Self::PublicKey => "PUBLIC KEY",
+            Self::Crl => crate::revocation_list::PEM_LABEL,
         }
     }
 }
@@ -220,6 +226,15 @@ mod tests {
         );
         let prompt = ExportPrompt::new(Scope::Request, directory.path(), "server");
         assert_eq!(Path::new(&prompt.path), directory.path().join("server.csr"));
+        let prompt = ExportPrompt::new(Scope::Crl, directory.path(), "..");
+        assert_eq!(
+            Path::new(&prompt.path),
+            directory.path().join("revocation-list.crl")
+        );
+        assert_eq!(
+            (Scope::Crl.label(), Scope::Crl.pem_label()),
+            ("revocation list", "X509 CRL")
+        );
         let prompt = ExportPrompt::new(Scope::PublicKey, directory.path(), "..");
         assert_eq!(
             Path::new(&prompt.path),

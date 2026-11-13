@@ -3996,7 +3996,9 @@ fn a_certificate_request_is_signed_into_a_new_certificate_file() {
     press(&mut app, KeyCode::Char('S'));
     let rendered = screen(&mut app, 120, 24);
     assert!(rendered.contains("Sign with 'ca': "));
-    assert!(rendered.contains("r Request file | g New key pair | Esc Cancel | Ctrl+C Quit"));
+    assert!(rendered.contains(
+        "r Request file | g New key pair | l Revocation list | Esc Cancel | Ctrl+C Quit"
+    ));
     assert!(!rendered.contains("Warning"));
     assert!(!press(&mut app, KeyCode::Char('q')));
     assert!(app.sign_menu.is_some());
@@ -4314,4 +4316,119 @@ fn a_key_pair_is_signed_in_a_pkcs12_keystore() {
         .unwrap();
     assert_eq!(leaf.certificates().len(), 2);
     assert_eq!(leaf.certificates()[1], ca);
+}
+
+#[test]
+fn a_revocation_list_is_signed_into_a_new_file_and_read_back() {
+    use crown::x509::{cert::Certificate, crl::CertificateList};
+    let directory = TestDirectory::new();
+    let (mut app, path) = editing(&directory);
+    let file = |name: &str| directory.path().join(name);
+    let ca = add_authority(&mut app);
+    app.modified = true;
+    press(&mut app, KeyCode::Char('w'));
+    assert!(!app.modified, "{:?}", app.message);
+    let stored = fs::read(&path).unwrap();
+    app.handle_revoking(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    press(&mut app, KeyCode::Char('S'));
+    press(&mut app, KeyCode::Char('l'));
+    assert!(app.sign_menu.is_none());
+    let rendered = screen(&mut app, 120, 30);
+    assert!(rendered.contains(" Revocation list signed by 'ca' "));
+    assert!(rendered.contains("CRL number           1"));
+    assert!(rendered.contains("Up/Down Tab Field | Enter Next | Ctrl+U Clear | Esc Cancel"));
+    // Letters are typed into the form, and Esc closes it.
+    assert!(!press(&mut app, KeyCode::Char('q')));
+    press(&mut app, KeyCode::Esc);
+    assert!(app.revoking.is_none());
+
+    // The file name is asked next; Esc goes back to the form.
+    press(&mut app, KeyCode::Char('S'));
+    press(&mut app, KeyCode::Char('l'));
+    type_password(&mut app, "01a4=keyCompromise, 0f");
+    press(&mut app, KeyCode::Enter);
+    let expected = file("ca.crl");
+    let rendered = screen(&mut app, 200, 30);
+    assert!(rendered.contains(&format!("Save revocation list as: {}_", expected.display())));
+    assert!(rendered.contains("A .der name saves DER, any other PEM | Enter Save"));
+    press(&mut app, KeyCode::Esc);
+    assert!(screen(&mut app, 120, 30).contains("Revoked serials      01a4=keyCompromise, 0f_"));
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.message,
+        Some((
+            format!(
+                "Signed a revocation list of 2 certificates with 'ca' and saved it to '{}'.",
+                expected.display()
+            ),
+            false
+        ))
+    );
+    assert!(app.revoking.is_none());
+    let text = fs::read_to_string(&expected).unwrap();
+    assert!(text.starts_with("-----BEGIN X509 CRL-----"));
+    let list = CertificateList::from_pem(&text).unwrap();
+    let authority = Certificate::parse(&ca).unwrap();
+    assert_eq!(list.verify_signature(authority.public_key()), Ok(true));
+    assert_eq!(list.tbs().issuer.encode(), authority.subject().encode());
+    assert!(list.is_revoked(&[1, 0xa4]).is_some() && list.is_revoked(&[0x0f]).is_some());
+    // The keystore is not changed.
+    assert!(!app.modified);
+    assert_eq!(fs::read(&path).unwrap(), stored);
+
+    // A .der name writes DER, and an existing file is never replaced.
+    press(&mut app, KeyCode::Char('S'));
+    press(&mut app, KeyCode::Char('l'));
+    type_password(&mut app, "7f");
+    press(&mut app, KeyCode::Enter);
+    type_alias(&mut app, "one.der");
+    assert!(
+        screen(&mut app, 200, 30).contains("Signed a revocation list of 1 certificate with 'ca'")
+    );
+    let list = CertificateList::parse(&fs::read(file("one.der")).unwrap()).unwrap();
+    assert_eq!(list.verify_signature(authority.public_key()), Ok(true));
+    press(&mut app, KeyCode::Char('S'));
+    press(&mut app, KeyCode::Char('l'));
+    press(&mut app, KeyCode::Enter);
+    type_alias(&mut app, "one.der");
+    assert!(red_text(&mut app).contains("already exists; choose another name."));
+    assert!(app.revoking.is_some());
+    // A keystore closed in between has no key to sign with.
+    let document = app.document.take();
+    type_alias(&mut app, "late.crl");
+    assert!(red_text(&mut app).contains("No keystore is open."));
+    assert!(!file("late.crl").exists());
+    // Nor has a key that no longer opens: deleting the entry before it puts
+    // a trusted certificate at the place the signing was started for.
+    app.document = document;
+    app.document.as_mut().unwrap().remove(&mut app.entries, 0);
+    app.refresh_visible();
+    type_alias(&mut app, "late.crl");
+    assert!(
+        red_text(&mut app).contains("Nothing signed: the key 'root-cert'"),
+        "{:?}",
+        app.message
+    );
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    assert!(app.revoking.is_none());
+
+    // The list opens from the browser straight into its details.
+    app.modified = false;
+    app.open_file(expected.clone());
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.entries[0].kind(), "Revocation list");
+    assert!(app.entry_details.is_some());
+    let rendered = screen(&mut app, 120, 50);
+    assert!(rendered.contains("Test CA — Revocation list"));
+    assert!(rendered.contains("Revoked certificates (2):"));
+    assert!(rendered.contains("Reason Code: keyCompromise"));
+    // In the list, a revocation list has no key or expiry to show.
+    press(&mut app, KeyCode::Esc);
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains("Revocation list"));
+    // A revocation list is not a certificate to import or a request to sign.
+    assert!(editing::read_certificate(&expected, text.as_bytes()).is_err());
 }

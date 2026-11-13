@@ -400,3 +400,26 @@ pub fn synthetic_pkcs8(content: &[u8]) -> Vec<u8> {
         .concat(),
     )
 }
+
+/// A revocation list signed by the certificate authority `ca`, whose
+/// Ed25519 key is made from the synthetic secret `[9; 32]`: number 7, from
+/// 2026-01-01 to 2026-01-31, revoking `01A4` for a compromised key and `0F`
+/// without a reason.
+pub fn ed25519_crl() -> Vec<u8> {
+    use crown::x509::extensions::CrlReason;
+    let update = |seconds| Asn1Time::from_unix(seconds, true);
+    let list = crate::signing::Revocations {
+        this_update: update(1_767_225_600),
+        next_update: update(1_767_225_600 + 30 * 86_400),
+        number: 7,
+        revoked: vec![
+            (vec![1, 0xa4], Some(CrlReason::KeyCompromise)),
+            (vec![0x0f], None),
+        ],
+    };
+    let issuer = crate::signing::Issuer {
+        key: &ed25519_pkcs8(9),
+        certificate: &ed25519_certificate("ca", "ca", 9, 9),
+    };
+    crate::signing::revocation_list(&list, &issuer, &mut TestRng(0)).unwrap()
+}
