@@ -118,6 +118,9 @@ impl App {
         else {
             return;
         };
+        if self.is_secret_key(index) {
+            return self.ask_secret_export(index);
+        }
         let entry = &self.entries[index];
         let readable = if entry.kind() == Kind::PrivateKey.label() {
             document
@@ -126,7 +129,7 @@ impl App {
                 .map_err(|error| format!("Not exported: the key '{}' {error}.", entry.alias))
         } else {
             Err(
-                "Only private keys are exported with e; export certificates from the details (Enter, then x)."
+                "Only private and secret keys are exported with e; export certificates from the details (Enter, then x)."
                     .into(),
             )
         };

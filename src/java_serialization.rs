@@ -1,7 +1,9 @@
-//! Skips one Java serialization stream without deserializing it. JCEKS stores
+//! Walks one Java serialization stream without deserializing it. JCEKS stores
 //! each secret key as a serialized `SealedObject` with no length prefix, so the
-//! only way to find the next entry is to walk the stream's grammar. Nothing is
-//! decrypted, and no class is ever loaded or interpreted beyond its layout.
+//! only way to find the next entry is to walk the stream's grammar. The byte
+//! arrays and strings the top-level object holds are given by field name.
+//! Nothing is decrypted, and no class is ever loaded or interpreted beyond
+//! its layout.
 
 const STREAM_MAGIC: [u8; 2] = [0xac, 0xed];
 const STREAM_VERSION: [u8; 2] = [0x00, 0x05];
@@ -34,25 +36,49 @@ pub enum Error {
 struct ClassDesc {
     name: Vec<u8>,
     flags: u8,
-    /// The type code of each serializable field, in stream order.
-    fields: Vec<u8>,
+    /// The type code and the name of each serializable field, in stream
+    /// order.
+    fields: Vec<(u8, Vec<u8>)>,
     super_class: Option<Option<usize>>,
 }
 
-enum Handle {
+#[derive(Clone, Copy)]
+enum Handle<'a> {
     Class(usize),
+    /// A string's or a byte array's content.
+    Data(&'a [u8]),
     Other,
 }
 
 struct Stream<'a> {
     remaining: &'a [u8],
     classes: Vec<ClassDesc>,
-    handles: Vec<Handle>,
+    handles: Vec<Handle<'a>>,
 }
 
-/// Skips one serialization stream holding a single top-level object, returning
-/// that object's class name and the data after the stream.
-pub fn skip_object(data: &[u8]) -> Result<(Vec<u8>, &[u8]), Error> {
+/// A top-level object, as far as its layout tells.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Object<'a> {
+    pub class: Vec<u8>,
+    /// The fields holding a byte array or a string, by name, with their
+    /// content as stored.
+    pub fields: Vec<(Vec<u8>, &'a [u8])>,
+    /// The data after the stream.
+    pub rest: &'a [u8],
+}
+
+impl<'a> Object<'a> {
+    /// The content of the byte array or string field `name`.
+    pub fn field(&self, name: &str) -> Option<&'a [u8]> {
+        self.fields
+            .iter()
+            .find(|(field, _)| field == name.as_bytes())
+            .map(|(_, content)| *content)
+    }
+}
+
+/// Reads one serialization stream holding a single top-level object.
+pub fn read_object(data: &[u8]) -> Result<Object<'_>, Error> {
     let mut stream = Stream {
         remaining: data,
         classes: Vec::new(),
@@ -64,11 +90,18 @@ pub fn skip_object(data: &[u8]) -> Result<(Vec<u8>, &[u8]), Error> {
     if stream.u8()? != TC_OBJECT {
         return Err(Error::Unsupported);
     }
-    let class = stream.object(0)?;
-    Ok((
-        std::mem::take(&mut stream.classes[class].name),
-        stream.remaining,
-    ))
+    let (class, fields) = stream.object(0)?;
+    Ok(Object {
+        class: std::mem::take(&mut stream.classes[class].name),
+        fields,
+        rest: stream.remaining,
+    })
+}
+
+/// Skips one serialization stream holding a single top-level object, returning
+/// that object's class name and the data after the stream.
+pub fn skip_object(data: &[u8]) -> Result<(Vec<u8>, &[u8]), Error> {
+    read_object(data).map(|object| (object.class, object.rest))
 }
 
 impl<'a> Stream<'a> {
@@ -98,28 +131,34 @@ impl<'a> Stream<'a> {
         self.take(usize::from(len))
     }
 
-    /// Reads a handle and returns the class it refers to, if it is one.
-    fn handle(&mut self) -> Result<Option<usize>, Error> {
+    /// Reads a handle and returns what it refers to.
+    fn handle(&mut self) -> Result<Handle<'a>, Error> {
         let index = self.u32()?.checked_sub(BASE_HANDLE).ok_or(Error::Invalid)?;
-        match self.handles.get(index as usize).ok_or(Error::Invalid)? {
-            Handle::Class(class) => Ok(Some(*class)),
-            Handle::Other => Ok(None),
-        }
+        self.handles
+            .get(index as usize)
+            .copied()
+            .ok_or(Error::Invalid)
     }
 
-    /// Any content element, by its already-read type code.
-    fn content(&mut self, code: u8, depth: usize) -> Result<(), Error> {
+    /// Any content element, by its already-read type code. Returns the
+    /// content of a string or a byte array, also when it is referred to.
+    fn content(&mut self, code: u8, depth: usize) -> Result<Option<&'a [u8]>, Error> {
         if depth > MAX_DEPTH {
             return Err(Error::Unsupported);
         }
         match code {
             TC_NULL => {}
             TC_REFERENCE => {
-                self.handle()?;
+                if let Handle::Data(data) = self.handle()? {
+                    return Ok(Some(data));
+                }
             }
             TC_STRING => {
+                let index = self.handles.len();
                 self.handles.push(Handle::Other);
-                self.utf()?;
+                let text = self.utf()?;
+                self.handles[index] = Handle::Data(text);
+                return Ok(Some(text));
             }
             TC_LONGSTRING => {
                 self.handles.push(Handle::Other);
@@ -132,7 +171,7 @@ impl<'a> Stream<'a> {
             TC_OBJECT => {
                 self.object(depth)?;
             }
-            TC_ARRAY => self.array(depth)?,
+            TC_ARRAY => return self.array(depth),
             TC_BLOCKDATA => {
                 let len = self.u8()?;
                 self.take(usize::from(len))?;
@@ -145,7 +184,7 @@ impl<'a> Stream<'a> {
             // the sealed keys Java writes.
             _ => return Err(Error::Unsupported),
         }
-        Ok(())
+        Ok(None)
     }
 
     /// A class descriptor: a new one, a reference to a complete one, or null.
@@ -154,7 +193,9 @@ impl<'a> Stream<'a> {
             TC_NULL => Ok(None),
             TC_CLASSDESC => self.new_class(depth).map(Some),
             TC_REFERENCE => match self.handle()? {
-                Some(index) if self.classes[index].super_class.is_some() => Ok(Some(index)),
+                Handle::Class(index) if self.classes[index].super_class.is_some() => {
+                    Ok(Some(index))
+                }
                 _ => Err(Error::Invalid),
             },
             _ => Err(Error::Unsupported),
@@ -176,7 +217,7 @@ impl<'a> Stream<'a> {
         let mut fields = Vec::new();
         for _ in 0..count {
             let code = self.u8()?;
-            self.utf()?; // Field name.
+            let field = self.utf()?.to_vec();
             if matches!(code, b'[' | b'L') {
                 // The field's class name, as a string or a reference to one.
                 let code = self.u8()?;
@@ -187,7 +228,7 @@ impl<'a> Stream<'a> {
             } else if field_size(code).is_none() {
                 return Err(Error::Invalid);
             }
-            fields.push(code);
+            fields.push((code, field));
         }
         self.classes.push(ClassDesc {
             name,
@@ -206,13 +247,17 @@ impl<'a> Stream<'a> {
         loop {
             match self.u8()? {
                 TC_ENDBLOCKDATA => return Ok(()),
-                code => self.content(code, depth + 1)?,
+                code => {
+                    self.content(code, depth + 1)?;
+                }
             }
         }
     }
 
-    /// An object's class and field values. Returns its class.
-    fn object(&mut self, depth: usize) -> Result<usize, Error> {
+    /// An object's class and field values. Returns its class, and the
+    /// content of its byte array and string fields by name.
+    #[allow(clippy::type_complexity)]
+    fn object(&mut self, depth: usize) -> Result<(usize, Vec<(Vec<u8>, &'a [u8])>), Error> {
         let class = self.class_desc(depth + 1)?.ok_or(Error::Invalid)?;
         self.handles.push(Handle::Other);
         // Superclass data comes first. Complete descriptors only point to
@@ -221,6 +266,7 @@ impl<'a> Stream<'a> {
         while let Some(Some(parent)) = self.classes[hierarchy[hierarchy.len() - 1]].super_class {
             hierarchy.push(parent);
         }
+        let mut contents = Vec::new();
         for &index in hierarchy.iter().rev() {
             let flags = self.classes[index].flags;
             if flags & SC_EXTERNALIZABLE != 0 {
@@ -230,18 +276,22 @@ impl<'a> Stream<'a> {
                 continue;
             }
             for field in 0..self.classes[index].fields.len() {
-                let code = self.classes[index].fields[field];
-                self.value(code, depth + 1)?;
+                let code = self.classes[index].fields[field].0;
+                if let Some(content) = self.value(code, depth + 1)? {
+                    contents.push((self.classes[index].fields[field].1.clone(), content));
+                }
             }
             if flags & SC_WRITE_METHOD != 0 {
                 self.annotation(depth)?;
             }
         }
-        Ok(class)
+        Ok((class, contents))
     }
 
-    fn array(&mut self, depth: usize) -> Result<(), Error> {
+    /// An array. Returns the content of a byte array.
+    fn array(&mut self, depth: usize) -> Result<Option<&'a [u8]>, Error> {
         let class = self.class_desc(depth + 1)?.ok_or(Error::Invalid)?;
+        let handle = self.handles.len();
         self.handles.push(Handle::Other);
         let element = match self.classes[class].name.as_slice() {
             [b'[', code, ..] => *code,
@@ -250,19 +300,24 @@ impl<'a> Stream<'a> {
         let len = self.u32()?;
         if let Some(size) = field_size(element) {
             let bytes = (len as usize).checked_mul(size).ok_or(Error::Truncated)?;
-            self.take(bytes)?;
+            let content = self.take(bytes)?;
+            if element == b'B' {
+                self.handles[handle] = Handle::Data(content);
+                return Ok(Some(content));
+            }
         } else {
             // Every element takes at least one byte, so a huge count runs out of data.
             for _ in 0..len {
                 self.value(element, depth + 1)?;
             }
         }
-        Ok(())
+        Ok(None)
     }
 
-    fn value(&mut self, code: u8, depth: usize) -> Result<(), Error> {
+    /// A field's value. Returns the content of a string or a byte array.
+    fn value(&mut self, code: u8, depth: usize) -> Result<Option<&'a [u8]>, Error> {
         match field_size(code) {
-            Some(size) => self.take(size).map(drop),
+            Some(size) => self.take(size).map(|_| None),
             None if matches!(code, b'[' | b'L') => {
                 let code = self.u8()?;
                 self.content(code, depth)
@@ -298,6 +353,49 @@ mod tests {
             b"com.sun.crypto.provider.SealedObjectForKeyProtector"
         );
         assert_eq!(rest, b"next");
+    }
+
+    #[test]
+    fn gives_the_byte_arrays_and_strings_of_the_top_level_object() {
+        let data = sealed_secret_key();
+        let object = read_object(&data).unwrap();
+        assert_eq!(object.rest, b"");
+        let names: Vec<_> = object
+            .fields
+            .iter()
+            .map(|(name, _)| String::from_utf8_lossy(name).into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            ["encodedParams", "encryptedContent", "paramsAlg", "sealAlg"]
+        );
+        assert_eq!(
+            object.field("encodedParams"),
+            Some(&b"synthetic parameters"[..])
+        );
+        assert_eq!(
+            object.field("encryptedContent"),
+            Some(&b"synthetic test payload, not a secret key"[..])
+        );
+        assert_eq!(
+            object.field("sealAlg"),
+            Some(&b"PBEWithMD5AndTripleDES"[..])
+        );
+        assert_eq!(object.field("missing"), None);
+
+        // A value given by reference is the content it refers to: here the
+        // last string, replaced with a reference to the one before it,
+        // which has the ninth handle.
+        let last = data.len() - (1 + 2 + "PBEWithMD5AndTripleDES".len());
+        let referring = [&data[..last], &[TC_REFERENCE, 0, 0x7e, 0, 8]].concat();
+        let object = read_object(&referring).unwrap();
+        assert_eq!(
+            object.field("sealAlg"),
+            Some(&b"PBEWithMD5AndTripleDES"[..])
+        );
+        // A reference to a class is no content.
+        let to_class = [&data[..last], &[TC_REFERENCE, 0, 0x7e, 0, 0]].concat();
+        assert_eq!(read_object(&to_class).unwrap().field("sealAlg"), None);
     }
 
     #[test]

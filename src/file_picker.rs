@@ -26,10 +26,22 @@ pub(crate) struct FilePicker {
     visible: Vec<usize>,
     selection: ListState,
     error: Option<String>,
+    /// Whether every file is listed, whatever its name: a secret key file
+    /// has no extension of its own.
+    all_files: bool,
 }
 
 impl FilePicker {
     pub(crate) fn new(directory: &Path) -> io::Result<Self> {
+        Self::list(directory, false)
+    }
+
+    /// The same directory, listing every file in it.
+    pub(crate) fn with_all_files(&self) -> io::Result<Self> {
+        Self::list(&self.directory, true)
+    }
+
+    fn list(directory: &Path, all_files: bool) -> io::Result<Self> {
         let directory = crate::canonical_path::canonicalize(directory)?;
         let mut entries = Vec::new();
         for entry in fs::read_dir(&directory)? {
@@ -45,7 +57,7 @@ impl FilePicker {
                     .iter()
                     .any(|supported| name.eq_ignore_ascii_case(supported))
             }) || crate::certificate_file::has_extension(&path);
-            if is_directory || (is_supported && path.is_file()) {
+            if is_directory || ((is_supported || all_files) && path.is_file()) {
                 entries.push(Entry { path, is_directory });
             }
         }
@@ -75,6 +87,7 @@ impl FilePicker {
             filter: String::new(),
             selection,
             error: None,
+            all_files,
         })
     }
 
@@ -193,7 +206,7 @@ impl FilePicker {
         };
 
         if entry.is_directory {
-            *self = Self::new(&entry.path)?;
+            *self = Self::list(&entry.path, self.all_files)?;
         } else if allow_file {
             let path = crate::canonical_path::canonicalize(&entry.path)?;
             if !fs::metadata(&path)?.is_file() {
@@ -210,7 +223,7 @@ impl FilePicker {
 
     fn open_parent(&mut self) -> io::Result<Option<PathBuf>> {
         if let Some(parent) = self.directory.parent() {
-            *self = Self::new(parent)?;
+            *self = Self::list(parent, self.all_files)?;
         }
         Ok(None)
     }
@@ -335,6 +348,7 @@ mod tests {
             filter: String::new(),
             selection: ListState::default().with_selected(Some(1)),
             error: None,
+            all_files: false,
         }
     }
 
@@ -368,6 +382,7 @@ mod tests {
             visible: Vec::new(),
             selection: ListState::default(),
             error: None,
+            all_files: false,
         };
         for key in [KeyCode::Up, KeyCode::Down, KeyCode::Home, KeyCode::End] {
             assert_eq!(press(&mut picker, key), None);

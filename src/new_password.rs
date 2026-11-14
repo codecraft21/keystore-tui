@@ -101,8 +101,13 @@ impl App {
         };
         let purpose = if !document.has_key_passwords() {
             Err("PKCS12 keys share the keystore's password; press p to change it.".into())
-        } else if self.entries[index].kind() != Kind::PrivateKey.label() {
-            Err("Only private keys have a password of their own that can be changed.".into())
+        } else if ![Kind::PrivateKey.label(), Kind::SecretKey.label()]
+            .contains(&self.entries[index].kind())
+        {
+            Err(
+                "Only private and secret keys have a password of their own that can be changed."
+                    .into(),
+            )
         } else {
             document.unlocks_key(index, None).map(|unlocked| {
                 if unlocked {

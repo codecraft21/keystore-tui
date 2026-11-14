@@ -17,7 +17,7 @@ pub(crate) const PRIVATE_KEY_TAG: u32 = 1;
 pub(crate) const TRUSTED_CERT_TAG: u32 = 2;
 pub(crate) const SECRET_KEY_TAG: u32 = 3;
 /// The class Java seals JCEKS secret keys in.
-const SEALED_KEY_CLASS: &[u8] = b"com.sun.crypto.provider.SealedObjectForKeyProtector";
+use crate::secret_key::SEALED_CLASS as SEALED_KEY_CLASS;
 /// Java appends this to the password before hashing the keystore body.
 const WHITENER_MESSAGE: &[u8] = b"Mighty Aphrodite";
 
@@ -174,6 +174,44 @@ impl Writable {
             span.start - 4..span.end,
             length.to_be_bytes().into_iter().chain(key.iter().copied()),
         );
+        Ok(())
+    }
+
+    /// The sealed key of the entry listed at `index`, if it is a secret key:
+    /// the serialized object Java stores, which stays as it is.
+    pub fn sealed_key(&self, index: usize) -> Option<&[u8]> {
+        let entry = &self.entries.get(index)?.1;
+        sealed_key_start(entry).map(|start| &entry[start..])
+    }
+
+    /// Replaces the sealed key of the secret-key entry listed at `index`.
+    /// The rest of the entry, and its place in the file, stay as they were.
+    pub fn set_sealed_key(&mut self, index: usize, sealed: &[u8]) -> Result<(), Error> {
+        let entry = &mut self.entries[index].1;
+        let start = sealed_key_start(entry).ok_or(Error::Invalid("not a secret key entry"))?;
+        entry.truncate(start);
+        entry.extend_from_slice(sealed);
+        Ok(())
+    }
+
+    /// Adds a secret key, already sealed as Java seals keys. It is listed at
+    /// `to` and stored after every other entry. Only JCEKS holds secret
+    /// keys.
+    pub fn insert_secret_key(
+        &mut self,
+        to: usize,
+        alias: &str,
+        sealed: &[u8],
+        created: u64,
+    ) -> Result<(), Error> {
+        if !self.is_jceks() {
+            return Err(Error::Invalid("a JKS keystore cannot hold secret keys"));
+        }
+        let mut entry = SECRET_KEY_TAG.to_be_bytes().to_vec();
+        entry.extend(encode_string(alias)?);
+        entry.extend_from_slice(&created.to_be_bytes());
+        entry.extend_from_slice(sealed);
+        self.insert(to, entry);
         Ok(())
     }
 
@@ -459,6 +497,16 @@ fn protected_key_span(entry: &[u8]) -> Option<Range<usize>> {
     let start = 4 + 2 + alias_len + 8 + 4;
     let length = u32::from_be_bytes(entry[start - 4..start].try_into().unwrap()) as usize;
     Some(start..start + length)
+}
+
+/// Where a stored secret-key entry holds its sealed key, which runs to the
+/// entry's end: after the tag, the alias, and the creation date.
+fn sealed_key_start(entry: &[u8]) -> Option<usize> {
+    if entry[..4] != SECRET_KEY_TAG.to_be_bytes() {
+        return None;
+    }
+    let alias_len = usize::from(u16::from_be_bytes([entry[4], entry[5]]));
+    Some(4 + 2 + alias_len + 8)
 }
 
 /// A string as Java's `DataOutput.writeUTF` writes it: a two-byte length,
@@ -942,6 +990,53 @@ mod tests {
                 [secret("aes"), cert("cert"), secret("hmac"), key("key")]
             );
         }
+    }
+
+    #[test]
+    fn sealed_keys_are_inserted_read_and_replaced_as_stored() {
+        use crate::test_support::sealed_secret_key;
+        let sealed = sealed_secret_key();
+        let mut writable = Writable::empty(true);
+        writable
+            .insert_trusted_certificate(0, "cert", fixture_certificate_der(), 1)
+            .unwrap();
+        writable.insert_secret_key(0, "aes", &sealed, 2).unwrap();
+        assert_eq!(writable.sealed_key(0), Some(sealed.as_slice()));
+        // Other entries, and entries that are not there, have none.
+        assert_eq!(writable.sealed_key(1), None);
+        assert_eq!(writable.sealed_key(2), None);
+        assert_eq!(writable.protected_key(0), None);
+        assert_eq!(writable.created(0), 2);
+        let kinds = |writable: &Writable| -> Vec<_> {
+            load_entries(&writable.encode("changeit"), "changeit")
+                .unwrap()
+                .iter()
+                .map(|entry| (entry.alias.clone(), entry.kind()))
+                .collect()
+        };
+        let listed = [
+            ("aes".to_owned(), "Secret key"),
+            ("cert".to_owned(), "Trusted certificate"),
+        ];
+        assert_eq!(kinds(&writable), listed);
+
+        // Another sealed key takes the place of the first.
+        let mut other = sealed.clone();
+        let last = other.len() - 1;
+        other[last] = b'X';
+        writable.set_sealed_key(0, &other).unwrap();
+        assert_eq!(writable.sealed_key(0), Some(other.as_slice()));
+        assert_eq!(writable.created(0), 2);
+        assert_eq!(kinds(&writable), listed);
+        assert_eq!(
+            writable.set_sealed_key(1, &sealed),
+            Err(Error::Invalid("not a secret key entry"))
+        );
+        // A JKS keystore has no secret keys.
+        assert_eq!(
+            Writable::empty(false).insert_secret_key(0, "aes", &sealed, 1),
+            Err(Error::Invalid("a JKS keystore cannot hold secret keys"))
+        );
     }
 
     #[test]

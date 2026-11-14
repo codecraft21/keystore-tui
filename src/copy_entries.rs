@@ -14,12 +14,25 @@ use crate::{
     key_import::Key,
     keystore::{Content, KeystoreEntry, Kind},
     save::Document,
+    secret_key::SecretKey,
 };
 
 /// What is copied for an entry.
 enum Item {
     Certificate(Vec<u8>),
     Key(Key, Vec<Vec<u8>>),
+    Secret(SecretKey),
+}
+
+/// Why a key that was not recovered cannot be copied, if it was not.
+fn readable(recovered: Result<(), String>) -> Option<&'static str> {
+    match recovered {
+        Ok(()) => None,
+        Err(error) if error.contains("password of its own") => {
+            Some("its key has a password of its own")
+        }
+        Err(_) => Some("its key cannot be read"),
+    }
 }
 
 /// The entries of another keystore, some of them chosen to be copied.
@@ -44,18 +57,16 @@ impl Selection {
                 Content::Certificates {
                     kind: Kind::PrivateKey,
                     ..
-                } => match source.private_key(index) {
-                    Ok(_) => None,
-                    Err(error) if error.contains("password of its own") => {
-                        Some("its key has a password of its own")
-                    }
-                    Err(_) => Some("its key cannot be read"),
-                },
+                } => readable(source.private_key(index).map(drop)),
+                Content::Certificates {
+                    kind: Kind::SecretKey,
+                    ..
+                } => readable(source.secret_key(index).map(drop)),
                 Content::Certificates {
                     kind: Kind::TrustedCertificate | Kind::Certificate,
                     certificates,
                 } if !certificates.is_empty() => None,
-                _ => Some("only certificates and private keys are copied"),
+                _ => Some("it holds no certificate"),
             })
             .collect();
         Self {
@@ -77,6 +88,8 @@ impl Selection {
         if entry.kind() == Kind::PrivateKey.label() {
             let key = self.source.private_key(index)?;
             Ok(Item::Key(key, entry.certificates().to_vec()))
+        } else if entry.kind() == Kind::SecretKey.label() {
+            Ok(Item::Secret(self.source.secret_key(index)?))
         } else {
             Ok(Item::Certificate(entry.certificates()[0].clone()))
         }
@@ -228,6 +241,7 @@ impl App {
                         action: match item {
                             Item::Certificate(certificate) => Action::Import(certificate),
                             Item::Key(key, chain) => Action::ImportKey(key, chain),
+                            Item::Secret(key) => Action::ImportSecret(key),
                         },
                         alias: entry.alias.to_lowercase(),
                     });
@@ -264,6 +278,9 @@ impl App {
                 }
                 Item::Key(key, chain) => {
                     document.import_key_pair(&mut self.entries, alias.clone(), &key, &chain)
+                }
+                Item::Secret(key) => {
+                    document.import_secret_key(&mut self.entries, alias.clone(), &key)
                 }
             });
             match result {
@@ -305,7 +322,7 @@ mod tests {
         };
         let source = Document::jks(Writable::empty(true), "");
         let mut selection = Selection::new("source.jceks".into(), source, vec![entry]);
-        let reason = "only certificates and private keys are copied";
+        let reason = "its key cannot be read";
         assert_eq!(selection.blocked, [Some(reason)]);
         // It is not chosen with the others.
         selection.toggle_all();

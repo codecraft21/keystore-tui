@@ -4,7 +4,12 @@ use std::path::Path;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::{App, certificate_file, generate, key_import::Key, keystore::Content};
+use crate::{
+    App, certificate_file, generate,
+    key_import::Key,
+    keystore::Content,
+    secret_key::{Choice, SecretKey},
+};
 
 /// What the alias being typed is for.
 pub enum Action {
@@ -16,6 +21,10 @@ pub enum Action {
     ImportKey(Key, Vec<Vec<u8>>),
     /// Generate the key pair this filled-in form asks for.
     Generate(Box<generate::Pending>),
+    /// Generate a secret key of this algorithm and size.
+    GenerateSecret(Choice),
+    /// Add this secret key.
+    ImportSecret(SecretKey),
 }
 
 /// The alias being typed for a renamed or imported entry.
@@ -105,7 +114,7 @@ impl App {
         let alias = prompt.alias.to_lowercase();
         let renamed = match prompt.action {
             Action::Rename(index) => Some(index),
-            Action::Import(_) | Action::ImportKey(..) | Action::Generate(_) => None,
+            _ => None,
         };
         if alias.is_empty() {
             return Err("Type an alias, or press Esc to cancel.".into());
@@ -145,6 +154,21 @@ impl App {
                 let message = format!("Imported key pair as '{alias}'.");
                 (
                     document.import_key_pair(&mut self.entries, alias, key, chain),
+                    message,
+                )
+            }
+            Action::GenerateSecret(choice) => {
+                let message = format!("Generated {} secret key '{alias}'.", choice.label());
+                let key = Self::generate_secret(*choice)?;
+                (
+                    document.import_secret_key(&mut self.entries, alias, &key),
+                    message,
+                )
+            }
+            Action::ImportSecret(key) => {
+                let message = format!("Imported secret key as '{alias}'.");
+                (
+                    document.import_secret_key(&mut self.entries, alias, key),
                     message,
                 )
             }

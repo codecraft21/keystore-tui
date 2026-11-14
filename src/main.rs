@@ -25,6 +25,8 @@ mod path_bar;
 mod pkcs12;
 mod revocation_list;
 mod save;
+mod secret_entry;
+mod secret_key;
 mod sign;
 mod sign_form;
 mod signing;
@@ -162,6 +164,12 @@ struct App {
     signing: Option<sign::Signing>,
     /// A revocation list being signed with a private key.
     revoking: Option<sign::Revoking>,
+    /// The algorithm being chosen for a secret key, and whether the file
+    /// browser is choosing a file to read one from.
+    secret_choice: Option<secret_entry::Chooser>,
+    importing_secret: bool,
+    /// The file name being typed for a secret key export.
+    secret_export: Option<secret_entry::SecretExport>,
     /// The result of the last edit or save, and whether it failed. Cleared
     /// on the next key.
     message: Option<(String, bool)>,
@@ -177,6 +185,8 @@ enum Confirm {
     New,
     /// Write the private key at this index unencrypted to this new file.
     ExportPlain(PathBuf, usize),
+    /// Write the secret key at this index, unencrypted, to this new file.
+    ExportSecret(PathBuf, usize),
 }
 
 const NOT_EDITABLE: &str = "Only keystores can be changed, not certificate files.";
@@ -267,6 +277,7 @@ impl App {
                     self.reply = None;
                     self.appending = None;
                     self.signing_request = None;
+                    self.importing_secret = false;
                     self.cancel_key_import();
                 }
             } else if let Some(path) = picker.handle_key(key) {
@@ -277,6 +288,8 @@ impl App {
                     self.append_to_chain(index, &path);
                 } else if let Some(index) = self.signing_request.take() {
                     self.sign_request_file(index, &path);
+                } else if std::mem::take(&mut self.importing_secret) {
+                    self.import_secret_file(&path);
                 } else if std::mem::take(&mut self.importing) {
                     self.import_file(&path);
                 } else {
@@ -291,6 +304,10 @@ impl App {
             self.handle_selection(key);
         } else if self.key_export.is_some() {
             self.handle_key_export(key);
+        } else if self.secret_export.is_some() {
+            self.handle_secret_export(key);
+        } else if self.secret_choice.is_some() {
+            self.handle_secret_choice(key);
         } else if self.unlocking_import() {
             self.handle_import_password(key);
         } else if self.alias_prompt.is_some() {
@@ -332,6 +349,7 @@ impl App {
                 KeyCode::Char('r') if is_text_input(key.modifiers) => self.ask_rename(),
                 KeyCode::Char('i') if is_text_input(key.modifiers) => self.ask_import(),
                 KeyCode::Char('g') if is_text_input(key.modifiers) => self.ask_generate(),
+                KeyCode::Char('G') if is_text_input(key.modifiers) => self.ask_secret_key(),
                 KeyCode::Char('c') if is_text_input(key.modifiers) => self.ask_request(),
                 KeyCode::Char('R') if is_text_input(key.modifiers) => self.ask_reply(),
                 KeyCode::Char('C') if is_text_input(key.modifiers) => self.ask_chain(),
@@ -384,6 +402,7 @@ impl App {
             Confirm::Open => self.open_picker(),
             Confirm::New => self.name_new_keystore(),
             Confirm::ExportPlain(path, index) => self.export_key(&path, index, ""),
+            Confirm::ExportSecret(path, index) => self.export_secret(&path, index),
             Confirm::Delete(index) => {
                 let Some(document) = &mut self.document else {
                     return false;
@@ -495,6 +514,8 @@ impl App {
             || self.new_password.is_some()
             || self.unlocking_import()
             || self.key_export.is_some()
+            || self.secret_export.is_some()
+            || self.secret_choice.is_some()
             || self.copying.is_some()
             || self.generating.is_some()
             || self.chain_menu.is_some()
@@ -668,6 +689,9 @@ impl App {
         self.importing = false;
         self.key_import = None;
         self.key_export = None;
+        self.secret_export = None;
+        self.secret_choice = None;
+        self.importing_secret = false;
         self.copying = None;
         self.generating = None;
         self.generation = None;
@@ -909,6 +933,8 @@ impl App {
                 let alias = &self.entries[index].alias;
                 let title = format!(" Certificate request to sign with '{alias}' ");
                 picker.draw_titled(frame, &title);
+            } else if self.importing_secret {
+                picker.draw_titled(frame, " Secret key file, as bytes or hex digits ");
             } else if self.key_import.is_some() {
                 picker.draw_titled(frame, " Certificate file of the imported key ");
             } else if self.importing {
@@ -996,6 +1022,25 @@ impl App {
                 ]),
                 ".p12 Keystore | .pem Key and certificates | .key .p8 Key only | Enter Next | Ctrl+U Clear | Esc Cancel".into(),
             ]
+        } else if let Some(export) = &self.secret_export {
+            vec![
+                Line::from(vec![
+                    "Export secret key to: ".bold(),
+                    format!("{}_", export.prompt.path).into(),
+                ]),
+                ".hex .txt Hex digits | any other name The key's bytes | Enter Next | Ctrl+U Clear | Esc Cancel".into(),
+            ]
+        } else if let Some(chooser) = &self.secret_choice {
+            let (subject, choice) = chooser.labels();
+            vec![
+                Line::from(vec![subject.bold(), choice.into()]),
+                if chooser.generating() {
+                    "Left/Right Change | Enter Next | i Import from file | Esc Cancel | Ctrl+C Quit"
+                        .into()
+                } else {
+                    "Left/Right Change | Enter Next | Esc Cancel | Ctrl+C Quit".into()
+                },
+            ]
         } else if let Some((file, password)) = self
             .key_import
             .as_ref()
@@ -1016,6 +1061,8 @@ impl App {
                 editing::Action::Import(_) => "Alias for the imported certificate: ".into(),
                 editing::Action::ImportKey(..) => "Alias for the imported key pair: ".into(),
                 editing::Action::Generate(_) => "Alias for the generated key pair: ".into(),
+                editing::Action::GenerateSecret(_) => "Alias for the generated secret key: ".into(),
+                editing::Action::ImportSecret(_) => "Alias for the imported secret key: ".into(),
             };
             vec![
                 Line::from(vec![label.bold(), format!("{}_", prompt.alias).into()]),
@@ -1094,7 +1141,7 @@ impl App {
             vec!["Type to filter | Enter Apply | Esc Clear | Up/Down Scroll | Ctrl+C Quit".into()]
         } else if self.document.is_some() && self.file_picker.is_none() {
             vec![
-                "Keystore: n New | g Generate | i Import | w Save | W Save as | p Password".into(),
+                "Keystore: n New | g Generate | G Secret key | i Import | w Save | W Save as | p Password".into(),
                 "Entry: e Export | c Request | R CA reply | C Chain | S Sign | r Rename | d Delete | P Key password"
                     .into(),
                 LIST.into(),
@@ -1119,6 +1166,10 @@ impl App {
             }
             Confirm::ExportPlain(_, index) => format!(
                 "Write the private key '{}' unencrypted? Press y to write it, any other key to cancel.",
+                self.entries[*index].alias
+            ),
+            Confirm::ExportSecret(_, index) => format!(
+                "Write the secret key '{}' unencrypted? Press y to write it, any other key to cancel.",
                 self.entries[*index].alias
             ),
             Confirm::Open => {
