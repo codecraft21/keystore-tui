@@ -162,6 +162,11 @@ next to the app name, but nothing changes on disk until you save.
   signing. Press `Enter`, then confirm or edit the alias; `Esc` there goes
   back to the form. The new key gets a self-signed certificate and is stored
   under the keystore's password.
+  The key is made in the background: the status bar shows the algorithm,
+  an activity indicator, and the elapsed time, and you can keep browsing,
+  filtering, and viewing details. Editing and saving are unavailable until
+  it is done; quitting or opening another file first asks, since the key
+  pair would be lost.
 - **Make a certificate request:** press `c` on a private key. The form
   starts from the key's certificate; change the subject or the alternative
   names if the request should differ, and choose a purpose to ask for key

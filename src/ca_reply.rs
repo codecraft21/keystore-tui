@@ -38,7 +38,7 @@ impl App {
     /// Opens the file browser to choose the reply for the selected private
     /// key.
     pub(crate) fn ask_reply(&mut self) {
-        if !self.editable() {
+        if !self.changeable() {
             return;
         }
         let (Some(index), Some(document)) = (self.selected_entry(), &self.document) else {

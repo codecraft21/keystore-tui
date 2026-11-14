@@ -73,6 +73,10 @@ All notable changes to keystore-tui are listed here. Versions follow
 - With unsaved changes, `[modified]` is shown next to the app name, and `q`,
   `Esc`, `o`, and `n` ask before discarding them. `Ctrl+C` still quits at once.
 - The keystore password now stays in memory while a keystore is open, because saving needs it. It is wiped when the keystore is closed.
+- Key pairs are generated in the background, so the screen stays responsive
+  during a slow RSA 4096 generation. The status bar shows the algorithm, an
+  activity indicator, and the elapsed time; the keystore is read-only until
+  the key pair is ready.
 
 ## 1.0.5
 
