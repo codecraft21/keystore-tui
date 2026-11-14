@@ -119,8 +119,9 @@ certificates whose names match another certificate or key.
 | `o` | Open another keystore or certificate file |
 | `n` | Create a new, empty JKS, JCEKS, or PKCS12 keystore |
 | `g` | Generate a key pair with a self-signed certificate |
+| `G` | Generate a secret key, or import one from a file (JCEKS and PKCS12) |
 | `i` | Import a trusted certificate, a key pair, or another keystore's entries from a file |
-| `e` | Export the selected private key, alone or with its certificates |
+| `e` | Export the selected private key, alone or with its certificates, or the selected secret key |
 | `c` | Make a certificate request (CSR) for the selected private key |
 | `R` | Import a CA reply: replace the selected private key's certificate chain with the issued one |
 | `C` | Edit the selected private key's certificate chain: append an issuer from a file, or remove the last certificate |
@@ -220,7 +221,18 @@ next to the app name, but nothing changes on disk until you save.
   entries or `a` for all, then `Enter`. Several entries keep their aliases,
   and those whose alias already exists are skipped; a single entry lets you
   edit its alias. Private keys are stored under the open keystore's password.
-  Secret keys and keys with a password of their own are not copied.
+  Secret keys are copied into JCEKS and PKCS12 keystores. Keys with a
+  password of their own are not copied.
+- **Generate a secret key:** in a JCEKS or PKCS12 keystore, press `G`, choose
+  the algorithm with `Left` / `Right` (AES with 128, 192, or 256 bits, or
+  HMAC with SHA-1, SHA-256, SHA-384, or SHA-512), press `Enter`, and confirm
+  or edit the alias.
+- **Import a secret key:** press `G`, then `i`, and choose the file. It holds
+  the key as hex digits or as its bytes, 1 to 1024 of them. Choose the
+  algorithm, then the alias.
+- **Export a secret key:** press `e` on it, edit the file name, and confirm
+  with `y`: the key is written unencrypted. A `.hex` or `.txt` name writes
+  hex digits; any other name writes the key's bytes.
 - **Export a private key:** press `e` on a private key, edit the file name,
   and type a password twice. A `.p12` or `.pfx` name writes a PKCS12 keystore
   with the key and its certificates, a `.pem` name the key followed by its
@@ -234,7 +246,8 @@ next to the app name, but nothing changes on disk until you save.
   `keytool -storepasswd`. In PKCS12, the private and secret keys are re-encrypted
   with the new password too, as Java expects; if a key is protected by another
   password, nothing is changed.
-- **Change a key password:** in JKS and JCEKS, press `P` on a private key. If
+- **Change a key password:** in JKS and JCEKS, press `P` on a private key, or
+  on a JCEKS secret key. If
   the key has a password other than the keystore's, type it first; then type
   the new password twice. JCEKS key passwords must be printable ASCII. PKCS12
   keys always share the keystore's password.
@@ -267,7 +280,8 @@ To convert a keystore to another format, give the new name that format's
 extension: `.jks`, `.jceks`, or `.p12` (or `.pfx`). The converted keystore has
 the same password, for the keystore and for every private key in it, and the
 original file is left as it was. A key with a password of its own must first be
-given the keystore's password with `P`. Secret keys cannot be converted yet.
+given the keystore's password with `P`. Secret keys are converted between
+JCEKS and PKCS12; a keystore holding one cannot become a JKS keystore.
 
 With unsaved changes, `q`, `Esc`, `o`, and `n` ask before discarding them; press `y`
 to go on. `Ctrl+C` quits at once and discards them.

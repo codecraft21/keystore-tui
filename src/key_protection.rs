@@ -64,19 +64,7 @@ pub fn protect(
     rng: &mut impl Rng,
 ) -> Result<Vec<u8>, Error> {
     let info = if jceks {
-        let mut salt = [0; 8];
-        rng.fill_bytes(&mut salt);
-        let (cipher_key, iv) = jceks_key(password, salt, JCEKS_ITERATIONS)?;
-        let mut data = pkcs7_pad(key, 8);
-        let cipher = TripleDes::new(&cipher_key[..]).map_err(|_| Error::Unsupported)?;
-        cipher.to_cbc_enc(&iv).encrypt(&mut data);
-        let parameters = der::sequence(
-            &[
-                der::octet_string(&salt),
-                der::integer(&JCEKS_ITERATIONS.to_be_bytes()),
-            ]
-            .concat(),
-        );
+        let (parameters, data) = jceks_encrypt(key, password, rng)?;
         EncryptedPrivateKeyInfo {
             algorithm: AlgorithmIdentifier::new(object_id(JCEKS_PROTECTOR), Some(parameters)),
             encrypted_data: data,
@@ -95,6 +83,30 @@ pub fn protect(
         }
     };
     Ok(info.encode())
+}
+
+/// Encrypts `plain` with `PBEWithMD5AndTripleDES` under `password` and a
+/// fresh salt from `rng`. Returns the algorithm's parameters, as DER, and
+/// the encrypted data.
+pub(crate) fn jceks_encrypt(
+    plain: &[u8],
+    password: &str,
+    rng: &mut impl Rng,
+) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    let mut salt = [0; 8];
+    rng.fill_bytes(&mut salt);
+    let (cipher_key, iv) = jceks_key(password, salt, JCEKS_ITERATIONS)?;
+    let mut data = pkcs7_pad(plain, 8);
+    let cipher = TripleDes::new(&cipher_key[..]).map_err(|_| Error::Unsupported)?;
+    cipher.to_cbc_enc(&iv).encrypt(&mut data);
+    let parameters = der::sequence(
+        &[
+            der::octet_string(&salt),
+            der::integer(&JCEKS_ITERATIONS.to_be_bytes()),
+        ]
+        .concat(),
+    );
+    Ok((parameters, data))
 }
 
 fn object_id(arcs: &[u64]) -> ObjectIdentifier {
@@ -187,15 +199,15 @@ fn jceks_key(
     Ok((key, iv))
 }
 
-fn recover_jceks(
-    info: &EncryptedPrivateKeyInfo,
+/// Decrypts `data`, encrypted with `PBEWithMD5AndTripleDES` under
+/// `password` and the algorithm's DER `parameters`. A wrong password fails,
+/// except for about 1 in 256, which leaves valid padding: the caller checks
+/// what it gets.
+pub(crate) fn jceks_decrypt(
+    parameters: &[u8],
+    data: &[u8],
     password: &str,
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
-    let parameters = info
-        .algorithm
-        .parameters
-        .as_deref()
-        .ok_or(Error::Unsupported)?;
     let (salt, iterations) = (|| {
         let mut reader = Reader::new(parameters);
         let mut sequence = reader.read_sequence()?;
@@ -209,18 +221,29 @@ fn recover_jceks(
         .ok()
         .filter(|count| (1..=MAX_JCEKS_ITERATIONS).contains(count))
         .ok_or(Error::Unsupported)?;
-    let data = &info.encrypted_data;
     if data.is_empty() || !data.len().is_multiple_of(8) {
         return Err(Error::Unsupported);
     }
     // A password Java could not have used cannot be the right one.
     let (cipher_key, iv) = jceks_key(password, salt, iterations).map_err(|_| Error::Password)?;
-    let mut key = Zeroizing::new(data.clone());
+    let mut plain = Zeroizing::new(data.to_vec());
     let cipher = TripleDes::new(&cipher_key[..]).map_err(|_| Error::Unsupported)?;
-    cipher.to_cbc_dec(&iv).encrypt(&mut key);
-    let key = pkcs7_unpad(&mut key, 8)
+    cipher.to_cbc_dec(&iv).encrypt(&mut plain);
+    pkcs7_unpad(&mut plain, 8)
         .map(Zeroizing::new)
-        .map_err(|_| Error::Password)?;
+        .map_err(|_| Error::Password)
+}
+
+fn recover_jceks(
+    info: &EncryptedPrivateKeyInfo,
+    password: &str,
+) -> Result<Zeroizing<Vec<u8>>, Error> {
+    let parameters = info
+        .algorithm
+        .parameters
+        .as_deref()
+        .ok_or(Error::Unsupported)?;
+    let key = jceks_decrypt(parameters, &info.encrypted_data, password)?;
     // About 1 wrong password in 256 leaves valid padding.
     if crate::pkcs12::is_private_key_info(&key) {
         Ok(key)

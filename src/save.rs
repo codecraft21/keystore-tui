@@ -16,6 +16,7 @@ use crate::{
     key_protection::{self, Error as KeyError},
     keystore::{self, Content, KeystoreEntry, Kind},
     pkcs12,
+    secret_key::{self, SecretKey},
 };
 
 /// An open keystore that can be edited and saved. Its password is kept, to
@@ -105,17 +106,44 @@ impl Document {
         key_protection::recover(protected, password.unwrap_or(store_password))
     }
 
+    /// Recovers the JCEKS secret key listed at `index` with `password`, or
+    /// with the keystore's password when there is none. `None` for any
+    /// other entry.
+    fn sealed_key(
+        &self,
+        index: usize,
+        password: Option<&str>,
+    ) -> Option<Result<SecretKey, KeyError>> {
+        let Self::Jks {
+            writable,
+            password: store_password,
+        } = self
+        else {
+            return None;
+        };
+        let sealed = writable.sealed_key(index)?;
+        Some(secret_key::unseal(
+            sealed,
+            password.unwrap_or(store_password),
+        ))
+    }
+
     /// Whether `password`, or the keystore's password when there is none,
-    /// is the one protecting the private key listed at `index`.
+    /// is the one protecting the private or secret key listed at `index`.
     pub fn unlocks_key(&self, index: usize, password: Option<&str>) -> Result<bool, String> {
-        match self.recover_key(index, password) {
-            Ok(_) => Ok(true),
+        let recovered = match self.sealed_key(index, password) {
+            Some(secret) => secret.map(drop),
+            None => self.recover_key(index, password).map(drop),
+        };
+        match recovered {
+            Ok(()) => Ok(true),
             Err(KeyError::Password) => Ok(false),
             Err(error) => Err(key_error(error)),
         }
     }
 
-    /// Protects the private key listed at `index` with the password `new`.
+    /// Protects the private or secret key listed at `index` with the
+    /// password `new`.
     /// The key is recovered in memory with `current`, or with the keystore's
     /// password when there is none, and wiped once protected again.
     pub fn set_key_password(
@@ -124,6 +152,18 @@ impl Document {
         current: Option<&str>,
         new: &str,
     ) -> Result<(), String> {
+        let failed = |error| format!("The key password was not changed: {error}.");
+        if let Some(secret) = self.sealed_key(index, current) {
+            let secret = secret.map_err(key_error)?;
+            if let Self::Jks { writable, .. } = self {
+                OsRng::default().check()?;
+                let mut rng = OsRng::default();
+                let sealed = secret_key::seal(&secret, new, &mut rng).map_err(key_error)?;
+                rng.check()?;
+                writable.set_sealed_key(index, &sealed).map_err(failed)?;
+            }
+            return Ok(());
+        }
         // Only a JKS or JCEKS document recovers a key.
         let key = self.recover_key(index, current).map_err(key_error)?;
         if let Self::Jks { writable, .. } = self {
@@ -134,7 +174,7 @@ impl Document {
             rng.check()?;
             writable
                 .set_protected_key(index, &protected)
-                .map_err(|error| format!("The key password was not changed: {error}."))?;
+                .map_err(failed)?;
         }
         Ok(())
     }
@@ -292,6 +332,68 @@ impl Document {
         }
     }
 
+    /// Adds the secret key `key` under `alias`, protected with the
+    /// keystore's password, and returns where it is listed.
+    pub fn import_secret_key(
+        &mut self,
+        entries: &mut Vec<KeystoreEntry>,
+        alias: String,
+        key: &SecretKey,
+    ) -> Result<usize, String> {
+        let failed = |error: String| format!("Not added: {error}.");
+        let created = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as u64);
+        OsRng::default().check()?;
+        let mut rng = OsRng::default();
+        match self {
+            Self::Jks { writable, password } => {
+                if !writable.is_jceks() {
+                    return Err(failed(JKS_HOLDS_NO_SECRET_KEYS.into()));
+                }
+                let sealed = secret_key::seal(key, password, &mut rng).map_err(key_error)?;
+                rng.check()?;
+                let to = entries.partition_point(|other| other.alias < alias);
+                writable
+                    .insert_secret_key(to, &alias, &sealed, created)
+                    .map_err(|error| failed(error.to_string()))?;
+                entries.insert(
+                    to,
+                    KeystoreEntry {
+                        alias,
+                        certificate: None,
+                        content: Content::Certificates {
+                            kind: Kind::SecretKey,
+                            certificates: vec![],
+                        },
+                        chain_warning: None,
+                    },
+                );
+                Ok(to)
+            }
+            Self::Pkcs12(writable) => {
+                if writable.password().is_empty() {
+                    return Err(failed(
+                        "a key needs a keystore password that is not empty; change the password first (p)"
+                            .into(),
+                    ));
+                }
+                let wrapped = secret_key::to_pkcs8(key).ok_or_else(|| {
+                    failed(format!(
+                        "PKCS12 has no name for the algorithm '{}'",
+                        key.algorithm
+                    ))
+                })?;
+                let listed = writable
+                    .insert_secret_key(&alias, &wrapped, created, &mut rng)
+                    .map_err(|error| failed(error.to_owned()))?;
+                rng.check()?;
+                *entries = listed;
+                Ok(listed_at(entries, &alias))
+            }
+        }
+    }
+
     /// Replaces the certificate chain of the private key listed at `index`
     /// with `chain`, leaf first, and returns where the entry is listed. The
     /// key itself is not touched.
@@ -434,12 +536,19 @@ impl Document {
                     kind: Kind::TrustedCertificate | Kind::Certificate,
                     ..
                 } => None,
-                _ => {
+                _ => None,
+            };
+            let secret = match entry.kind() == Kind::SecretKey.label() {
+                true if target == Format::Jks => {
                     return Err(format!(
-                        "Not converted: the secret key '{}' cannot be converted yet.",
+                        "Not converted: the secret key '{}' stops it, because {JKS_HOLDS_NO_SECRET_KEYS}.",
                         entry.alias
                     ));
                 }
+                true => Some(self.secret_key(index).map_err(|error| {
+                    format!("Not converted: the secret key '{}' {error}.", entry.alias)
+                })?),
+                false => None,
             };
             // JKS and JCEKS look aliases up in lower case.
             let alias = if to_java {
@@ -455,6 +564,7 @@ impl Document {
             expected.push(Converted {
                 alias,
                 key,
+                secret,
                 certificates: entry.certificates().to_vec(),
             });
         }
@@ -471,6 +581,13 @@ impl Document {
             let jceks = target == Format::Jceks;
             let mut writable = keystore::Writable::empty(jceks);
             for (index, entry) in expected.iter().enumerate() {
+                if let Some(secret) = &entry.secret {
+                    let sealed = secret_key::seal(secret, password, &mut rng).map_err(key_error)?;
+                    writable
+                        .insert_secret_key(index, &entry.alias, &sealed, created(index))
+                        .map_err(|error| failed(error.to_string()))?;
+                    continue;
+                }
                 match &entry.key {
                     Some(key) => {
                         let protected = key_protection::protect(key, password, jceks, &mut rng)
@@ -501,7 +618,19 @@ impl Document {
                 ));
             }
             let mut writable = pkcs12::Writable::empty(password);
-            for entry in &expected {
+            for (index, entry) in expected.iter().enumerate() {
+                if let Some(secret) = &entry.secret {
+                    let wrapped = secret_key::to_pkcs8(secret).ok_or_else(|| {
+                        failed(format!(
+                            "PKCS12 has no name for the algorithm '{}' of the secret key '{}'",
+                            secret.algorithm, entry.alias
+                        ))
+                    })?;
+                    writable
+                        .insert_secret_key(&entry.alias, &wrapped, created(index), &mut rng)
+                        .map_err(|error| failed(error.to_owned()))?;
+                    continue;
+                }
                 match &entry.key {
                     Some(key) => writable.insert_private_key(
                         &entry.alias,
@@ -526,10 +655,15 @@ impl Document {
                 .enumerate()
                 .map(|(index, entry)| {
                     let is_key = entry.kind() == Kind::PrivateKey.label();
+                    let is_secret = entry.kind() == Kind::SecretKey.label();
                     Some(Converted {
                         alias: entry.alias.clone(),
                         key: match is_key {
                             true => Some(document.private_key(index).ok()?),
+                            false => None,
+                        },
+                        secret: match is_secret {
+                            true => Some(document.secret_key(index).ok()?),
                             false => None,
                         },
                         certificates: entry.certificates().to_vec(),
@@ -566,6 +700,25 @@ impl Document {
         }
     }
 
+    /// The secret key listed at `index`, recovered in memory with the
+    /// keystore's password.
+    pub(crate) fn secret_key(&self, index: usize) -> Result<SecretKey, String> {
+        match self {
+            Self::Jks { .. } => match self.sealed_key(index, None) {
+                Some(Ok(key)) => Ok(key),
+                Some(Err(KeyError::Password)) => Err(
+                    "has a password of its own; give it the keystore's password first (P)".into(),
+                ),
+                Some(Err(_)) => Err("is sealed in a way that is not supported".into()),
+                None => Err("is not a secret key".into()),
+            },
+            Self::Pkcs12(writable) => writable
+                .secret_key(index)
+                .and_then(|wrapped| secret_key::from_pkcs8(&wrapped))
+                .ok_or_else(|| "could not be decrypted with the keystore's password".into()),
+        }
+    }
+
     /// The PKCS #8 encoding of the private key listed at `index`, recovered
     /// in memory with the keystore's password.
     pub(crate) fn private_key(&self, index: usize) -> Result<Zeroizing<Vec<u8>>, String> {
@@ -586,12 +739,17 @@ impl Document {
     }
 }
 
+const JKS_HOLDS_NO_SECRET_KEYS: &str =
+    "a JKS keystore cannot hold secret keys; save it as JCEKS or PKCS12 first (W)";
+
 /// What an entry is in a converted keystore: its alias, its private key if
-/// it has one, as PKCS #8, and its certificates.
+/// it has one, as PKCS #8, its secret key if it is one, and its
+/// certificates.
 #[derive(PartialEq)]
 struct Converted {
     alias: String,
     key: Option<Zeroizing<Vec<u8>>>,
+    secret: Option<SecretKey>,
     certificates: Vec<Vec<u8>>,
 }
 

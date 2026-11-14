@@ -27,6 +27,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Importing a CA reply](#importing-a-ca-reply)
   - [Editing a certificate chain](#editing-a-certificate-chain)
   - [Signing certificates](#signing-certificates)
+  - [Secret keys](#secret-keys)
   - [Copying entries from another keystore](#copying-entries-from-another-keystore)
   - [Exporting private keys](#exporting-private-keys)
   - [Changing the password](#changing-the-password)
@@ -62,9 +63,11 @@ document and the usage reference, and also the README if its overview changes.
   and revocation lists a private key signs (see [Signing
   certificates](#signing-certificates)).
 - It runs without Java or `keytool` installed.
-- Private and secret keys are never displayed. A private key is written
-  unencrypted only by an export that the user confirms; see [Exporting
-  private keys](#exporting-private-keys). Otherwise keys are decrypted only in
+- Private and secret keys are never displayed. A private or secret key is
+  written unencrypted only by an export that the user confirms; see
+  [Exporting private keys](#exporting-private-keys) and [Secret
+  keys](#secret-keys). A secret key is made or read from a file only in
+  memory, and is encrypted with the keystore's password at once. Otherwise keys are decrypted only in
   memory, and only to encrypt them again: when a PKCS12 keystore's password changes (see [Changing the
   password](#changing-the-password)), when a JKS or JCEKS key's password
   changes (see [Changing a key password](#changing-a-key-password)), when
@@ -130,7 +133,8 @@ any existing incomplete-entry warnings.
 - It lists directories, then files whose extension is `.jks`, `.jceks`, `.p12`,
   `.pfx`, `.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`, `.csr`, `.p10`,
   `.crl`, `.key`, or `.p8` (case-insensitive). The last two are private key files,
-  listed for [importing key pairs](#importing-key-pairs). It also lists the Java truststore names `cacerts` and
+  listed for [importing key pairs](#importing-key-pairs). When it chooses a
+  [secret key file](#secret-keys), it lists every file. It also lists the Java truststore names `cacerts` and
   `jssecacerts`, case-insensitively. Directories come first.
 - Paths are shown as users type them: on Windows, without the verbatim `\\?\`
   prefix (`C:\certs`, not `\\?\C:\certs`), unless a path needs it, such as
@@ -193,8 +197,9 @@ any existing incomplete-entry warnings.
   [JKS compatibility](#jks-compatibility-matching-java) applies to it.
 - It adds secret-key entries, shown as `Secret key`. Java stores each one as a
   serialized `SealedObject` without a length, so the app walks the Java
-  serialization grammar to find where it ends. The sealed key is never
-  decrypted or deserialized, and no class is loaded.
+  serialization grammar to find where it ends. No class is loaded, and the
+  sealed key is not decrypted to list it; see [Secret keys](#secret-keys)
+  for when it is.
 - A secret key that is not a `com.sun.crypto.provider.SealedObjectForKeyProtector`,
   uses serialization features Java does not write for sealed keys (enums, proxy
   classes, externalizable objects, resets, or exceptions), or nests more than 32
@@ -343,8 +348,8 @@ any existing incomplete-entry warnings.
 ### Deleting entries
 
 - JKS, JCEKS, and PKCS12 keystores can be changed. In the entry list of one,
-  two lines above the shortcuts show `Keystore: n New | g Generate | i Import
-  | w Save | W Save as | p Password` and `Entry: e Export | c Request | R
+  two lines above the shortcuts show `Keystore: n New | g Generate | G Secret
+  key | i Import | w Save | W Save as | p Password` and `Entry: e Export | c Request | R
   CA reply | C Chain | S Sign | r Rename | d Delete | P Key password`.
 - `d` or `Delete` asks, in yellow, `Delete entry '<alias>'?` for the selected
   entry. `y` deletes it; any other key cancels and does nothing else. The
@@ -747,6 +752,70 @@ any existing incomplete-entry warnings.
 - In a terminal smaller than the form, a resize hint is shown instead; `Esc`
   and `Ctrl+C` still work.
 
+### Secret keys
+
+- JCEKS and PKCS12 keystores hold secret keys. In a JKS keystore, `G` shows a
+  red message saying that it cannot hold them and how to convert it.
+- **Generating.** `G` shows `New secret key: < AES (256 bits) >` above `Left/Right
+  Change | Enter Next | i Import from file | Esc Cancel | Ctrl+C Quit`.
+  `Left` and `Right` go through `AES` with 128, 192, and 256 bits, then
+  `HmacSHA1` (160 bits), `HmacSHA256` (256), `HmacSHA384` (384), and
+  `HmacSHA512` (512), wrapping at either end. Every other key, including
+  `q`, does nothing; `Esc` adds nothing and `Ctrl+C` still quits.
+- `Enter` asks `Alias for the generated secret key:`, suggesting the
+  algorithm's name in lower case, under the rules of the [rename
+  prompt](#renaming-entries). The key is that many random bits from the
+  operating system. A green message such as `Generated AES (256 bits) secret
+  key '<alias>'.` names it.
+- **Importing.** `i` in that choice opens the file browser, titled `Secret key
+  file, as bytes or hex digits`, which lists every file here, whatever its
+  name. `Esc` gives up.
+- A file holding only hex digits, an even number of them, with or without
+  spaces, colons, and line breaks, gives the key those digits spell. Any
+  other file gives its content as the key. A key is 1 to 1024 bytes long; a
+  file with another length is refused in red.
+- The choice then reads `Secret key from '<file name>':` and offers the
+  algorithms that take a key of that length: `AES` first when it is 16, 24, or
+  32 bytes long, then the four HMAC algorithms. It has no `i`. `Enter` asks
+  `Alias for the imported secret key:`, suggesting the file's name without
+  its extension, in lower case; a green message names the new entry.
+- A new secret key is listed in alias order and selected, with `-` in the
+  certificate columns. It is protected with the keystore's password, as below,
+  and the plain key is wiped from memory. Nothing is written until the
+  keystore is saved.
+- **JCEKS** stores the key as Java does: a `javax.crypto.spec.SecretKeySpec`
+  holding the algorithm's name and the key's bytes, serialized, encrypted
+  with `PBEWithMD5AndTripleDES` under a new 8-byte salt and 200,000
+  iterations, and sealed in a serialized
+  `com.sun.crypto.provider.SealedObjectForKeyProtector`. The password must be
+  printable ASCII, as for a [key password](#changing-a-key-password).
+- **PKCS12** stores the key as Java does: a secret bag holding a PKCS #8
+  structure with the algorithm's object identifier and the key's bytes,
+  encrypted like a [private key](#writing-pkcs12-keystores) with the
+  keystore's password, which must not be empty. The bag has the alias as its
+  friendly name and a local key ID of `Time <milliseconds>`.
+- A secret key is read back only in these forms. In JCEKS, another sealed
+  class, another sealing algorithm, or a sealed object that is not a
+  `SecretKeySpec` is reported as sealed in a way that is not supported. In
+  PKCS12, the algorithms named are AES, the HMAC algorithms with SHA-1,
+  SHA-224, SHA-256, SHA-384, and SHA-512, DES, and DESede; another one keeps
+  its object identifier as its name.
+- **Exporting.** `e` on a secret key asks `Export secret key to:`, suggesting
+  `<alias>.bin` next to the opened file, as an [export](#exporting) does. A
+  key that the keystore's password does not recover is not exported: a red
+  message says why.
+- `Enter` then asks, in yellow, `Write the secret key '<alias>' unencrypted?`;
+  only `y` writes it. A `.hex` or `.txt` name (case-insensitive) writes the
+  key as lower-case hex digits on one line; any other name writes the key's
+  bytes. The file is new and is never replaced; on Unix only its owner can
+  read or write it. A green message names the algorithm, the entry, the key's
+  size, and the file. The keystore is not changed.
+- A secret key takes part in the other edits: a JCEKS secret key has a
+  password of its own that `P` [changes](#changing-a-key-password), secret
+  keys are [converted](#converting-a-keystore) between JCEKS and PKCS12, and
+  they are [copied](#copying-entries-from-another-keystore) from another
+  keystore.
+
 ### Copying entries from another keystore
 
 - A JKS, JCEKS, or PKCS12 keystore chosen with `i` is a source to copy entries
@@ -761,8 +830,9 @@ any existing incomplete-entry warnings.
   drops it, shown as `[x]`; `a` chooses every entry that can be copied, or
   none when they all are chosen. `Esc` cancels, and `q` does nothing.
 - Entries that cannot be copied are greyed, marked `[-]`, and followed by the
-  reason: secret keys, and private keys that the source's password does not
-  unlock or that are not in PKCS #8 form. An entry whose alias the open
+  reason: private keys that the source's password does not
+  unlock or that are not in PKCS #8 form, and secret keys that it does not
+  recover. A secret key is copied only into a JCEKS or PKCS12 keystore. An entry whose alias the open
   keystore already has, ignoring case, is followed by `(alias exists)`.
 - `Enter` imports the chosen entries, or the highlighted one when none is
   chosen:
@@ -860,10 +930,12 @@ any existing incomplete-entry warnings.
 - The change counts as a modification and reaches the file on saving, where
   only the protected key changes: the entry keeps its alias, creation date,
   certificate chain, and place in the file. A green message names the key.
+- A JCEKS secret key has a password in the same way: it is unsealed in
+  memory, sealed again under the new password with a new salt, and wiped.
 - `P` shows a red message, and changes nothing, for an entry that is not a
-  private key, for a key whose protection the app cannot read, for a PKCS12
+  private or secret key, for a key whose protection the app cannot read, for a PKCS12
   keystore, whose keys share the keystore's password, and where the keystore
-  cannot be changed. JCEKS secret keys are not supported yet.
+  cannot be changed.
 - The keystore's own password is not affected, and changing it does not
   change key passwords.
 
@@ -974,7 +1046,8 @@ any existing incomplete-entry warnings.
 - The conversion is refused, with a red message and the prompt left open,
   when a key has a password other than the keystore's (change it first with
   `P`), when a key's protection is not supported or the key is not PKCS #8,
-  when the keystore holds a secret key, when two aliases would be the same in
+  when a secret key would go to JKS, which holds none, or to PKCS12 under an
+  algorithm it has no name for, when two aliases would be the same in
   lower case, when the target is PKCS12 and the password is empty, when the
   target is JCEKS and the password is not printable ASCII, or when the file
   already exists.

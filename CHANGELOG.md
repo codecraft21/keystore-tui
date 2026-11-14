@@ -52,6 +52,11 @@ All notable changes to keystore-tui are listed here. Versions follow
   choosing the validity, the serial number, and which requested extensions
   to copy, or `g` to generate a key pair whose certificate that key signs.
   A signer whose certificate is not a CA's gives a warning.
+- Secret keys in JCEKS and PKCS12 keystores: press `G` to generate an AES or
+  HMAC key, or to import one from a file of hex digits or raw bytes, and `e`
+  to export one, unencrypted, after a confirmation. Secret keys are now also
+  converted between JCEKS and PKCS12, copied from another keystore, and, in
+  JCEKS, given a password of their own with `P`.
 - Sign a certificate revocation list with `S`, then `l`: type the revoked
   serial numbers, with a reason if you like, the two update times, and the
   CRL number. The list is saved to a new `.crl` file.

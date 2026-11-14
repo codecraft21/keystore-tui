@@ -44,9 +44,8 @@ Done: all five items. PKCS12 keys are re-encrypted when the keystore
 password changes, a JKS or JCEKS private key's own password can be changed, a
 keystore converts between JKS, JCEKS, and PKCS12, a key pair is imported
 from a PEM or PKCS #8 file, a private key is exported to PKCS12, PEM, or
-PKCS #8, and entries are copied from another keystore. Still open for items
-7, 10, and 11: JCEKS and
-PKCS12 secret keys, which need Java's sealed-object format. Still open for
+PKCS #8, and entries are copied from another keystore; all of this covers
+secret keys too. Still open for
 items 8 and 9: OpenSSL's older PEM formats, which are the encrypted one on
 import and the `RSA PRIVATE KEY` and `EC PRIVATE KEY` ones on export.
 
@@ -76,9 +75,10 @@ Done: all four items.
 
 ### Tier 4: certificate authority and niche features
 
-Done: items 16, 18, and 19. A signed request is saved as PEM or DER; a
+Done: all four items. A signed request is saved as PEM or DER; a
 PKCS #7 (`.p7b`) reply is not written. Revocation lists are also opened for
-reading; their signature is not checked. Still open: item 17.
+reading; their signature is not checked. Secret keys are generated,
+imported from a file of hex digits or raw bytes, and exported the same way.
 
 16. **Sign a certificate signing request** with a key-pair entry, and **sign a
     new key pair** with an existing one.

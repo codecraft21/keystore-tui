@@ -625,6 +625,54 @@ impl Writable {
         decrypt_info(info, &self.password)
     }
 
+    /// The PKCS #8 structure around the secret key listed at `index`,
+    /// decrypted in memory with the store's password, or `None` if that
+    /// fails or the entry is not a secret key as Java stores one.
+    pub fn secret_key(&self, index: usize) -> Option<Zeroizing<Vec<u8>>> {
+        let bag = &self.bags[*self.sources[index].first()?];
+        let Bag::Secret { oid: kind, value } = &bag.bag else {
+            return None;
+        };
+        decrypt_info(&secret_info(kind, value)?, &self.password)
+    }
+
+    /// Adds a secret key, given in its PKCS #8 structure, and returns the
+    /// new listing. The key is encrypted with the store's password, as Java
+    /// expects, in a safe that is not encrypted again. Like Java, it gets a
+    /// local key ID made of the time `created`, in milliseconds since the
+    /// Unix epoch.
+    pub fn insert_secret_key(
+        &mut self,
+        alias: &str,
+        key: &[u8],
+        created: u64,
+        rng: &mut impl Rng,
+    ) -> Result<Vec<KeystoreEntry>, WriteError> {
+        let encrypted = encrypt_key(key, &self.password, rng)?;
+        let id = format!("Time {created}");
+        let attributes = vec![
+            friendly_name_attribute(alias),
+            attribute(
+                oid::OID_PKCS9_LOCAL_KEY_ID,
+                &der::octet_string(id.as_bytes()),
+            ),
+        ];
+        let safe = match self.safes.iter().position(|&encrypted| !encrypted) {
+            Some(safe) => safe,
+            None => {
+                self.safes.push(false);
+                self.safes.len() - 1
+            }
+        };
+        self.push_bag(
+            oid::OID_PKCS12_SECRET_BAG,
+            &secret_value(&encrypted),
+            attributes,
+            safe,
+        )?;
+        Ok(self.relist())
+    }
+
     /// Protects the store with `password` from now on. Java expects keys to
     /// be encrypted with the store's password, so each key is decrypted in
     /// memory with the current password and encrypted again with the new
@@ -979,12 +1027,8 @@ fn reencrypt_key(
     let secret;
     let (info, is_secret) = match bag {
         Bag::ShroudedKey(info) => (info, false),
-        Bag::Secret { oid: kind, value } if kind.matches(oid::OID_PKCS12_SHROUDED_KEY_BAG) => {
-            secret = Reader::new(value)
-                .read_explicit(0)
-                .and_then(|mut value| value.read_octet_string_owned())
-                .and_then(|der| EncryptedPrivateKeyInfo::parse(&der))
-                .map_err(|_| UNSUPPORTED_KEY)?;
+        Bag::Secret { oid: kind, value } => {
+            secret = secret_info(kind, value).ok_or(UNSUPPORTED_KEY)?;
             (&secret, true)
         }
         _ => return Err(UNSUPPORTED_KEY),
@@ -1009,19 +1053,35 @@ fn reencrypt_key(
     .map_err(|_| UNSUPPORTED_KEY)?
     .encode();
     Ok(if is_secret {
-        der::explicit(
-            0,
-            &der::sequence(
-                &[
-                    der::oid(&object_id(oid::OID_PKCS12_SHROUDED_KEY_BAG)),
-                    der::explicit(0, &der::octet_string(&encrypted)),
-                ]
-                .concat(),
-            ),
-        )
+        der::explicit(0, &secret_value(&encrypted))
     } else {
         der::explicit(0, &encrypted)
     })
+}
+
+/// The encrypted PKCS #8 structure in a secret bag of type `kind` with
+/// `value`, as Java stores a secret key. `None` for any other secret.
+fn secret_info(kind: &ObjectIdentifier, value: &[u8]) -> Option<EncryptedPrivateKeyInfo> {
+    if !kind.matches(oid::OID_PKCS12_SHROUDED_KEY_BAG) {
+        return None;
+    }
+    Reader::new(value)
+        .read_explicit(0)
+        .and_then(|mut value| value.read_octet_string_owned())
+        .and_then(|der| EncryptedPrivateKeyInfo::parse(&der))
+        .ok()
+}
+
+/// A secret bag's value around the encoded, encrypted PKCS #8 structure
+/// `encrypted`.
+fn secret_value(encrypted: &[u8]) -> Vec<u8> {
+    der::sequence(
+        &[
+            der::oid(&object_id(oid::OID_PKCS12_SHROUDED_KEY_BAG)),
+            der::explicit(0, &der::octet_string(encrypted)),
+        ]
+        .concat(),
+    )
 }
 
 /// Whether `content` has the shape of a PKCS #8 `PrivateKeyInfo`: a version,
@@ -2281,6 +2341,56 @@ mod tests {
             &[synthetic_pkcs8(b"key"), vec![0]].concat(),
         ] {
             assert!(!is_private_key_info(content));
+        }
+    }
+
+    #[test]
+    fn inserted_secret_keys_are_stored_as_java_stores_them() {
+        let wrapped = synthetic_pkcs8(b"synthetic secret");
+        let mut writable = Writable::empty("changeit");
+        // A store whose only safe is encrypted gets a plain one for keys.
+        writable.safes = vec![true];
+        let mut rng = TestRng(0);
+        let entries = writable
+            .insert_secret_key("aes", &wrapped, 1_700_000_000_000, &mut rng)
+            .unwrap();
+        assert_eq!(writable.safes, [true, false]);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            (entries[0].alias.as_str(), entries[0].kind()),
+            ("aes", "Secret key")
+        );
+        assert_eq!(writable.secret_key(0).unwrap().as_slice(), wrapped);
+        assert!(writable.private_key(0).is_none());
+        // Java names the key and gives it the time as its local key ID.
+        let data = writable.encode(&mut rng).unwrap();
+        assert!(contains(&data, b"Time 1700000000000"));
+        let (entries, read) = open(&data, "changeit");
+        assert_eq!(entries[0].kind(), "Secret key");
+        assert_eq!(read.secret_key(0).unwrap().as_slice(), wrapped);
+
+        // Another kind of secret, a key under another password, and a
+        // private key are not secret keys to read.
+        let secret = |kind: &[u64], value: Vec<u8>| SafeBag {
+            bag: Bag::Secret {
+                oid: ObjectIdentifier::new(kind).unwrap(),
+                value,
+            },
+            attributes: vec![friendly_name("secret")],
+        };
+        let other_password = encrypted_key(&wrapped, b"other", false).encode();
+        let bags = vec![
+            secret(&[1, 2, 3, 4], der::explicit(0, &der::octet_string(b"raw"))),
+            secret(
+                oid::OID_PKCS12_SHROUDED_KEY_BAG,
+                der::explicit(0, &der::octet_string(&other_password)),
+            ),
+            shrouded_key(vec![friendly_name("key")]),
+        ];
+        let (entries, read) = open(&synthetic(bags), "changeit");
+        assert_eq!(entries.len(), 3);
+        for index in 0..3 {
+            assert!(read.secret_key(index).is_none(), "{index}");
         }
     }
 

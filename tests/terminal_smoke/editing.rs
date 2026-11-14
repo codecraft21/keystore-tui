@@ -324,7 +324,10 @@ fn generate_key_pair_save_and_quit_restores_terminal() {
     let original = empty_password_fixture();
     fs::write(&path, &original).unwrap();
     let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
-    app.expect(&["root-cert", "Keystore: n New | g Generate | i Import"]);
+    app.expect(&[
+        "root-cert",
+        "Keystore: n New | g Generate | G Secret key | i Import",
+    ]);
     app.send(b"g");
     app.expect(&["Generate key pair", "< EC P-256 >", "Left/Right Change"]);
     // Three steps right of EC P-256 is Ed25519.
@@ -628,6 +631,57 @@ fn sign_revocation_list_read_it_back_and_quit_restores_terminal() {
     ]);
     app.send(b"\x1b[F"); // End scrolls to the revoked certificates.
     app.expect(&["Serial Number: 0x01A4", "Reason Code: keyCompromise"]);
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Secret keys](../../docs/SPEC.md#secret-keys),
+/// [Creating a keystore](../../docs/SPEC.md#creating-a-keystore),
+/// [Saving](../../docs/SPEC.md#saving),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn generate_and_export_secret_key_then_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let mut app = PtyApp::spawn(directory.path(), &[]);
+    app.expect(&["No keystore selected"]);
+    app.send(b"n");
+    app.expect(&["New keystore file"]);
+    app.send(b"\x15q.p12\r");
+    app.expect(&["Password for the new keystore:"]);
+    app.send(b"smoke-pw\rsmoke-pw\r");
+    app.expect(&["Created the PKCS12 keystore", "G Secret key"]);
+
+    app.send(b"G");
+    app.expect(&["New secret key: < AES (256 bits) >", "i Import from file"]);
+    // `q` is not a quit here, and does nothing.
+    app.send(b"q\x1b[D");
+    app.expect(&["< AES (192 bits) >"]);
+    assert_eq!(app.exited(), None);
+    app.send(b"\r");
+    app.expect(&["Alias for the generated secret key: aes_"]);
+    app.send(b"\r");
+    app.expect(&[
+        "Generated AES (192 bits) secret key 'aes'.",
+        "Secret key",
+        "[modified]",
+    ]);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+
+    app.send(b"e");
+    app.expect(&["Export secret key to:", ".hex .txt Hex digits"]);
+    app.send(b"\x15q.hex\r");
+    app.expect(&["Write the secret key 'aes' unencrypted?"]);
+    app.send(b"y");
+    app.expect(&["Exported the AES secret key 'aes' (192 bits) to"]);
+    let exported = fs::read_to_string(directory.join("q.hex")).unwrap();
+    assert_eq!(exported.trim_end().len(), 48);
+    assert!(
+        exported
+            .trim_end()
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    );
     app.send(b"q");
     app.assert_restored();
 }

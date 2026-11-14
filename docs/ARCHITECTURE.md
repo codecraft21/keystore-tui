@@ -11,7 +11,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/chain_edit.rs` | Editing a private key's chain: the append-or-remove question, checking that a certificate issued the chain's last one, and replacing the chain |
 | `src/revocation_list.rs` | Certificate revocation lists, read for display: issuer, update times, extensions, and revoked certificates |
 | `src/certificate_request.rs` | PKCS#10 certificate requests: fields, requested extensions, and attributes |
-| `src/file_picker.rs` | The keystore file browser |
+| `src/file_picker.rs` | The keystore file browser, which can also list every file |
 | `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |
 | `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
 | `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate or a key pair under the typed alias |
@@ -30,7 +30,9 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/save.rs` | The open keystore's writable form and password, converting it to another format, the "save as" and new-keystore name prompt, and replacing a file atomically |
 | `src/keystore.rs` | JKS and JCEKS parsing, integrity check (SHA-1), and writing entries back as stored, renamed, added, or with another certificate chain; the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
 | `src/key_protection.rs` | Java's password protection of private keys in JKS (SHA-1 keystream) and JCEKS (`PBEWithMD5AndTripleDES`): recovering a key and protecting it again |
-| `src/java_serialization.rs` | Skipping a serialized Java object (a JCEKS secret key) without deserializing it |
+| `src/java_serialization.rs` | Walking a serialized Java object (a JCEKS secret key) without deserializing it, and giving the byte arrays and strings it holds |
+| `src/secret_key.rs` | Secret keys as the keystores hold them: sealing and unsealing Java's JCEKS `SealedObject`, the PKCS #8 structure of PKCS12, the algorithms offered, and reading a key from a file's content |
+| `src/secret_entry.rs` | Secret-key entries: choosing the algorithm of a new or imported key, reading a key file, and exporting a key to a new file |
 | `src/pkcs12.rs` | PKCS12 parsing, MAC verification, and decryption of safe contents (AES and legacy PBE); listing entries from bags; editing bags, re-encrypting keys for a new password, and writing bags back with PBES2 and a new MAC |
 | `src/entry_list.rs` | Entry-list filtering, sorting, and expiry classification |
 | `src/certificate.rs` | X.509 summary (subject, algorithm, key size, expiry) for the entry table |

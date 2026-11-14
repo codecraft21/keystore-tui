@@ -49,11 +49,12 @@ revocation lists (`.crl`).
   key pair, or a revocation list with a private key, edit a certificate chain, import a trusted certificate
   or a key pair (PEM or PKCS #8), copy entries from another keystore, export
   a private key with or
-  without its certificates, rename or delete an entry, or change the keystore password or a key's
+  without its certificates, generate, import, or export an AES or HMAC secret key, rename or delete an entry, or change the keystore password or a key's
   password.
 - Converts a keystore between JKS, JCEKS, and PKCS12, private keys included. Nothing changes on disk until you save, and saving
   replaces the file in one step.
-- Safe and self-contained: it never displays or exports private keys, and
+- Safe and self-contained: it never displays private or secret keys, writes
+  one unencrypted only after you confirm it, and
   does not need Java or `keytool`.
 
 ## Install
@@ -92,14 +93,14 @@ certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
   making a certificate request for a private key, importing a CA's reply, signing a certificate request,
   a new key pair, or a revocation list, editing a certificate chain,
   importing a trusted certificate, a key pair, or
-  another keystore's entries, exporting a private key, renaming or deleting
-  an entry, and changing passwords. Secret
-  keys cannot change their password, be converted, copied, or exported. More editing is planned for release 1.1; see the
-  [roadmap](docs/ROADMAP.md).
+  another keystore's entries, exporting a private key, generating, importing, or exporting
+  a secret key, renaming or deleting
+  an entry, and changing passwords. See the
+  [roadmap](docs/ROADMAP.md) for what is left.
 - PKCS12 keystores are saved with AES-256 and HMAC-SHA256, which Java 8 builds
   before 8u301 cannot read.
-- Private keys are not shown or exported yet. They are decrypted only in
-  memory, to protect them again under a new password.
+- Private and secret keys are never shown. They are decrypted only in
+  memory, to sign, to export, or to protect them again.
 - Clipboard actions are not available yet.
 - PKCS12 integrity checks do not support PBMAC1 MACs.
 - Files larger than 64 MiB are refused.

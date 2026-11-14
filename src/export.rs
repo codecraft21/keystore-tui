@@ -24,6 +24,8 @@ pub enum Scope {
     PublicKey,
     /// A certificate revocation list.
     Crl,
+    /// A secret key, as its bytes or as hex digits.
+    SecretKey,
 }
 
 impl Scope {
@@ -35,6 +37,7 @@ impl Scope {
             Self::KeyPair => "key pair",
             Self::PublicKey => "public key",
             Self::Crl => "revocation list",
+            Self::SecretKey => "secret key",
         }
     }
 
@@ -45,6 +48,7 @@ impl Scope {
             Self::Request => "csr",
             Self::KeyPair => "p12",
             Self::Crl => "crl",
+            Self::SecretKey => "bin",
         }
     }
 
@@ -55,6 +59,7 @@ impl Scope {
             Self::Request => "request",
             Self::KeyPair => "key",
             Self::Crl => "revocation-list",
+            Self::SecretKey => "secret-key",
         }
     }
 
@@ -63,7 +68,8 @@ impl Scope {
         match self {
             Self::Certificate | Self::Chain => "CERTIFICATE",
             Self::Request => "CERTIFICATE REQUEST",
-            Self::KeyPair => "PRIVATE KEY",
+            // A secret key has no PEM form; its file holds no label.
+            Self::KeyPair | Self::SecretKey => "PRIVATE KEY",
             Self::PublicKey => "PUBLIC KEY",
             Self::Crl => crate::revocation_list::PEM_LABEL,
         }
@@ -226,6 +232,12 @@ mod tests {
         );
         let prompt = ExportPrompt::new(Scope::Request, directory.path(), "server");
         assert_eq!(Path::new(&prompt.path), directory.path().join("server.csr"));
+        let prompt = ExportPrompt::new(Scope::SecretKey, directory.path(), "..");
+        assert_eq!(
+            Path::new(&prompt.path),
+            directory.path().join("secret-key.bin")
+        );
+        assert_eq!(Scope::SecretKey.label(), "secret key");
         let prompt = ExportPrompt::new(Scope::Crl, directory.path(), "..");
         assert_eq!(
             Path::new(&prompt.path),
