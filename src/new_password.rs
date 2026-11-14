@@ -61,7 +61,7 @@ impl App {
     /// Asks for the new keystore's file name, after asking about unsaved
     /// changes.
     pub(crate) fn ask_new_keystore(&mut self) {
-        if self.modified {
+        if self.unsaved() {
             self.confirm = Some(Confirm::New);
         } else {
             self.name_new_keystore();
@@ -93,7 +93,7 @@ impl App {
     /// Asks for the selected private key's new password, after its current
     /// one unless the keystore's password unlocks it.
     pub(crate) fn ask_key_password(&mut self) {
-        if !self.editable() {
+        if !self.changeable() {
             return;
         }
         let (Some(index), Some(document)) = (self.selected_entry(), &self.document) else {
@@ -164,7 +164,7 @@ impl App {
 
     /// Asks for the open keystore's new password.
     pub(crate) fn ask_password_change(&mut self) {
-        if self.editable() {
+        if self.changeable() {
             self.new_password = Some(NewPasswordPrompt::new(Purpose::Change));
         }
     }

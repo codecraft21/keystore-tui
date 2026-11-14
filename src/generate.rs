@@ -1,7 +1,11 @@
 //! Generating a key pair with a certificate, self-signed or signed by
 //! another private key of the keystore: the key algorithms, and adding the
 //! result to the open keystore once its form is filled in.
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::mpsc::{self, Receiver, TryRecvError},
+    thread,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 use crown::{
     asn1::{
@@ -193,7 +197,7 @@ impl Pending {
 impl App {
     /// Opens the form for a new key pair.
     pub(crate) fn ask_generate(&mut self) {
-        if self.editable() {
+        if self.changeable() {
             self.generating = Some(Form::default());
         }
     }
@@ -221,30 +225,81 @@ impl App {
         }
     }
 
-    /// What is shown while the key pair is generated.
-    pub(crate) fn generation_notice(&self) -> Option<String> {
-        let (_, pending) = self.generation.as_ref()?;
-        Some(format!(
-            "Generating {} key pair...",
-            pending.algorithm.label()
-        ))
+    /// Starts generating the key pair of a filled-in form, named `alias`,
+    /// on a background thread. The keystore is read-only until it is done.
+    pub(crate) fn start_generation(&mut self, alias: String, pending: Box<Pending>) {
+        let Pending {
+            algorithm,
+            request,
+            form,
+        } = *pending;
+        let signer = form.signer();
+        let issuer = match self.signer(signer) {
+            Ok(issuer) => issuer,
+            Err(error) => {
+                self.message = Some((error, true));
+                return;
+            }
+        };
+        let signer_alias = signer
+            .and_then(|index| self.entries.get(index))
+            .map(|entry| entry.alias.clone());
+        self.generation = Some(Job::start(alias, algorithm, signer_alias, move || {
+            generate(algorithm, &request, issuer)
+        }));
     }
 
-    /// Generates the key pair that is waiting, once the screen says so.
-    /// Returns whether there was one.
-    pub(crate) fn finish_generation(&mut self) -> bool {
-        let Some((alias, pending)) = self.generation.take() else {
+    /// The private key at `signer` and its chain, read on the UI thread.
+    fn signer(&self, signer: Option<usize>) -> Result<Option<Generated>, String> {
+        let Some(index) = signer else {
+            return Ok(None);
+        };
+        let document = self.document.as_ref().ok_or("No keystore is open.")?;
+        let entry = self.entries.get(index).ok_or("The signing key is gone.")?;
+        let key = document
+            .private_key(index)
+            .map_err(|error| format!("Nothing signed: the key '{}' {error}.", entry.alias))?;
+        let chain = entry.certificates().to_vec();
+        if chain.is_empty() {
+            return Err("The signing key has no certificate.".into());
+        }
+        Ok(Some((key, chain)))
+    }
+
+    /// The line the status bar keeps for a key pair being generated.
+    pub(crate) fn generation_status(&self) -> Option<String> {
+        self.generation.as_ref().map(Job::status)
+    }
+
+    /// Adds the generated key pair once its thread is done. Returns whether
+    /// a generation finished.
+    pub(crate) fn poll_generation(&mut self) -> bool {
+        let Some(job) = &self.generation else {
             return false;
         };
-        let algorithm = pending.algorithm;
-        let signer = pending.form.signer();
-        let mut message = format!("Generated {} key pair '{alias}'", algorithm.label());
-        if let Some(signer) = signer.and_then(|index| self.entries.get(index)) {
-            message.push_str(&format!(", signed by '{}'", signer.alias));
-        }
-        message.push('.');
-        match self.generate(alias, algorithm, &pending.request, signer) {
+        let result = match job.result.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Disconnected) => Err(NOT_GENERATED.into()),
+        };
+        let Some(job) = self.generation.take() else {
+            return false;
+        };
+        let added = result.and_then(|(key, chain)| {
+            let document = self.document.as_mut().ok_or("No keystore is open.")?;
+            document.import_key_pair(&mut self.entries, job.alias.clone(), &key, &chain)
+        });
+        match added {
             Ok(to) => {
+                let mut message = format!(
+                    "Generated {} key pair '{}'",
+                    job.algorithm.label(),
+                    job.alias
+                );
+                if let Some(signer) = &job.signer {
+                    message.push_str(&format!(", signed by '{signer}'"));
+                }
+                message.push('.');
                 self.modified = true;
                 self.message = Some((message, false));
                 self.select_changed(to);
@@ -253,47 +308,95 @@ impl App {
         }
         true
     }
+}
 
-    /// Adds a new key pair under `alias` and returns where it is listed.
-    /// Its certificate is self-signed, or signed by the private key at
-    /// `signer`, whose chain then follows it.
-    fn generate(
-        &mut self,
+#[cfg(test)]
+impl App {
+    /// Waits for the key pair being generated and adds it. Returns whether
+    /// one was being generated.
+    pub(crate) fn finish_generation(&mut self) -> bool {
+        if self.generation.is_none() {
+            return false;
+        }
+        while !self.poll_generation() {
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        true
+    }
+}
+
+/// A new key pair and its chain: the certificate, self-signed or signed by
+/// `issuer`, whose chain then follows it.
+pub(crate) type Generated = (Key, Vec<Vec<u8>>);
+
+/// Generates a key pair and its certificate; runs off the UI thread.
+fn generate(
+    algorithm: Algorithm,
+    request: &signing::Request,
+    signer: Option<Generated>,
+) -> Result<Generated, String> {
+    let issuer = signer.as_ref().map(|(key, chain)| signing::Issuer {
+        key,
+        certificate: &chain[0],
+    });
+    // Without random numbers the search for primes would never end.
+    OsRng::default().check()?;
+    let mut rng = OsRng::default();
+    let key = key_pair(algorithm, &mut rng)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as i64);
+    let certificate = signing::key_certificate(&key, request, issuer.as_ref(), now, &mut rng)?;
+    rng.check()?;
+    let mut chain = vec![certificate];
+    chain.extend(signer.map(|(_, chain)| chain).unwrap_or_default());
+    Ok((key, chain))
+}
+
+/// A key pair being generated on a background thread. Dropping it, as
+/// closing the keystore does, throws its result away.
+pub struct Job {
+    alias: String,
+    algorithm: Algorithm,
+    signer: Option<String>,
+    started: Instant,
+    result: Receiver<Result<Generated, String>>,
+}
+
+impl Job {
+    /// Runs `work` on a new thread.
+    pub(crate) fn start(
         alias: String,
         algorithm: Algorithm,
-        request: &signing::Request,
-        signer: Option<usize>,
-    ) -> Result<usize, String> {
-        let document = self.document.as_mut().ok_or("No keystore is open.")?;
-        let signer = match signer {
-            Some(index) => {
-                let entry = self.entries.get(index).ok_or("The signing key is gone.")?;
-                let key = document.private_key(index).map_err(|error| {
-                    format!("Nothing signed: the key '{}' {error}.", entry.alias)
-                })?;
-                Some((key, entry.certificates().to_vec()))
-            }
-            None => None,
-        };
-        let issuer = match &signer {
-            Some((key, chain)) => Some(signing::Issuer {
-                key,
-                certificate: chain.first().ok_or("The signing key has no certificate.")?,
-            }),
-            None => None,
-        };
-        // Without random numbers the search for primes would never end.
-        OsRng::default().check()?;
-        let mut rng = OsRng::default();
-        let key = key_pair(algorithm, &mut rng)?;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs() as i64);
-        let certificate = signing::key_certificate(&key, request, issuer.as_ref(), now, &mut rng)?;
-        rng.check()?;
-        let mut chain = vec![certificate];
-        chain.extend(signer.map(|(_, chain)| chain).unwrap_or_default());
-        document.import_key_pair(&mut self.entries, alias, &key, &chain)
+        signer: Option<String>,
+        work: impl FnOnce() -> Result<Generated, String> + Send + 'static,
+    ) -> Self {
+        let (sender, result) = mpsc::channel();
+        thread::spawn(move || {
+            // The receiver is gone when the keystore was closed meanwhile.
+            let _ = sender.send(work());
+        });
+        Self {
+            alias,
+            algorithm,
+            signer,
+            started: Instant::now(),
+            result,
+        }
+    }
+
+    /// The algorithm, an activity indicator, and the time taken so far: the
+    /// library reports no progress to measure.
+    fn status(&self) -> String {
+        const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+        let elapsed = self.started.elapsed();
+        let frame = SPINNER[(elapsed.as_millis() / 125 % 4) as usize];
+        format!(
+            "{frame} Generating {} key pair '{}'... {}s (read-only until done)",
+            self.algorithm.label(),
+            self.alias,
+            elapsed.as_secs()
+        )
     }
 }
 

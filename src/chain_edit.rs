@@ -43,7 +43,7 @@ pub fn appended(chain: &[Vec<u8>], issuer: &[u8]) -> Result<Vec<Vec<u8>>, String
 impl App {
     /// Asks what to do with the selected private key's chain.
     pub(crate) fn ask_chain(&mut self) {
-        if !self.editable() {
+        if !self.changeable() {
             return;
         }
         let Some(index) = self.selected_entry() else {
