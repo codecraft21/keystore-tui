@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crown::{asn1::pem, rng::Rng};
+use zeroize::Zeroizing;
 
 use crate::{
     App, Confirm,
@@ -54,7 +55,7 @@ pub fn encode(
     chain: &[Vec<u8>],
     password: &str,
     rng: &mut impl Rng,
-) -> Result<Vec<u8>, String> {
+) -> Result<Zeroizing<Vec<u8>>, String> {
     let failed = |error: &str| format!("Not exported: {error}.");
     if format == Format::Pkcs12 {
         if password.is_empty() {
@@ -72,10 +73,10 @@ pub fn encode(
                 "the key pair would not read back the same, for example because its certificate chain is not linked by issuer names",
             ));
         }
-        return writable.encode(rng).map_err(failed);
+        return writable.encode(rng).map(Zeroizing::new).map_err(failed);
     }
     let (label, key) = if password.is_empty() {
-        ("PRIVATE KEY", zeroize::Zeroizing::new(key.to_vec()))
+        ("PRIVATE KEY", Zeroizing::new(key.to_vec()))
     } else {
         let encrypted = pkcs12::encrypt_key(key, password.as_bytes(), rng).map_err(failed)?;
         if pkcs12::decrypt_key(&encrypted, password.as_bytes())
@@ -85,19 +86,60 @@ pub fn encode(
         {
             return Err(failed("the encrypted key would not decrypt again"));
         }
-        ("ENCRYPTED PRIVATE KEY", zeroize::Zeroizing::new(encrypted))
+        ("ENCRYPTED PRIVATE KEY", Zeroizing::new(encrypted))
     };
     Ok(match format {
-        Format::DerKey => key.to_vec(),
-        Format::PemKey => pem::encode(label, &key).into_bytes(),
+        Format::DerKey => key,
+        Format::PemKey => pem_block(label, &key, &[]),
         Format::PemPair | Format::Pkcs12 => {
-            let mut text = pem::encode(label, &key);
-            for certificate in chain {
-                text.push_str(&pem::encode("CERTIFICATE", certificate));
-            }
-            text.into_bytes()
+            let certificates: String = chain
+                .iter()
+                .map(|certificate| pem::encode("CERTIFICATE", certificate))
+                .collect();
+            pem_block(label, &key, certificates.as_bytes())
         }
     })
+}
+
+/// `data` as a PEM block labelled `label`, followed by `rest`, written
+/// into one buffer sized up front so no unwiped copy of `data` is left
+/// behind by growing it.
+fn pem_block(label: &str, data: &[u8], rest: &[u8]) -> Zeroizing<Vec<u8>> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let encoded = data.len().div_ceil(3) * 4;
+    let lines = encoded.div_ceil(64);
+    let armour = "-----BEGIN -----\n".len() + "-----END -----\n".len() + 2 * label.len();
+    let mut out = Zeroizing::new(Vec::with_capacity(armour + encoded + lines + rest.len()));
+    out.extend_from_slice(b"-----BEGIN ");
+    out.extend_from_slice(label.as_bytes());
+    out.extend_from_slice(b"-----\n");
+    for (index, group) in data.chunks(3).enumerate() {
+        let bytes = [
+            group[0],
+            *group.get(1).unwrap_or(&0),
+            *group.get(2).unwrap_or(&0),
+        ];
+        let bits = u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]);
+        for position in 0..4 {
+            out.push(if position <= group.len() {
+                ALPHABET[(bits >> (18 - 6 * position) & 63) as usize]
+            } else {
+                b'='
+            });
+        }
+        if index % 16 == 15 {
+            out.push(b'\n');
+        }
+    }
+    if !encoded.is_multiple_of(64) {
+        out.push(b'\n');
+    }
+    out.extend_from_slice(b"-----END ");
+    out.extend_from_slice(label.as_bytes());
+    out.extend_from_slice(b"-----\n");
+    out.extend_from_slice(rest);
+    debug_assert_eq!(out.len(), out.capacity());
+    out
 }
 
 /// The file name being typed for the export of the private key at `index`
@@ -243,10 +285,53 @@ mod tests {
         let error = export(Format::Pkcs12, &chain).unwrap_err();
         assert!(error.contains("would not read back the same"), "{error}");
         // PEM keeps the certificates as they are stored.
-        let text = String::from_utf8(export(Format::PemPair, &chain).unwrap()).unwrap();
+        let text = String::from_utf8(export(Format::PemPair, &chain).unwrap().to_vec()).unwrap();
         let blocks = pem::parse(&text).unwrap();
         assert_eq!(blocks.len(), 3);
         assert_eq!(blocks[2].data, chain[1]);
         assert!(export(Format::Pkcs12, &chain[..1]).is_ok());
+    }
+
+    #[test]
+    fn key_blocks_match_the_usual_pem_and_fill_their_buffer_exactly() {
+        let certificates = pem::encode("CERTIFICATE", b"certificate");
+        for length in 0..200 {
+            let data: Vec<u8> = (0..length).map(|byte| byte as u8).collect();
+            let block = pem_block("PRIVATE KEY", &data, certificates.as_bytes());
+            let expected = pem::encode("PRIVATE KEY", &data) + &certificates;
+            assert_eq!(block.as_slice(), expected.as_bytes(), "{length}");
+            assert_eq!(block.len(), block.capacity(), "{length}");
+        }
+    }
+
+    #[test]
+    fn plain_and_encrypted_keys_export_to_pem_and_der() {
+        let key = synthetic_pkcs8(b"synthetic, not a private key");
+        let chain = [metadata_certificate("leaf", "leaf", &[1], &[])];
+        for password in ["", "password"] {
+            let export =
+                |format| encode(format, "alias", &key, &chain, password, &mut TestRng(1)).unwrap();
+            let der = export(Format::DerKey);
+            let decrypted = if password.is_empty() {
+                der.to_vec()
+            } else {
+                pkcs12::decrypt_key(&der, password.as_bytes())
+                    .unwrap()
+                    .to_vec()
+            };
+            assert_eq!(decrypted, key);
+            let label = if password.is_empty() {
+                "PRIVATE KEY"
+            } else {
+                "ENCRYPTED PRIVATE KEY"
+            };
+            let text = String::from_utf8(export(Format::PemKey).to_vec()).unwrap();
+            let blocks = pem::parse(&text).unwrap();
+            assert_eq!((blocks.len(), blocks[0].label.as_str()), (1, label));
+            let text = String::from_utf8(export(Format::PemPair).to_vec()).unwrap();
+            let blocks = pem::parse(&text).unwrap();
+            assert_eq!(blocks.len(), 2);
+            assert_eq!(blocks[1].data, chain[0]);
+        }
     }
 }
