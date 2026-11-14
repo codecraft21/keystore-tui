@@ -89,14 +89,13 @@ certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
 
 ## Limitations
 
-- Editing is limited to generating a key pair with a self-signed certificate,
-  making a certificate request for a private key, importing a CA's reply, signing a certificate request,
-  a new key pair, or a revocation list, editing a certificate chain,
-  importing a trusted certificate, a key pair, or
-  another keystore's entries, exporting a private key, generating, importing, or exporting
-  a secret key, renaming or deleting
-  an entry, and changing passwords. See the
-  [roadmap](docs/ROADMAP.md) for what is left.
+- Editing covers the [release 1.1 roadmap](docs/ROADMAP.md#release-11):
+  creating, saving, and converting JKS, JCEKS, and PKCS12 keystores; deleting,
+  renaming, importing, and copying entries; generating key pairs, certificate
+  requests, and secret keys; signing certificates and revocation lists;
+  importing CA replies and editing chains; exporting private, public, and
+  secret keys; and changing passwords. The roadmap lists what is planned for
+  release 1.2.
 - PKCS12 keystores are saved with AES-256 and HMAC-SHA256, which Java 8 builds
   before 8u301 cannot read.
 - Private and secret keys are never shown. They are decrypted only in
