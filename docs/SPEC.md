@@ -1005,8 +1005,9 @@ any existing incomplete-entry warnings.
 - `W` opens a prompt in place of the shortcuts, suggesting
   `<name>-copy.<extension>` next to the opened file as an absolute path,
   numbered like `store-copy-2.jks` when that name exists. It takes keys like
-  the [export prompt](#exporting): characters are typed into the name,
-  `Backspace` deletes one, `Ctrl+U` clears the name, `Enter` saves, `Esc`
+  the [export prompt](#exporting): characters are typed at the cursor, which
+  `Left`/`Right`/`Home`/`End` move, `Backspace` and `Delete` remove one,
+  `Ctrl+U` clears the name, `Enter` saves, `Esc`
   cancels, and a relative name is resolved against the opened file's
   directory.
 - The "save as" file must not exist yet; it is never replaced. On failure a
@@ -1277,9 +1278,17 @@ any existing incomplete-entry warnings.
   other than letters, digits, `-`, `_`, and `.` in the alias become `_`, and a
   name that already exists gets a number, such as `server-2.pem`.
 - While the prompt is open, every character without `Ctrl` or `Alt` is typed
-  into the name, including `q`, `x`, and `j`. `Backspace` deletes a character,
-  `Ctrl+U` clears the name, `Enter` saves, and `Esc` cancels without leaving the
-  detail view. `Ctrl+C` still quits.
+  into the name at the cursor, including `q`, `x`, and `j`. `Left`/`Right`
+  move the cursor by one character and `Home`/`End` to either end, without
+  changing the name. `Backspace` deletes the character before the cursor and
+  `Delete` the one under it; both do nothing at the boundary. `Ctrl+U` clears
+  the name, `Enter` saves, and `Esc` cancels without leaving the
+  detail view. The prompt opens with the cursor after the suggested name. The
+  character under the cursor, or a space after the end, is shown reversed; a
+  name too long for the line scrolls horizontally to keep the cursor visible.
+  Editing works on whole Unicode characters. Every file name prompt (save as,
+  new keystore, certificate, key, request, and revocation list exports) edits
+  the same way. `Ctrl+C` still quits.
 - A relative name is resolved against the open file's directory.
 - A `.der` name (case-insensitive) saves one certificate, the public key,
   the revocation list, or

@@ -1,6 +1,7 @@
 //! Saving certificates, public keys, and certificate requests to new PEM or
 //! DER files.
 //! Existing files are never replaced.
+use crate::path_input::PathInput;
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
@@ -8,7 +9,7 @@ use std::{
 };
 
 use crown::asn1::pem;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -85,7 +86,7 @@ pub enum Outcome {
 /// The file name being typed for an export.
 pub struct ExportPrompt {
     pub scope: Scope,
-    pub path: String,
+    pub path: PathInput,
     directory: PathBuf,
 }
 
@@ -128,7 +129,7 @@ impl ExportPrompt {
         };
         Self {
             scope,
-            path: path.to_string_lossy().into_owned(),
+            path: PathInput::new(path.to_string_lossy().into_owned()),
             directory: directory.to_path_buf(),
         }
     }
@@ -140,14 +141,9 @@ impl ExportPrompt {
                 // Relative names are saved next to the opened file.
                 return Outcome::Save(self.directory.join(&self.path));
             }
-            KeyCode::Backspace => {
-                self.path.pop();
+            _ => {
+                self.path.handle_key(key);
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.path.clear()
-            }
-            KeyCode::Char(ch) if crate::is_text_input(key.modifiers) => self.path.push(ch),
-            _ => {}
         }
         Outcome::Editing
     }
@@ -198,6 +194,7 @@ pub fn save(path: &Path, items: &[Vec<u8>], pem_label: &str) -> Result<(), Strin
 mod tests {
     use super::*;
     use crate::test_support::{TestDirectory, metadata_certificate, relative_to_working_directory};
+    use ratatui::crossterm::event::KeyModifiers;
 
     fn type_text(prompt: &mut ExportPrompt, text: &str) {
         for ch in text.chars() {
@@ -269,7 +266,7 @@ mod tests {
         ));
         type_text(&mut prompt, "q.derx");
         prompt.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        assert_eq!(prompt.path, "q.der");
+        assert_eq!(&*prompt.path, "q.der");
         let Outcome::Save(path) =
             prompt.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         else {
@@ -289,7 +286,7 @@ mod tests {
         assert!(relative.is_relative());
         fs::write(relative.join("server.pem"), b"existing").unwrap();
         let mut prompt = ExportPrompt::new(Scope::Certificate, &relative, "server");
-        assert_eq!(prompt.path, "server-2.pem");
+        assert_eq!(&*prompt.path, "server-2.pem");
         let Outcome::Save(path) =
             prompt.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         else {

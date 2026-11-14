@@ -77,6 +77,10 @@ All notable changes to keystore-tui are listed here. Versions follow
   during a slow RSA 4096 generation. The status bar shows the algorithm, an
   activity indicator, and the elapsed time; the keystore is read-only until
   the key pair is ready.
+- File name prompts for saving, exporting, and signing now edit at a cursor:
+  `Left`/`Right` and `Home`/`End` move it, typing inserts at it, `Backspace`
+  and `Delete` remove the character before or under it, and long names scroll
+  to keep it in view.
 
 ## 1.0.5
 

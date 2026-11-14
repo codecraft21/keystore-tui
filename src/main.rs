@@ -22,6 +22,7 @@ mod keystore;
 mod new_password;
 mod new_request;
 mod path_bar;
+mod path_input;
 mod pkcs12;
 mod revocation_list;
 mod save;
@@ -765,7 +766,7 @@ impl App {
             details.draw(frame);
             return;
         }
-        let shortcuts = self.shortcuts();
+        let shortcuts = self.shortcuts(frame.area().width);
         let [content, status, path_area, help] = Layout::vertical([
             Constraint::Min(3),
             Constraint::Length(2),
@@ -997,20 +998,21 @@ impl App {
     }
 
     /// The bottom lines: the shortcuts, or the "save as" name being typed.
-    fn shortcuts(&self) -> Vec<Line<'static>> {
+    fn shortcuts(&self, width: u16) -> Vec<Line<'static>> {
         const LIST: &str = "o Open file | Enter Details | Up/Down j/k Scroll | / Filter | s Sort | q / Esc / Ctrl+C Quit";
         if self.password_prompt.is_some() {
             vec!["Enter Verify | Backspace Delete | Esc Cancel | Ctrl+C Quit".into()]
         } else if let Some(prompt) = &self.save_as {
             vec![
-                Line::from(vec![
+                path_input::line(
                     if prompt.creating {
                         "New keystore file (.jks, .jceks, or .p12): ".bold()
                     } else {
                         "Save keystore as: ".bold()
                     },
-                    format!("{}_", prompt.path).into(),
-                ]),
+                    &prompt.path,
+                    width,
+                ),
                 if prompt.creating {
                     "Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into()
                 } else {
@@ -1047,18 +1049,12 @@ impl App {
             ]
         } else if let Some(export) = &self.key_export {
             vec![
-                Line::from(vec![
-                    "Export key to: ".bold(),
-                    format!("{}_", export.prompt.path).into(),
-                ]),
+                path_input::line("Export key to: ".bold(), &export.prompt.path, width),
                 ".p12 Keystore | .pem Key and certificates | .key .p8 Key only | Enter Next | Ctrl+U Clear | Esc Cancel".into(),
             ]
         } else if let Some(export) = &self.secret_export {
             vec![
-                Line::from(vec![
-                    "Export secret key to: ".bold(),
-                    format!("{}_", export.prompt.path).into(),
-                ]),
+                path_input::line("Export secret key to: ".bold(), &export.prompt.path, width),
                 ".hex .txt Hex digits | any other name The key's bytes | Enter Next | Ctrl+U Clear | Esc Cancel".into(),
             ]
         } else if let Some(chooser) = &self.secret_choice {
@@ -1105,10 +1101,7 @@ impl App {
             .and_then(|request| request.naming.as_ref())
         {
             vec![
-                Line::from(vec![
-                    "Save certificate request as: ".bold(),
-                    format!("{}_", prompt.path).into(),
-                ]),
+                path_input::line("Save certificate request as: ".bold(), &prompt.path, width),
                 "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Back | Ctrl+C Quit".into(),
             ]
         } else if let Some(index) = self.chain_menu {
@@ -1140,10 +1133,7 @@ impl App {
             .and_then(|signing| signing.naming.as_ref())
         {
             vec![
-                Line::from(vec![
-                    "Save certificate as: ".bold(),
-                    format!("{}_", prompt.path).into(),
-                ]),
+                path_input::line("Save certificate as: ".bold(), &prompt.path, width),
                 "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Back | Ctrl+C Quit".into(),
             ]
         } else if let Some((_, prompt)) = self
@@ -1152,10 +1142,7 @@ impl App {
             .and_then(|revoking| revoking.naming.as_ref())
         {
             vec![
-                Line::from(vec![
-                    "Save revocation list as: ".bold(),
-                    format!("{}_", prompt.path).into(),
-                ]),
+                path_input::line("Save revocation list as: ".bold(), &prompt.path, width),
                 "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Back | Ctrl+C Quit".into(),
             ]
         } else if self.revoking.is_some() {

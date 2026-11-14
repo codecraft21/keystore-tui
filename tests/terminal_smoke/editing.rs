@@ -33,7 +33,7 @@ fn delete_save_and_quit_restores_terminal() {
     app.send(b"W");
     app.expect(&["Save keystore as:"]);
     app.send(b"\x15"); // Ctrl+U clears the suggested absolute path.
-    app.expect(&["Save keystore as: _"]);
+    app.expect(&["Save keystore as:"]);
     app.send(b"copy.jks\r"); // Saved next to the opened file.
     app.expect(&["Saved"]);
     assert_eq!(fs::read(&path).unwrap(), original);

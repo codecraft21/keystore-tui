@@ -13,6 +13,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/certificate_request.rs` | PKCS#10 certificate requests: fields, requested extensions, and attributes |
 | `src/file_picker.rs` | The keystore file browser, which can also list every file |
 | `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |
+| `src/path_input.rs` | The cursor-edited, horizontally scrolled text input shared by every file name prompt |
 | `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
 | `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate or a key pair under the typed alias |
 | `src/generate.rs` | Generating a key pair: the RSA, EC, and Ed25519 keys as PKCS #8, and adding the result with its certificate, self-signed or signed by another private key, under the typed alias; the key and certificate are made on a background thread while the keystore is read-only |

@@ -1865,7 +1865,7 @@ fn save_as_writes_a_new_file_and_switches_to_it() {
     press(&mut app, KeyCode::Char('y'));
     press(&mut app, KeyCode::Char('W'));
     let copy = directory.path().join("store-copy.jks");
-    assert!(screen(&mut app, 200, 24).contains(&format!("Save keystore as: {}_", copy.display())));
+    assert!(screen(&mut app, 200, 24).contains(&format!("Save keystore as: {} ", copy.display())));
     // Letters are typed into the name instead of quitting.
     assert!(!press(&mut app, KeyCode::Char('q')));
     press(&mut app, KeyCode::Backspace);
@@ -2489,7 +2489,7 @@ fn exporting_a_private_key_writes_a_new_protected_file() {
     // The suggested name exports a PKCS12 keystore.
     press(&mut app, KeyCode::Char('e'));
     let rendered = screen(&mut app, 200, 24);
-    assert!(rendered.contains("Export key to: ") && rendered.contains("shared.p12_"));
+    assert!(rendered.contains("Export key to: ") && rendered.contains("shared.p12 "));
     assert!(rendered.contains(".p12 Keystore | .pem Key and certificates | .key .p8 Key only"));
     assert!(!press(&mut app, KeyCode::Char('q')));
     press(&mut app, KeyCode::Backspace);
@@ -2534,7 +2534,7 @@ fn exporting_a_private_key_writes_a_new_protected_file() {
 
     // An existing file is never replaced.
     press(&mut app, KeyCode::Char('e'));
-    assert!(screen(&mut app, 200, 24).contains("shared-2.p12_"));
+    assert!(screen(&mut app, 200, 24).contains("shared-2.p12 "));
     type_alias(&mut app, "shared.p12");
     assert!(red_text(&mut app).contains("already exists; choose another name."));
     // A .pem name holds the key and its certificates; without a password
@@ -2678,7 +2678,7 @@ fn creating_a_keystore_writes_an_empty_file_and_opens_it() {
     press(&mut app, KeyCode::Char('n'));
     let suggested = directory.path().join("keystore-2.jks");
     assert!(screen(&mut app, 200, 24).contains(&format!(
-        "New keystore file (.jks, .jceks, or .p12): {}_",
+        "New keystore file (.jks, .jceks, or .p12): {} ",
         suggested.display()
     )));
     type_alias(&mut app, "store.jks");
@@ -3436,7 +3436,7 @@ fn a_certificate_request_is_made_for_a_private_key() {
     let expected = directory.path().join("host.test.csr");
     let rendered = screen(&mut app, 200, 30);
     assert!(rendered.contains(&format!(
-        "Save certificate request as: {}_",
+        "Save certificate request as: {} ",
         expected.display()
     )));
     assert!(rendered.contains("A .der name saves DER, any other PEM | Enter Save"));
@@ -4055,7 +4055,7 @@ fn a_certificate_request_is_signed_into_a_new_certificate_file() {
     press(&mut app, KeyCode::Enter);
     let expected = file("device.pem");
     let rendered = screen(&mut app, 200, 30);
-    assert!(rendered.contains(&format!("Save certificate as: {}_", expected.display())));
+    assert!(rendered.contains(&format!("Save certificate as: {} ", expected.display())));
     assert!(rendered.contains("A .der name saves DER, any other PEM | Enter Save"));
     press(&mut app, KeyCode::Esc);
     assert!(screen(&mut app, 120, 30).contains("Serial number (hex)  01a4_"));
@@ -4360,7 +4360,7 @@ fn a_revocation_list_is_signed_into_a_new_file_and_read_back() {
     press(&mut app, KeyCode::Enter);
     let expected = file("ca.crl");
     let rendered = screen(&mut app, 200, 30);
-    assert!(rendered.contains(&format!("Save revocation list as: {}_", expected.display())));
+    assert!(rendered.contains(&format!("Save revocation list as: {} ", expected.display())));
     assert!(rendered.contains("A .der name saves DER, any other PEM | Enter Save"));
     press(&mut app, KeyCode::Esc);
     assert!(screen(&mut app, 120, 30).contains("Revoked serials      01a4=keyCompromise, 0f_"));
@@ -4627,7 +4627,7 @@ fn a_secret_key_is_exported_unencrypted_after_a_confirmation() {
     press(&mut app, KeyCode::Char('e'));
     let rendered = screen(&mut app, 200, 24);
     assert!(rendered.contains(&format!(
-        "Export secret key to: {}_",
+        "Export secret key to: {} ",
         file("token.bin").display()
     )));
     assert!(

@@ -456,7 +456,7 @@ impl EntryDetails {
             );
             return;
         }
-        let footer = self.footer(shortcuts);
+        let footer = self.footer(shortcuts, area.width);
         let footer_height = u16::try_from(footer.line_count(area.width))
             .unwrap_or(u16::MAX)
             .min(area.height / 2);
@@ -538,17 +538,18 @@ impl EntryDetails {
     }
 
     /// The export result, then either the export name being typed or the shortcuts.
-    fn footer(&self, shortcuts: &'static str) -> Paragraph<'static> {
+    fn footer(&self, shortcuts: &'static str, width: u16) -> Paragraph<'static> {
         let mut lines = Vec::new();
         if let Some((message, failed)) = &self.message {
             let color = if *failed { Color::Red } else { Color::Green };
             lines.push(Line::from(message.clone()).fg(color));
         }
         if let Some(prompt) = &self.export {
-            lines.push(Line::from(vec![
+            lines.push(crate::path_input::line(
                 Span::raw(format!("Save {} to: ", prompt.scope.label())).bold(),
-                Span::raw(format!("{}_", prompt.path)),
-            ]));
+                &prompt.path,
+                width,
+            ));
             lines.push(Line::from(
                 "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit",
             ));
