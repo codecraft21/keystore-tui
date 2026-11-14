@@ -1,6 +1,6 @@
 //! A one-line text input for file and path names, edited at a cursor.
 
-use std::{ffi::OsStr, fmt, ops::Deref, path::Path};
+use std::{ffi::OsStr, ops::Deref, path::Path};
 
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
@@ -134,24 +134,6 @@ impl AsRef<OsStr> for PathInput {
     }
 }
 
-impl fmt::Display for PathInput {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.text)
-    }
-}
-
-impl fmt::Debug for PathInput {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.text, f)
-    }
-}
-
-impl PartialEq<&str> for PathInput {
-    fn eq(&self, other: &&str) -> bool {
-        self.text == *other
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,7 +165,7 @@ mod tests {
             press(&mut input, KeyCode::Backspace);
         }
         type_text(&mut input, "work");
-        assert_eq!(input, "/home/chris/work/file.jks");
+        assert_eq!(&*input, "/home/chris/work/file.jks");
     }
 
     #[test]
@@ -195,7 +177,7 @@ mod tests {
         press(&mut input, KeyCode::End);
         press(&mut input, KeyCode::Backspace);
         type_text(&mut input, "x");
-        assert_eq!(input, "a.jkx");
+        assert_eq!(&*input, "a.jkx");
     }
 
     #[test]
@@ -211,16 +193,16 @@ mod tests {
         ] {
             press(&mut input, code);
         }
-        assert_eq!(input, "");
+        assert_eq!(&*input, "");
         type_text(&mut input, "ab");
         press(&mut input, KeyCode::Right);
         press(&mut input, KeyCode::Delete);
         press(&mut input, KeyCode::Home);
         press(&mut input, KeyCode::Left);
         press(&mut input, KeyCode::Backspace);
-        assert_eq!(input, "ab");
+        assert_eq!(&*input, "ab");
         assert!(input.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)));
-        assert_eq!(input, "");
+        assert_eq!(&*input, "");
         assert!(!input.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
     }
 
@@ -235,11 +217,19 @@ mod tests {
         press(&mut input, KeyCode::Left);
         press(&mut input, KeyCode::Backspace);
         type_text(&mut input, "ф");
-        assert_eq!(input, "/tmp/clф-日.p12");
+        assert_eq!(&*input, "/tmp/clф-日.p12");
         assert_eq!(
             shown(&input, 40),
             ("/tmp/clф".into(), "-".into(), "日.p12".into())
         );
+    }
+
+    #[test]
+    fn line_fits_the_label_and_input_in_the_width() {
+        let input = PathInput::new("abcdefghij".into());
+        let line = line(Span::raw("To: "), &input, 8);
+        assert_eq!(line.width(), 8);
+        assert_eq!(line.to_string(), "To: hij ");
     }
 
     #[test]

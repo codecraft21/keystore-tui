@@ -266,7 +266,7 @@ mod tests {
         ));
         type_text(&mut prompt, "q.derx");
         prompt.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        assert_eq!(prompt.path, "q.der");
+        assert_eq!(&*prompt.path, "q.der");
         let Outcome::Save(path) =
             prompt.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         else {
@@ -286,7 +286,7 @@ mod tests {
         assert!(relative.is_relative());
         fs::write(relative.join("server.pem"), b"existing").unwrap();
         let mut prompt = ExportPrompt::new(Scope::Certificate, &relative, "server");
-        assert_eq!(prompt.path, "server-2.pem");
+        assert_eq!(&*prompt.path, "server-2.pem");
         let Outcome::Save(path) =
             prompt.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         else {
