@@ -405,8 +405,11 @@ Press `x`, `X`, or `K` in the detail view, then edit the suggested file name and
 open file, `<alias>-public-key.pem` for a public key, or `<alias>.csr` for a
 certificate request. A name ending in `.der`
 saves a single certificate, the public key, or the request as DER; any other name saves PEM. Relative names are saved next to the open file. Every key,
-including `q`, is typed into the name; `Backspace` deletes a character,
-`Ctrl+U` clears the name, and `Esc` cancels. Existing files are never replaced:
+including `q`, is typed into the name at the cursor; `Left`/`Right` and
+`Home`/`End` move the cursor, `Backspace` deletes the character before it,
+`Delete` the character under it, `Ctrl+U` clears the name, and `Esc` cancels.
+Every file name prompt (save as, new keystore, exports, and signed files)
+edits this way, and a long name scrolls to keep the cursor in view. Existing files are never replaced:
 the save fails with a red message and you can choose another name.
 
 `K` saves the public key of the selected certificate as a SubjectPublicKeyInfo

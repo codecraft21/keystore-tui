@@ -1,5 +1,6 @@
 //! Writing an edited keystore: the open keystore's writable form and
 //! password, the "save as" name prompt, and replacing a file atomically.
+use crate::path_input::PathInput;
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
@@ -8,7 +9,7 @@ use std::{
 };
 
 use crown::rng::Rng;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -885,7 +886,7 @@ pub enum Outcome {
 
 /// The file name being typed for "save as".
 pub struct SaveAsPrompt {
-    pub path: String,
+    pub path: PathInput,
     directory: PathBuf,
     /// Whether the name is for a new, empty keystore rather than a copy.
     pub creating: bool,
@@ -921,7 +922,7 @@ impl SaveAsPrompt {
             .find(|name| !directory.join(name).exists())
             .unwrap_or_else(|| format!("{stem}{extension}"));
         Self {
-            path: directory.join(name).to_string_lossy().into_owned(),
+            path: PathInput::new(directory.join(name).to_string_lossy().into_owned()),
             directory,
             creating,
         }
@@ -934,14 +935,9 @@ impl SaveAsPrompt {
                 // Relative names are saved next to the opened file.
                 return Outcome::Save(self.directory.join(&self.path));
             }
-            KeyCode::Backspace => {
-                self.path.pop();
+            _ => {
+                self.path.handle_key(key);
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.path.clear()
-            }
-            KeyCode::Char(ch) if crate::is_text_input(key.modifiers) => self.path.push(ch),
-            _ => {}
         }
         Outcome::Editing
     }
@@ -951,6 +947,7 @@ impl SaveAsPrompt {
 mod tests {
     use super::*;
     use crate::test_support::{KEYTOOL_JKS, TestDirectory, mixed_keystore};
+    use ratatui::crossterm::event::KeyModifiers;
 
     fn open(data: &[u8], password: &str) -> (Vec<KeystoreEntry>, Document) {
         let (entries, writable) = keystore::parse(data.to_vec())

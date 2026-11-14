@@ -17,13 +17,17 @@ fn certificate_file(exit_key: &[u8]) {
     app.send(b"x");
     app.expect(&["Save certificate to:"]);
     app.send(b"\x15"); // Ctrl+U clears the suggested absolute path.
-    app.expect(&["Save certificate to: _"]);
+    app.expect(&["Save certificate to:"]);
     app.send(b"q"); // Typed into the name, not a quit.
-    app.expect(&["Save certificate to: q_"]);
+    app.expect(&["Save certificate to: q"]);
     assert_eq!(app.exited(), None);
-    app.send(b"x\x7f.pem\r"); // Backspace, then save next to the file.
+    app.send(b"x\x1b[D\x1b[Dp"); // Left twice, then insert at the start.
+    app.expect(&["Save certificate to: pqx"]);
+    app.send(b"\x1b[3~\x1b[F\x7f"); // Delete, End, Backspace.
+    app.expect(&["Save certificate to: p "]);
+    app.send(b".pem\r"); // Saved next to the file.
     app.expect(&["Saved certificate to"]);
-    assert_eq!(fs::read_to_string(directory.join("q.pem")).unwrap(), pem);
+    assert_eq!(fs::read_to_string(directory.join("p.pem")).unwrap(), pem);
     app.send(b"X");
     app.expect(&["Save chain to:"]);
     app.send(b"\x1b"); // Cancels the export, staying in the details.
