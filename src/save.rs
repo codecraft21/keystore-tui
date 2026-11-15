@@ -1124,4 +1124,78 @@ mod tests {
         };
         assert_eq!(saved, directory.path().join("a"));
     }
+
+    /// A JKS keystore holding one private key, `key`, protected with
+    /// `key_password`, under the keystore password "changeit".
+    fn private_key_keystore(key: &[u8], key_password: &str) -> (Vec<KeystoreEntry>, Document) {
+        use crate::keystore::{PRIVATE_KEY_TAG, VERSION_02};
+        use crate::test_support::{Builder, TestRng};
+        let protected = key_protection::protect(key, key_password, false, &mut TestRng(0)).unwrap();
+        let mut builder = Builder::new(VERSION_02, 1);
+        builder.entry_header(PRIVATE_KEY_TAG, b"key");
+        builder.payload(&protected);
+        builder.u32_field(0);
+        open(&builder.finish("changeit"), "changeit")
+    }
+
+    #[test]
+    fn a_key_password_of_its_own_is_checked_and_can_be_changed() {
+        let key = crate::test_support::synthetic_pkcs8(b"synthetic");
+        let (_, mut document) = private_key_keystore(&key, "own");
+        assert_eq!(document.unlocks_key(0, None), Ok(false));
+        assert_eq!(document.unlocks_key(0, Some("own")), Ok(true));
+        let error = document.private_key(0).unwrap_err();
+        assert!(error.contains("password of its own"), "{error}");
+        let error = document.secret_key(0).err().unwrap();
+        assert!(error.contains("not a secret key"), "{error}");
+        let error = document
+            .set_key_password(0, Some("wrong"), "new")
+            .unwrap_err();
+        assert!(error.contains("Incorrect key password"), "{error}");
+
+        // Giving it the keystore's password makes it usable.
+        document
+            .set_key_password(0, Some("own"), "changeit")
+            .unwrap();
+        assert_eq!(document.unlocks_key(0, None), Ok(true));
+        assert_eq!(*document.private_key(0).unwrap(), key);
+    }
+
+    #[test]
+    fn a_jks_key_that_is_not_pkcs8_cannot_be_exported() {
+        let (_, document) = private_key_keystore(b"not PKCS #8", "changeit");
+        let error = document.private_key(0).unwrap_err();
+        assert!(error.contains("not a PKCS #8 key"), "{error}");
+    }
+
+    #[test]
+    fn a_failed_replacement_keeps_the_file_and_other_temporary_files() {
+        let directory = TestDirectory::new();
+        // Renaming a file over a directory fails, and the temporary file
+        // written for it is removed.
+        let target = directory.path().join("folder");
+        fs::create_dir(&target).unwrap();
+        assert!(replace(&target, b"data").is_err());
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+
+        // A file that already has the temporary name is left alone.
+        let path = directory.path().join("store.jks");
+        fs::write(&path, b"original").unwrap();
+        let temporary = directory
+            .path()
+            .join(format!("store.jks.{}.tmp", std::process::id()));
+        fs::write(&temporary, b"other").unwrap();
+        let error = replace(&path, b"data").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&temporary).unwrap(), b"other");
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+    }
+
+    #[test]
+    fn creating_a_file_in_a_missing_directory_fails() {
+        let directory = TestDirectory::new();
+        let path = directory.path().join("missing").join("out.pem");
+        let error = create_private(&path, b"data").unwrap_err();
+        assert!(error.contains("Cannot create"), "{error}");
+    }
 }
