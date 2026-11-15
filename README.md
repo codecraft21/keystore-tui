@@ -77,15 +77,6 @@ certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
 
 See the [roadmap](docs/ROADMAP.md) for planned features.
 
-## More documentation
-
-- [`docs/REFERENCE.md`](docs/REFERENCE.md): usage and key bindings.
-- [`docs/SPEC.md`](docs/SPEC.md): the detailed behaviour specification.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md): planned features.
-- [`AGENTS.md`](AGENTS.md): development checks, conventions, and shipping workflow.
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): module responsibilities and dependencies.
-- [`docs/RELEASING.md`](docs/RELEASING.md): version bumps and release procedures.
-
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).
