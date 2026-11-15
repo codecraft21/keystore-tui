@@ -18,46 +18,22 @@ A terminal app for managing keystores, keys, and certificates.
 
 <p align="center"><sub>Entry list · Certificate details · Chain diagnostics — click an image for full size.</sub></p>
 
-Open a JKS, JCEKS, or PKCS12
-(`.jks`, `.jceks`, `.p12`, `.pfx`) file, enter its password, and browse its
-entries and certificates. It also
-opens standalone certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`,
-`.p7c`), certificate signing requests (`.csr`, `.p10`), and certificate
-revocation lists (`.crl`).
+Open your keystore and see what’s inside. Inspect certificates, manage keys,
+and make changes from your terminal—without Java or `keytool`.
 
-- Lists every entry with its type (private key, trusted certificate, or secret
-  key), public key algorithm, key size, and expiry date. Certificates expiring
-  within 30 days are shown in yellow and expired ones in red.
-- Flags weak cryptography: RSA and DSA keys under 2048 bits, EC keys under 256
-  bits, and MD2, MD5, or SHA-1 signatures.
-- Filters entries by alias or subject, and sorts them by alias or expiry date.
-- Shows each certificate's full details, including decoded extensions, and its
-  certificate hierarchy, with each signature checked against the issuer's key.
-- Diagnoses stored certificate chains offline: validity, issuer names and key
-  identifiers, CA status, signing key usage, and path-length constraints.
-- Shows a certificate signing request's subject, public key, requested
-  extensions, and attributes, and checks its signature with its own key.
-- Shows the raw ASN.1 structure and PEM encoding of a certificate or request.
-- Exports a certificate, a whole chain, a public key, or a request to a new
-  PEM or DER file.
-- Detects the format from the file content, so a PKCS12 store renamed `.jks`
-  still opens.
-- Opens PKCS12 files made by Java, OpenSSL, and other tools. Keys without a
-  name are listed under their certificate's common name, and certificates that
-  belong to no key are listed as `Certificate` entries.
-- Creates and edits JKS, JCEKS, and PKCS12 keystores: generate an RSA, EC, or
-  Ed25519 key pair with a self-signed certificate, make a certificate request
-  for a private key and import the CA's reply, sign a certificate request, a new
-  key pair, or a revocation list with a private key, edit a certificate chain, import a trusted certificate
-  or a key pair (PEM or PKCS #8), copy entries from another keystore, export
-  a private key with or
-  without its certificates, generate, import, or export an AES or HMAC secret key, rename or delete an entry, or change the keystore password or a key's
-  password.
-- Converts a keystore between JKS, JCEKS, and PKCS12, private keys included. Nothing changes on disk until you save, and saving
-  replaces the file in one step.
-- Safe and self-contained: it never displays private or secret keys, writes
-  one unencrypted only after you confirm it, and
-  does not need Java or `keytool`.
+- **Find what needs attention.** Browse and filter entries, spot expired
+  certificates, and flag weak cryptography.
+- **Understand your certificates.** Explore certificate details and chains,
+  check signatures, and inspect certificate requests and revocation lists.
+- **Manage keys and certificates.** Create keys, request and sign certificates,
+  import and export entries, and update passwords.
+- **Save with confidence.** Changes stay in memory until you save. Convert
+  between keystore formats while keeping your keys and certificates together.
+
+Supports JKS, JCEKS, and PKCS12 keystores, plus standalone certificates,
+certificate requests, and revocation lists. See the
+[usage reference](docs/REFERENCE.md) for supported formats and all available
+actions.
 
 ## Install
 
