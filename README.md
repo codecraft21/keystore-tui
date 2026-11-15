@@ -48,23 +48,21 @@ building from source, and download verification.
 
 ## Usage
 
-Apart from starting the app without parameters, you can open a keystore,
-certificate, or certificate request directly:
+Start the app without parameters:
+
+```sh
+keystore-tui
+```
+
+From there, open an existing file or create a new keystore.
+
+You can also open a keystore directly by passing its path:
 
 ```sh
 keystore-tui "path/to/store.jks"
-keystore-tui "path/to/certificate.pem"
 ```
 
-Enter the keystore password when prompted. You can also run `keystore-tui`
-without a path and press `o` to browse for a file.
-
-Use the arrow keys to select an entry and `Enter` to inspect it. Press `Esc`
-to return to the list, or `q` to quit. `keystore-tui --help` shows command-line
-usage.
-
-See the [usage reference](docs/REFERENCE.md) for all key bindings, filtering,
-certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
+See the [usage reference](docs/REFERENCE.md) for the complete guide.
 
 ## Limitations
 
