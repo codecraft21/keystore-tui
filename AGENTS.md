@@ -55,7 +55,8 @@ interactive terminal. CI (`.github/workflows/rust.yml`) runs these automated
 checks on Linux for pushes to `main` and PRs, builds with the minimum supported
 Rust from `rust-version`, runs all tests, including the PTY smoke tests, on
 macOS, runs the unit tests on Windows, and measures test coverage with
-`cargo llvm-cov` for Codecov. Changes only to Markdown, `docs/`, or the licence
+`cargo llvm-cov` for Codecov (`codecov.yml` makes the patch status
+informational). Changes only to Markdown, `docs/`, or the licence
 skip these jobs, except `docs/SPEC.md`; the `ci-ok` job reports the combined
 result and is the only check branch protection should require. Release CI runs
 `dist plan` on PRs. When changing `rust-version`, update the toolchain in the
