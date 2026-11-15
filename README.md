@@ -60,6 +60,7 @@ You can also open a keystore directly by passing its path:
 
 ```sh
 keystore-tui "path/to/store.jks"
+keystore-tui "$JAVA_HOME/lib/security/cacerts"
 ```
 
 See the [usage reference](docs/REFERENCE.md) for the complete guide.
