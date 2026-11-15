@@ -122,7 +122,7 @@ rm fixture.pem
 `-certpbe` must be given: with `-nomac` and the default algorithm, OpenSSL
 leaves the certificates unencrypted. Each run uses a new salt, so after
 regenerating `openssl-no-mac-aes.p12`, find a new wrong password that passes the
-padding check and update `VALID_PADDING_PASSWORD` in `src/pkcs12.rs`, the
+padding check and update `VALID_PADDING_PASSWORD` in `src/pkcs12/tests/mod.rs`, the
 password in `src/tests/passwords.rs`, and this file. OpenSSL reports such a password with
 an ASN.1 error instead of `bad decrypt`:
 
