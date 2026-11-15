@@ -15,6 +15,7 @@ use test_support::{
     fixture_summary, mixed_keystore,
 };
 
+mod browser;
 mod certificate_files;
 mod chains;
 mod creating;
@@ -26,6 +27,7 @@ mod input;
 mod key_pairs;
 mod key_passwords;
 mod opening;
+mod passwords;
 mod secret_keys;
 mod signing_requests;
 

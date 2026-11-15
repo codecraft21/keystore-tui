@@ -123,7 +123,7 @@ rm fixture.pem
 leaves the certificates unencrypted. Each run uses a new salt, so after
 regenerating `openssl-no-mac-aes.p12`, find a new wrong password that passes the
 padding check and update `VALID_PADDING_PASSWORD` in `src/pkcs12.rs`, the
-password in `src/tests/opening.rs`, and this file. OpenSSL reports such a password with
+password in `src/tests/passwords.rs`, and this file. OpenSSL reports such a password with
 an ASN.1 error instead of `bad decrypt`:
 
 ```sh
