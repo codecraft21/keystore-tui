@@ -33,7 +33,13 @@ After any code or dependency change, run:
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
+cargo llvm-cov --locked --summary-only
 ```
+
+The coverage check needs [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov)
+and the `llvm-tools-preview` rustup component; the keystore-tui cloud
+environment installs both. Compare against `main` to tell new uncovered code
+from code that only moved.
 
 On Linux, macOS, or WSL, `cargo test` also runs the PTY smoke tests in
 `tests/terminal_smoke/` against the built binary. To test another build, run:
