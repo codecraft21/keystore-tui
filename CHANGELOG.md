@@ -5,6 +5,9 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- Refresh the README screenshots for the current app and show them in a compact
+  row with links to the full-size images.
+
 - Entry details reuse fingerprints and formatted details, ASN.1, and PEM while
   inspecting an entry, reducing repeated work on idle redraws.
 - PKCS12 entry listing reuses parsed certificate metadata when building chains.
