@@ -34,7 +34,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/java_serialization.rs` | Walking a serialized Java object (a JCEKS secret key) without deserializing it, and giving the byte arrays and strings it holds |
 | `src/secret_key.rs` | Secret keys as the keystores hold them: sealing and unsealing Java's JCEKS `SealedObject`, the PKCS #8 structure of PKCS12, the algorithms offered, and reading a key from a file's content |
 | `src/secret_entry.rs` | Secret-key entries: choosing the algorithm of a new or imported key, reading a key file, and exporting a key to a new file |
-| `src/pkcs12.rs` | PKCS12 parsing, MAC verification, and decryption of safe contents (AES and legacy PBE); listing entries from bags; editing bags, re-encrypting keys for a new password, and writing bags back with PBES2 and a new MAC |
+| `src/pkcs12/` | PKCS12 support: `read.rs` parses, verifies the MAC, and lists entries from bags; `crypto.rs` decrypts safe contents (AES and legacy PBE) and re-encrypts keys for a new password; `bags.rs` reads bag metadata and attributes; `write.rs` edits bags and writes them back with PBES2 and a new MAC |
 | `src/entry_list.rs` | Entry-list filtering, sorting, and expiry classification |
 | `src/certificate.rs` | X.509 summary (subject, algorithm, key size, expiry) for the entry table |
 | `src/certificate/details.rs` | Full certificate fields for the detail view |
