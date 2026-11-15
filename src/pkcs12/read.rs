@@ -179,6 +179,7 @@ pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, b
         .iter()
         .filter_map(|bag| bag.certificate_der.as_deref())
         .collect();
+    let pool = certificate::details::ParsedPool::new(&pool);
     let is_key = |entry: &KeystoreEntry| {
         matches!(
             entry.content,
@@ -209,10 +210,8 @@ pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, b
                     unnamed_keys += 1;
                     format!("Private key {unnamed_keys}")
                 });
-            let (certificates, chain_warning) = leaf.map_or_else(
-                || (vec![], None),
-                |leaf| certificate::details::chain(leaf, &pool),
-            );
+            let (certificates, chain_warning) =
+                leaf.map_or_else(|| (vec![], None), |leaf| pool.chain(leaf));
             entries.push((
                 KeystoreEntry {
                     alias,
@@ -270,7 +269,7 @@ pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, b
                             unnamed_certificates += 1;
                             format!("Certificate {unnamed_certificates}")
                         });
-                    let (certificates, chain_warning) = certificate::details::chain(der, &pool);
+                    let (certificates, chain_warning) = pool.chain(der);
                     entries.push((
                         KeystoreEntry {
                             alias,
@@ -302,7 +301,7 @@ pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, b
                         sources.push(index);
                         continue;
                     }
-                    let (certificates, chain_warning) = certificate::details::chain(der, &pool);
+                    let (certificates, chain_warning) = pool.chain(der);
                     entries.push((
                         KeystoreEntry {
                             alias,

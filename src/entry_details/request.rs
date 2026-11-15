@@ -2,8 +2,7 @@
 use ratatui::{text::Text, widgets::Row};
 
 use super::{
-    extensions_text, fingerprint_text, hierarchy_row, public_key_text, section_text,
-    signature_line, weakness_lines,
+    extensions_text, hierarchy_row, public_key_text, section_text, signature_line, weakness_lines,
 };
 use crate::{
     certificate::{
@@ -58,7 +57,7 @@ impl RequestView {
     }
 
     /// The detail text after the alias and type.
-    pub(super) fn text(&self, mut text: String, sha1: bool) -> Text<'static> {
+    pub(super) fn text(&self, mut text: String, fingerprint: &str) -> Text<'static> {
         let summary = self.summary.as_ref();
         let mut lines = Vec::new();
         if let Some(request) = &self.request {
@@ -76,7 +75,7 @@ impl RequestView {
         } else {
             text.push_str("Certificate request could not be decoded.\n\n");
         }
-        text.push_str(&fingerprint_text(&self.der, sha1));
+        text.push_str(fingerprint);
         if let Some(request) = &self.request {
             text.push_str(&extensions_text(
                 "Requested extensions",

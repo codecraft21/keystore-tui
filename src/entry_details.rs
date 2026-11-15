@@ -5,6 +5,7 @@ mod crl;
 mod request;
 
 use std::{
+    cell::{OnceCell, Ref, RefCell},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -132,7 +133,60 @@ enum Pane {
     Pem,
 }
 
+/// Lazy rendering for the selected immutable object; discarded on selection changes.
+#[derive(Default)]
+struct RenderCache {
+    fingerprints: [OnceCell<String>; 2],
+    asn1: OnceCell<(Text<'static>, bool)>,
+    pem: OnceCell<Text<'static>>,
+    details: RefCell<Option<(bool, bool, Text<'static>)>>,
+}
+
+enum Rendered<'a> {
+    Borrowed(&'a Text<'static>),
+    Guard(Ref<'a, Text<'static>>),
+    Owned(Text<'static>),
+}
+
+impl std::ops::Deref for Rendered<'_> {
+    type Target = Text<'static>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(text) => text,
+            Self::Owned(text) => text,
+            Self::Guard(text) => text,
+        }
+    }
+}
+
+impl Rendered<'_> {
+    /// Borrow document strings while giving Ratatui the span metadata it owns.
+    fn borrowed(&self) -> Text<'_> {
+        let mut text = Text::from(
+            self.lines
+                .iter()
+                .map(|line| {
+                    let mut borrowed = Line::from(
+                        line.spans
+                            .iter()
+                            .map(|span| Span::styled(span.content.as_ref(), span.style))
+                            .collect::<Vec<_>>(),
+                    )
+                    .style(line.style);
+                    borrowed.alignment = line.alignment;
+                    borrowed
+                })
+                .collect::<Vec<_>>(),
+        )
+        .style(self.style);
+        text.alignment = self.alignment;
+        text
+    }
+}
+
 pub struct EntryDetails {
+    cache: RenderCache,
     alias: String,
     kind: &'static str,
     hierarchy: TableState,
@@ -166,6 +220,7 @@ impl EntryDetails {
             Content::Crl(der) => View::Crl(CrlView::new(der)),
         };
         let mut details = Self {
+            cache: RenderCache::default(),
             alias: entry.alias.clone(),
             kind: entry.kind(),
             hierarchy: TableState::default(),
@@ -349,20 +404,63 @@ impl EntryDetails {
     fn select(&mut self, index: usize) {
         if self.hierarchy.selected() != Some(index) {
             self.hierarchy.select(Some(index));
+            self.cache = RenderCache::default();
             self.scroll = 0;
         }
     }
 
-    fn text(&self, now: i64) -> Text<'static> {
-        let text = format!("Alias: {}\nType: {}\n\n", self.alias, self.kind);
-        match (&self.view, self.pane) {
-            (_, Pane::Asn1) => self.encoding_text(false),
-            (_, Pane::Pem) => self.encoding_text(true),
-            (View::Chain(chain), Pane::Diagnostics) => chain.diagnostics(now),
-            (View::Request(view), _) => view.text(text, self.sha1),
-            (View::Crl(view), _) => view.text(text, self.sha1),
-            (View::Chain(chain), _) => chain.text(text, self.selected(chain), now, self.sha1),
+    fn text(&self, now: i64) -> Rendered<'_> {
+        match self.pane {
+            Pane::Asn1 => return Rendered::Borrowed(&self.asn1().0),
+            Pane::Pem => {
+                let text = self.cache.pem.get_or_init(|| {
+                    if self.asn1().1 {
+                        Text::from(Line::from(
+                            "The PEM encoding is not shown, because the request holds a challenge password or data that could not be decoded. Press x to export it to a file.",
+                        ).yellow())
+                    } else if let Some((der, label, _)) = self.encoding() {
+                        Text::from(pem::encode(label, der))
+                    } else {
+                        Text::from("No certificate is stored with this entry.")
+                    }
+                });
+                return Rendered::Borrowed(text);
+            }
+            Pane::Diagnostics => {
+                if let View::Chain(chain) = &self.view {
+                    return Rendered::Owned(chain.diagnostics(now));
+                }
+            }
+            Pane::Details => {}
         }
+        let expired = match &self.view {
+            View::Chain(chain) => self
+                .selected(chain)
+                .and_then(|index| chain.metadata[index].as_ref())
+                .is_some_and(|info| info.not_after.to_unix() < now),
+            _ => false,
+        };
+        let mut cache = self.cache.details.borrow_mut();
+        if !cache
+            .as_ref()
+            .is_some_and(|(sha1, was_expired, _)| *sha1 == self.sha1 && *was_expired == expired)
+        {
+            let fingerprint = self.cache.fingerprints[usize::from(self.sha1)].get_or_init(|| {
+                self.encoding()
+                    .map_or_else(String::new, |(der, _, _)| fingerprint_text(der, self.sha1))
+            });
+            let prefix = format!("Alias: {}\nType: {}\n\n", self.alias, self.kind);
+            let text = match &self.view {
+                View::Request(view) => view.text(prefix, fingerprint),
+                View::Crl(view) => view.text(prefix, fingerprint),
+                View::Chain(chain) => chain.text(prefix, self.selected(chain), now, fingerprint),
+            };
+            *cache = Some((self.sha1, expired, text));
+        }
+        drop(cache);
+        Rendered::Guard(Ref::map(self.cache.details.borrow(), |cache| {
+            &cache.as_ref().unwrap().2
+        }))
     }
 
     /// The selected certificate's or the request's DER, its PEM label, and
@@ -381,36 +479,26 @@ impl EntryDetails {
         }
     }
 
-    /// The ASN.1 structure, or with `pem` the PEM text. A request's PEM is not
-    /// shown when its dump had to leave anything out.
-    fn encoding_text(&self, pem: bool) -> Text<'static> {
-        let Some((der, label, request)) = self.encoding() else {
-            return Text::from("No certificate is stored with this entry.");
-        };
-        let dump = asn1_dump::dump(der, request);
-        if pem {
+    /// The selected object's ASN.1 structure and its PEM withholding decision.
+    fn asn1(&self) -> &(Text<'static>, bool) {
+        self.cache.asn1.get_or_init(|| {
+            let Some((der, _, request)) = self.encoding() else {
+                return (Text::from("No certificate is stored with this entry."), false);
+            };
+            let dump = asn1_dump::dump(der, request);
+            let mut lines = vec![Line::from(format!(
+                "DER encoding, {} bytes. Each line starts with the element's byte offset.",
+                der.len()
+            ))];
             if dump.withheld {
-                return Text::from(Line::from(
-                    "The PEM encoding is not shown, because the request holds a challenge password or data that could not be decoded. Press x to export it to a file.",
+                lines.push(Line::from(
+                    "Challenge password values, and any bytes that could not be decoded, are not shown.",
                 ).yellow());
             }
-            return Text::from(pem::encode(label, der));
-        }
-        let mut lines = vec![Line::from(format!(
-            "DER encoding, {} bytes. Each line starts with the element's byte offset.",
-            der.len()
-        ))];
-        if dump.withheld {
-            lines.push(
-                Line::from(
-                    "Challenge password values, and any bytes that could not be decoded, are not shown.",
-                )
-                .yellow(),
-            );
-        }
-        lines.push(Line::from(""));
-        lines.extend(dump.lines.into_iter().map(Line::from));
-        Text::from(lines)
+            lines.push(Line::from(""));
+            lines.extend(dump.lines.into_iter().map(Line::from));
+            (Text::from(lines), dump.withheld)
+        })
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
@@ -523,16 +611,21 @@ impl EntryDetails {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs() as i64);
-        let paragraph = Paragraph::new(self.text(now)).wrap(Wrap { trim: false });
-        self.page = inner.height.max(1);
-        self.max_scroll = u16::try_from(
+        let text = self.text(now);
+        let paragraph = Paragraph::new(text.borrowed()).wrap(Wrap { trim: false });
+        let page = inner.height.max(1);
+        let max_scroll = u16::try_from(
             paragraph
                 .line_count(inner.width)
                 .saturating_sub(usize::from(inner.height)),
         )
         .unwrap_or(u16::MAX);
-        self.scroll = self.scroll.min(self.max_scroll);
-        frame.render_widget(paragraph.scroll((self.scroll, 0)).block(block), details);
+        let scroll = self.scroll.min(max_scroll);
+        frame.render_widget(paragraph.scroll((scroll, 0)).block(block), details);
+        drop(text);
+        self.page = page;
+        self.max_scroll = max_scroll;
+        self.scroll = scroll;
         frame.render_widget(path_bar::line(&self.path), path_area);
         frame.render_widget(footer, footer_area);
     }
@@ -592,6 +685,49 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn rendering_is_lazy_reuses_documents_and_drops_selected_object_cache() {
+        let data = entry(vec![
+            metadata_certificate("leaf", "root", &[1], &[]),
+            metadata_certificate("root", "root", &[2], &[]),
+        ]);
+        let mut view = EntryDetails::new(&data, Path::new(""));
+        assert!(view.cache.details.borrow().is_none());
+        assert!(view.cache.asn1.get().is_none());
+        let first = view.text(0).lines[0].spans[0].content.as_ptr();
+        assert_eq!(first, view.text(1).lines[0].spans[0].content.as_ptr());
+        let fingerprint = view.cache.fingerprints[0].get().unwrap().as_ptr();
+        view.handle_key(KeyCode::Char('f'));
+        assert!(view.text(0).to_string().contains("Fingerprint (SHA-1)"));
+        view.handle_key(KeyCode::Char('f'));
+        assert!(view.text(0).to_string().contains("Fingerprint (SHA-256)"));
+        assert_eq!(
+            fingerprint,
+            view.cache.fingerprints[0].get().unwrap().as_ptr()
+        );
+        view.handle_key(KeyCode::Char('p'));
+        let first = view.text(0).lines[0].spans[0].content.as_ptr();
+        assert_eq!(first, view.text(1).lines[0].spans[0].content.as_ptr());
+        let dump = view.cache.asn1.get().unwrap().0.lines.as_ptr();
+        view.handle_key(KeyCode::Char('a'));
+        assert_eq!(dump, view.text(0).lines.as_ptr());
+        draw(&mut view, 80, 24);
+        draw(&mut view, 120, 40);
+        assert_eq!(dump, view.text(0).lines.as_ptr());
+        view.handle_key(KeyCode::Tab);
+        view.handle_key(KeyCode::Up);
+        assert!(view.cache.asn1.get().is_none());
+        assert!(view.cache.pem.get().is_none());
+        assert!(view.cache.details.borrow().is_none());
+        assert!(
+            view.cache
+                .fingerprints
+                .iter()
+                .all(|hash| hash.get().is_none())
+        );
+        assert!(view.text(0).to_string().contains("UTF8String \"root\""));
     }
 
     #[test]
@@ -724,6 +860,25 @@ mod tests {
         let text = view.text(0).to_string();
         assert!(text.starts_with("The PEM encoding is not shown"));
         assert!(!text.contains("BEGIN"));
+        for key in ['a', 'p', 'p', 'f', 'p', 'a', 'p'] {
+            view.handle_key(KeyCode::Char(key));
+            let text = view.text(0).to_string();
+            assert!(!text.contains("synthetic-secret"));
+            assert!(!text.contains("BEGIN CERTIFICATE REQUEST"));
+        }
+        // Undecodable request bytes also retain the withholding decision,
+        // including when PEM is the first encoding pane opened.
+        let unreadable = KeystoreEntry {
+            content: Content::Request(b"synthetic-secret".to_vec()),
+            ..entry(vec![])
+        };
+        let mut view = EntryDetails::new(&unreadable, Path::new(""));
+        for key in ['p', 'a', 'p', 'p', 'p'] {
+            view.handle_key(KeyCode::Char(key));
+            let text = view.text(0).to_string();
+            assert!(!text.contains("synthetic-secret"));
+            assert!(!text.contains("BEGIN CERTIFICATE REQUEST"));
+        }
     }
 
     #[test]
@@ -736,12 +891,12 @@ mod tests {
         let info = chain.metadata[0].as_ref().unwrap();
         let expiry = info.not_after.to_unix();
         let timestamp = time_text(&info.not_after);
-        for now in [expiry - 1, expiry, expiry + 1] {
+        for now in [expiry - 1, expiry, expiry + 1, expiry, expiry - 1] {
             let mut terminal = Terminal::new(TestBackend::new(100, 50)).unwrap();
             terminal
                 .draw(|frame| {
                     frame.render_widget(
-                        Paragraph::new(view.text(now)).wrap(Wrap { trim: false }),
+                        Paragraph::new(view.text(now).borrowed()).wrap(Wrap { trim: false }),
                         frame.area(),
                     );
                 })

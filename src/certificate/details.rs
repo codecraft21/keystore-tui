@@ -219,59 +219,90 @@ pub(crate) fn signature_name(id: &ObjectIdentifier) -> String {
 
 /// Build a descriptive, leaf-first chain, never guessing between issuer candidates.
 pub fn chain(leaf: &[u8], pool: &[&[u8]]) -> (Vec<Vec<u8>>, Option<&'static str>) {
-    let mut chain = vec![leaf.to_vec()];
-    let metadata: Vec<_> = pool.iter().map(|der| Details::parse(der).ok()).collect();
-    loop {
-        let Some(current) = chain.last().and_then(|der| Details::parse(der).ok()) else {
-            return (
-                chain,
-                Some("Certificate could not be decoded; issuer is unavailable."),
-            );
-        };
-        if current.subject == current.issuer {
-            return (chain, None);
+    ParsedPool::new(pool).chain(leaf)
+}
+
+/// Certificate metadata shared by all descriptive chains in one listing.
+/// Retains pool order and duplicate encodings for the existing issuer rules.
+pub(crate) struct ParsedPool<'a> {
+    certificates: Vec<(&'a [u8], Option<Details>)>,
+}
+
+impl<'a> ParsedPool<'a> {
+    pub(crate) fn new(pool: &[&'a [u8]]) -> Self {
+        Self {
+            certificates: pool
+                .iter()
+                .map(|der| (*der, Details::parse(der).ok()))
+                .collect(),
         }
-        let mut candidates: Vec<&[u8]> = Vec::new();
-        for (der, info) in pool.iter().zip(&metadata) {
-            let Some(info) = info else {
-                continue;
+    }
+
+    pub(crate) fn chain(&self, leaf: &[u8]) -> (Vec<Vec<u8>>, Option<&'static str>) {
+        let mut chain = vec![leaf.to_vec()];
+        // Leaves in the pool (including unreadable ones) reuse their cached result.
+        // The compatibility wrapper also accepts leaves outside the pool.
+        let leaf_metadata;
+        let mut current = match self.certificates.iter().find(|(der, _)| *der == leaf) {
+            Some((_, info)) => info.as_ref(),
+            None => {
+                leaf_metadata = Details::parse(leaf).ok();
+                leaf_metadata.as_ref()
+            }
+        };
+        loop {
+            let Some(info) = current else {
+                return (
+                    chain,
+                    Some("Certificate could not be decoded; issuer is unavailable."),
+                );
             };
-            if info.subject != current.issuer {
-                continue;
+            if info.subject == info.issuer {
+                return (chain, None);
             }
-            if let (Some(authority), Some(subject)) =
-                (&current.authority_key_id, &info.subject_key_id)
-                && authority != subject
-            {
-                continue;
+            let mut candidates: Vec<(&[u8], &Details)> = Vec::new();
+            for (der, metadata) in &self.certificates {
+                let Some(candidate) = metadata else {
+                    continue;
+                };
+                if candidate.subject != info.issuer {
+                    continue;
+                }
+                if let (Some(authority), Some(subject)) =
+                    (&info.authority_key_id, &candidate.subject_key_id)
+                    && authority != subject
+                {
+                    continue;
+                }
+                if let Some(serial) = &info.authority_serial
+                    && serial_text(serial, true) != candidate.serial_hex
+                {
+                    continue;
+                }
+                if !info.authority_issuers.is_empty()
+                    && !info.authority_issuers.contains(&candidate.issuer)
+                {
+                    continue;
+                }
+                if !candidates.iter().any(|(candidate, _)| candidate == der) {
+                    candidates.push((der, candidate));
+                }
             }
-            if let Some(serial) = &current.authority_serial
-                && serial_text(serial, true) != info.serial_hex
-            {
-                continue;
+            if candidates.len() > 1 {
+                return (chain, Some("Issuer could not be determined uniquely."));
             }
-            if !current.authority_issuers.is_empty()
-                && !current.authority_issuers.contains(&info.issuer)
-            {
-                continue;
+            let Some((issuer, metadata)) = candidates.first() else {
+                return (
+                    chain,
+                    Some("Issuer certificate is not stored or could not be decoded."),
+                );
+            };
+            if chain.iter().any(|der| der.as_slice() == *issuer) {
+                return (chain, Some("Certificate chain contains a cycle."));
             }
-            if !candidates.contains(der) {
-                candidates.push(der);
-            }
+            chain.push(issuer.to_vec());
+            current = Some(metadata);
         }
-        if candidates.len() > 1 {
-            return (chain, Some("Issuer could not be determined uniquely."));
-        }
-        let Some(issuer) = candidates.first() else {
-            return (
-                chain,
-                Some("Issuer certificate is not stored or could not be decoded."),
-            );
-        };
-        if chain.iter().any(|der| der.as_slice() == *issuer) {
-            return (chain, Some("Certificate chain contains a cycle."));
-        }
-        chain.push(issuer.to_vec());
     }
 }
 
@@ -430,6 +461,29 @@ mod tests {
             chain(&leaf, &[&root, &unrelated, &intermediate, &root, &leaf]);
         assert_eq!(certificates, [leaf, intermediate, root]);
         assert_eq!(warning, None);
+    }
+
+    #[test]
+    fn shared_pool_builds_independent_chains_and_accepts_leaves_outside_pool() {
+        let first = metadata_certificate("first", "intermediate", &[1], &[]);
+        let second = metadata_certificate("second", "intermediate", &[2], &[]);
+        let intermediate = metadata_certificate("intermediate", "root", &[3], &[]);
+        let root = metadata_certificate("root", "root", &[4], &[]);
+        let encodings: &[&[u8]] = &[&root, b"unreadable", &first, &intermediate, &root];
+        let pool = ParsedPool::new(encodings);
+        for leaf in [&first, &second, &first] {
+            assert_eq!(
+                pool.chain(leaf),
+                (vec![leaf.clone(), intermediate.clone(), root.clone()], None)
+            );
+        }
+        assert_eq!(
+            pool.chain(b"unreadable"),
+            (
+                vec![b"unreadable".to_vec()],
+                Some("Certificate could not be decoded; issuer is unavailable.")
+            )
+        );
     }
 
     #[test]
