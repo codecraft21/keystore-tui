@@ -3,6 +3,14 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Entry details reuse fingerprints and formatted details, ASN.1, and PEM while
+  inspecting an entry, reducing repeated work on idle redraws.
+- PKCS12 entry listing reuses parsed certificate metadata when building chains.
+- JCEKS key protection and recovery avoid allocating a digest buffer on every
+  password derivation iteration.
+
 ## 1.1.0
 
 - JKS, JCEKS, and PKCS12 keystores can now be changed. Press `d` or `Delete` to delete

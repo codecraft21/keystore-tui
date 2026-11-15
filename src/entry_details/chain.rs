@@ -5,10 +5,7 @@ use ratatui::{
     widgets::Row,
 };
 
-use super::{
-    extensions_text, fingerprint_text, hierarchy_row, public_key_text, signature_line,
-    weakness_lines,
-};
+use super::{extensions_text, hierarchy_row, public_key_text, signature_line, weakness_lines};
 use crate::certificate::{
     self, Summary,
     details::{Details, time_text},
@@ -122,7 +119,7 @@ impl ChainView {
         mut text: String,
         index: Option<usize>,
         now: i64,
-        sha1: bool,
+        fingerprint: &str,
     ) -> Text<'static> {
         if let Some(warning) = self.chain_warning {
             text.push_str(&format!("{warning}\n\n"));
@@ -163,7 +160,7 @@ impl ChainView {
         } else {
             text.push_str("Certificate could not be decoded.\n\n");
         }
-        text.push_str(&fingerprint_text(&self.certificates[index], sha1));
+        text.push_str(fingerprint);
         if let Some(info) = &self.metadata[index] {
             text.push_str(&extensions_text("Extensions", &info.extensions));
         }

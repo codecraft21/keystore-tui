@@ -2,7 +2,7 @@
 //! hierarchy.
 use ratatui::{text::Text, widgets::Row};
 
-use super::{extensions_text, fingerprint_text, hierarchy_row, section_text};
+use super::{extensions_text, hierarchy_row, section_text};
 use crate::{
     certificate::{details::time_text, extensions},
     revocation_list::List,
@@ -35,10 +35,10 @@ impl CrlView {
     }
 
     /// The detail text after the alias and type.
-    pub(super) fn text(&self, mut text: String, sha1: bool) -> Text<'static> {
+    pub(super) fn text(&self, mut text: String, fingerprint: &str) -> Text<'static> {
         let Some(list) = &self.list else {
             text.push_str("Revocation list could not be decoded.\n\n");
-            text.push_str(&fingerprint_text(&self.der, sha1));
+            text.push_str(fingerprint);
             return Text::from(text);
         };
         text.push_str(&format!(
@@ -51,7 +51,7 @@ impl CrlView {
                 .map_or_else(|| "None".into(), time_text),
             list.signature_algorithm,
         ));
-        text.push_str(&fingerprint_text(&self.der, sha1));
+        text.push_str(fingerprint);
         text.push_str(&extensions_text("Extensions", &list.extensions));
         let revoked: Vec<_> = list
             .revoked

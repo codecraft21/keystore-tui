@@ -183,14 +183,18 @@ fn jceks_key(
     let mut derived = Zeroizing::new([0; 32]);
     let mut input = Zeroizing::new(Vec::with_capacity(16 + password.len()));
     for (half, output) in salt.chunks(4).zip(derived.chunks_mut(16)) {
-        let mut hashed = Zeroizing::new(half.to_vec());
+        let mut hashed = Zeroizing::new([0; 16]);
+        hashed[..half.len()].copy_from_slice(half);
+        // Only the first hash uses the four-byte salt instead of a digest.
+        let mut hashed_len = half.len();
         for _ in 0..iterations {
             input.clear();
-            input.extend_from_slice(&hashed);
+            input.extend_from_slice(&hashed[..hashed_len]);
             input.extend_from_slice(password.as_bytes());
-            *hashed = sum_md5(&input).to_vec();
+            *hashed = sum_md5(&input);
+            hashed_len = hashed.len();
         }
-        output.copy_from_slice(&hashed);
+        output.copy_from_slice(&hashed[..hashed_len]);
     }
     let mut key = Zeroizing::new([0; 24]);
     key.copy_from_slice(&derived[..24]);

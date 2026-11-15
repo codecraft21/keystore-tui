@@ -42,7 +42,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/certificate/security.rs` | Weak key-size and signature-hash checks |
 | `src/certificate/diagnostics.rs` | Offline stored-chain validity, issuer and CA constraint diagnostics; no trust decisions |
 | `src/certificate/signature.rs` | Checking a certificate's signature with its issuer's public key, and a request's with its own; finding a certificate's SubjectPublicKeyInfo |
-| `src/entry_details.rs` | The full-screen detail view: layout, keys, the bottom pane (details, diagnostics, ASN.1, PEM), export, and shared detail formatting |
+| `src/entry_details.rs` | The full-screen detail view: layout, keys, the bottom pane (details, diagnostics, ASN.1, PEM), export, shared detail formatting, and lazy rendering caches bounded to the selected object |
 | `src/entry_details/chain.rs` | A stored chain's hierarchy and certificate details |
 | `src/entry_details/request.rs` | A certificate request's details, shown in place of a hierarchy |
 | `src/entry_details/crl.rs` | A revocation list's details, shown in place of a hierarchy |
