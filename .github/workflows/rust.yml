@@ -10,8 +10,37 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Decides whether the change needs the Rust jobs. Changes to Markdown,
+  # docs/, or the licence alone skip them, except docs/SPEC.md, which the
+  # spec.rs test checks.
+  changes:
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.code == 'true' || steps.filter.outputs.spec == 'true' }}
+
+    steps:
+    - uses: actions/checkout@v7
+    - uses: dorny/paths-filter@v3
+      id: filter
+      with:
+        predicate-quantifier: every
+        filters: |
+          code:
+            - '**'
+            - '!**.md'
+            - '!docs/**'
+            - '!LICENSE*'
+          spec:
+            - 'docs/SPEC.md'
+
   build:
 
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -31,6 +60,8 @@ jobs:
   # Keep the toolchain here in step with `rust-version`.
   msrv:
 
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -47,6 +78,8 @@ jobs:
   platforms:
 
     name: platforms (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -71,6 +104,8 @@ jobs:
   # failure (such as on fork PRs, which get no OIDC token) doesn't fail CI.
   coverage:
 
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -93,3 +128,17 @@ jobs:
         files: lcov.info
         disable_search: true
         use_oidc: true
+
+  # The single required check for branch protection. It passes when every job
+  # above succeeded or was skipped for a docs-only change, so skipped jobs
+  # don't leave PRs waiting for checks that never report.
+  ci-ok:
+
+    needs: [changes, build, msrv, platforms, coverage]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check that no job failed or was cancelled
+      if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      run: exit 1
