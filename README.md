@@ -48,7 +48,8 @@ building from source, and download verification.
 
 ## Usage
 
-Start with a keystore, certificate, or certificate request:
+Apart from starting the app without parameters, you can open a keystore,
+certificate, or certificate request directly:
 
 ```sh
 keystore-tui "path/to/store.jks"
