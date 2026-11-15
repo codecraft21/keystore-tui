@@ -8,13 +8,15 @@
 [![crates.io](https://img.shields.io/crates/v/keystore-tui.svg)](https://crates.io/crates/keystore-tui)
 [![License](https://img.shields.io/crates/l/keystore-tui.svg)](LICENSE)
 
-A terminal app for inspecting keystores, certificates, and certificate signing requests.
+A terminal app for managing keystores, keys, and certificates.
 
-![Main screen showing five keystore entries, including one expired certificate](docs/main-screen.png)
+<p align="center">
+  <a href="docs/main-screen.png"><img src="docs/main-screen.png" alt="Entry list with expiry highlighting and keystore and key management shortcuts" width="32%"></a>
+  <a href="docs/entry-details.png"><img src="docs/entry-details.png" alt="Certificate details with verified signature, fingerprint, and export shortcuts" width="32%"></a>
+  <a href="docs/chain-diagnostics.png"><img src="docs/chain-diagnostics.png" alt="Offline chain diagnostics with validity and signature checks, and explicit trust and revocation limitations" width="32%"></a>
+</p>
 
-![Details of the selected api-production entry, showing certificate fields and its verified signature](docs/entry-details.png)
-
-![Offline chain diagnostics for the openssl-cert.p12 fixture, showing validity and signature checks with trust and revocation unchecked](docs/chain-diagnostics.png)
+<p align="center"><sub>Entry list · Certificate details · Chain diagnostics — click an image for full size.</sub></p>
 
 Open a JKS, JCEKS, or PKCS12
 (`.jks`, `.jceks`, `.p12`, `.pfx`) file, enter its password, and browse its
