@@ -1,0 +1,8 @@
+# Codecov counts moved lines as new, so refactors that only move code can
+# fail the patch status. Report patch coverage without failing on it; the
+# project status still flags an overall coverage drop.
+coverage:
+  status:
+    patch:
+      default:
+        informational: true
