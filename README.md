@@ -68,20 +68,14 @@ certificate details, chain diagnostics, ASN.1 and PEM views, and exports.
 
 ## Limitations
 
-- Editing covers the [release 1.1 roadmap](docs/ROADMAP.md#release-11):
-  creating, saving, and converting JKS, JCEKS, and PKCS12 keystores; deleting,
-  renaming, importing, and copying entries; generating key pairs, certificate
-  requests, and secret keys; signing certificates and revocation lists;
-  importing CA replies and editing chains; exporting private, public, and
-  secret keys; and changing passwords. The roadmap lists what is planned for
-  release 1.2.
-- PKCS12 keystores are saved with AES-256 and HMAC-SHA256, which Java 8 builds
-  before 8u301 cannot read.
-- Private and secret keys are never shown. They are decrypted only in
-  memory, to sign, to export, or to protect them again.
-- Clipboard actions are not available yet.
-- PKCS12 integrity checks do not support PBMAC1 MACs.
-- Files larger than 64 MiB are refused.
+- Certificate checks run offline. They don’t establish whether a certificate
+  is trusted or has been revoked.
+- Saved PKCS12 files may not work with older Java versions.
+- Some PKCS12 protection formats, including PBMAC1, aren’t supported.
+- Built-in clipboard actions aren’t available.
+- Files larger than 64 MiB can’t be opened.
+
+See the [roadmap](docs/ROADMAP.md) for planned features.
 
 ## More documentation
 
