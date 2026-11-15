@@ -96,6 +96,52 @@ here too.
 5. **Verify revocation-list signatures** when reading a CRL with an available
    issuer certificate.
 
+The items below check revocation offline, against files the user supplies.
+They need no network access, and they lead up to the online checks planned
+for release 2.0.
+
+6. **Check a chain against a revocation list file:** in the chain
+   diagnostics, choose a CRL file and see, for each certificate the list's
+   issuer issued, whether its serial number is revoked, with the revocation
+   time and reason. The check uses only a list whose signature verifies with
+   the issuer's key (item 5), and it reports when the list is out of date
+   (past its Next Update).
+7. **Revocation status in the chain diagnostics:** each certificate shows
+   REVOKED, NOT REVOKED, or UNKNOWN (no list given, the issuer doesn't match,
+   or the list's signature can't be checked). The report still says that
+   trust is not checked.
+
+## Release 2.0
+
+Online checks. Because they need network access, they change the promise
+that the app works fully offline, so they get a major version. They also
+need new dependencies: an HTTP client with TLS, and OCSP encoding.
+
+Rules for every network feature:
+
+- The app contacts a server only when the user asks for one check. Opening,
+  browsing, and saving files never use the network.
+- Before the request is sent, the app shows the host it will contact, since
+  an OCSP request tells the CA which certificate is being checked.
+- Requests run on a background thread with a timeout, and can be cancelled.
+  The interface keeps responding, and failures say what went wrong.
+- Results say where they came from (a fetched CRL or an OCSP response) and
+  when they were produced. Nothing fetched is written to a keystore unless
+  the user saves it.
+- The [SPEC](SPEC.md) statements that the app never fetches certificates or
+  uses the network are updated when the first network feature ships.
+
+1. **Online revocation check:** for a certificate in the chain diagnostics,
+   query the OCSP responder named in its Authority Information Access
+   extension, or download the CRL from its CRL Distribution Points, and
+   check the response's signature. The result appears as in the offline
+   checks of release 1.2 (items 6 and 7).
+2. **Fetch missing issuers:** download an issuer certificate that the
+   keystore lacks from the CA Issuers location in the Authority Information
+   Access extension, to complete a chain for the diagnostics and the online
+   revocation check. A fetched certificate is added to the keystore only
+   when the user imports it.
+
 ## Out of scope
 
 - BKS, UBER, and BCFKS keystores.
