@@ -59,10 +59,9 @@ macOS, runs the unit tests on Windows, and measures test coverage with
 informational). Changes only to Markdown, `docs/`, or the licence
 skip these jobs, except `docs/SPEC.md`; the `ci-ok` job reports the combined
 result and is the only check branch protection should require. It fails unless
-every job succeeded or was skipped, so a cancelled job, such as a macOS job that
-never got a runner, needs a re-run. Keep each platform a separate job rather
-than a matrix leg: `ci-ok` sees one result per job, and a matrix's result does
-not report a cancelled leg. Release CI runs
+every job succeeded or was skipped. A job that never got a runner ends as
+`abandoned` and fails it too, so re-run that job. Keep each platform a separate
+job rather than a matrix leg, so `ci-ok` sees each platform's own result. Release CI runs
 `dist plan` on PRs. When changing `rust-version`, update the toolchain in the
 `msrv` job too.
 

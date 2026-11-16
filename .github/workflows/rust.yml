@@ -74,9 +74,8 @@ jobs:
   # Builds and tests on the other release platforms. macOS runs all tests,
   # including the PTY smoke tests. Windows builds the app, including the
   # Windows crossterm backend, and runs the unit tests; the PTY smoke tests
-  # are Unix only. These are separate jobs rather than a matrix, because
-  # `ci-ok` sees only one result for a whole matrix, which does not report a
-  # cancelled leg, such as a macOS job that never got a runner.
+  # are Unix only. They are separate jobs rather than a matrix, so `ci-ok`
+  # gets each platform's own result.
   macos:
 
     name: macOS
@@ -140,8 +139,9 @@ jobs:
 
   # The single required check for branch protection. It passes only when
   # every job above succeeded or was skipped for a docs-only change, so
-  # skipped jobs don't leave PRs waiting for checks that never report, and a
-  # failed, cancelled, or otherwise unfinished job fails it.
+  # skipped jobs don't leave PRs waiting for checks that never report. Any
+  # other result fails it: failure, cancelled, or abandoned, which is how a
+  # job that never got a runner ends.
   ci-ok:
 
     needs: [changes, build, msrv, macos, windows, coverage]
