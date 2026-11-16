@@ -135,7 +135,8 @@ any existing incomplete-entry warnings.
   `.crl`, `.key`, or `.p8` (case-insensitive). The last two are private key files,
   listed for [importing key pairs](#importing-key-pairs). When it chooses a
   [secret key file](#secret-keys), it lists every file. It also lists the Java truststore names `cacerts` and
-  `jssecacerts`, case-insensitively. Directories come first.
+  `jssecacerts`, case-insensitively. Directories come first. A symbolic link is
+  listed as what it points to; a link whose target is missing is not listed.
 - Paths are shown as users type them: on Windows, without the verbatim `\\?\`
   prefix (`C:\certs`, not `\\?\C:\certs`), unless a path needs it, such as
   one longer than 259 characters. This applies to the browser's directory, the

@@ -15,6 +15,70 @@ use ratatui::{
 struct Entry {
     path: PathBuf,
     is_directory: bool,
+    /// The name as listed, without a directory's trailing `/`: `..` for
+    /// the parent. Made once, so drawing and filtering do not allocate it.
+    name: String,
+}
+
+impl Entry {
+    fn new(path: PathBuf, is_directory: bool, is_parent: bool) -> Self {
+        let name = if is_parent {
+            "..".into()
+        } else {
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
+        Self {
+            path,
+            is_directory,
+            name,
+        }
+    }
+
+    /// Whether the name starts with the lowercase `prefix`, ignoring case.
+    /// ASCII names, the usual case, are compared without allocating.
+    fn starts_with_lowercase(&self, prefix: &str) -> bool {
+        if self.name.is_ascii() {
+            prefix.is_ascii()
+                && self
+                    .name
+                    .as_bytes()
+                    .get(..prefix.len())
+                    .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()))
+        } else {
+            self.name.to_lowercase().starts_with(prefix)
+        }
+    }
+}
+
+/// What a directory entry is, following a symbolic link to its target;
+/// `None` when that cannot be found. Only a link needs another file system
+/// call: most platforms report the type with the directory listing.
+fn file_type(entry: &fs::DirEntry) -> Option<fs::FileType> {
+    let file_type = entry.file_type().ok()?;
+    if file_type.is_symlink() {
+        fs::metadata(entry.path())
+            .ok()
+            .map(|metadata| metadata.file_type())
+    } else {
+        Some(file_type)
+    }
+}
+
+/// Whether the browser lists a file of this name without listing every file.
+fn is_supported(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        // Private key files are listed for the key pair import.
+        ["jks", "jceks", "p12", "pfx", "key", "p8"]
+            .iter()
+            .any(|ext| extension.eq_ignore_ascii_case(ext))
+    }) || path.file_name().is_some_and(|name| {
+        ["cacerts", "jssecacerts"]
+            .iter()
+            .any(|supported| name.eq_ignore_ascii_case(supported))
+    }) || crate::certificate_file::has_extension(path)
 }
 
 pub(crate) struct FilePicker {
@@ -45,20 +109,15 @@ impl FilePicker {
         let directory = crate::canonical_path::canonicalize(directory)?;
         let mut entries = Vec::new();
         for entry in fs::read_dir(&directory)? {
-            let path = entry?.path();
-            let is_directory = path.is_dir();
-            let is_supported = path.extension().is_some_and(|extension| {
-                // Private key files are listed for the key pair import.
-                ["jks", "jceks", "p12", "pfx", "key", "p8"]
-                    .iter()
-                    .any(|ext| extension.eq_ignore_ascii_case(ext))
-            }) || path.file_name().is_some_and(|name| {
-                ["cacerts", "jssecacerts"]
-                    .iter()
-                    .any(|supported| name.eq_ignore_ascii_case(supported))
-            }) || crate::certificate_file::has_extension(&path);
-            if is_directory || ((is_supported || all_files) && path.is_file()) {
-                entries.push(Entry { path, is_directory });
+            let entry = entry?;
+            // Entries whose type cannot be found, such as broken links, are not listed.
+            let Some(file_type) = file_type(&entry) else {
+                continue;
+            };
+            let path = entry.path();
+            let is_directory = file_type.is_dir();
+            if is_directory || (file_type.is_file() && (all_files || is_supported(&path))) {
+                entries.push(Entry::new(path, is_directory, false));
             }
         }
         entries.sort_by(|a, b| {
@@ -70,13 +129,7 @@ impl FilePicker {
         // else listed, select `../` (or nothing at the filesystem root).
         let first = usize::from(directory.parent().is_some() && !entries.is_empty());
         if let Some(parent) = directory.parent() {
-            entries.insert(
-                0,
-                Entry {
-                    path: parent.to_path_buf(),
-                    is_directory: true,
-                },
-            );
+            entries.insert(0, Entry::new(parent.to_path_buf(), true, true));
         }
 
         let selection = ListState::default().with_selected((!entries.is_empty()).then_some(first));
@@ -171,9 +224,7 @@ impl FilePicker {
             .filter(|(_, entry)| {
                 prefix.is_empty()
                     || (Some(entry.path.as_path()) != parent
-                        && entry.path.file_name().is_some_and(|name| {
-                            name.to_string_lossy().to_lowercase().starts_with(&prefix)
-                        }))
+                        && entry.starts_with_lowercase(&prefix))
             })
             .map(|(index, _)| index)
             .collect();
@@ -267,13 +318,11 @@ impl FilePicker {
 
         let items = self.visible.iter().map(|&index| {
             let entry = &self.entries[index];
-            let name = if Some(entry.path.as_path()) == self.directory.parent() {
-                "../".to_owned()
-            } else {
-                let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
-                format!("{name}{}", if entry.is_directory { "/" } else { "" })
-            };
-            ListItem::new(name)
+            let suffix = if entry.is_directory { "/" } else { "" };
+            ListItem::new(Line::from(vec![
+                Span::raw(entry.name.as_str()),
+                Span::raw(suffix),
+            ]))
         });
         frame.render_stateful_widget(
             List::new(items).highlight_symbol("> ").highlight_style(
@@ -333,13 +382,13 @@ mod tests {
     /// `listed` and `selected` give entries by name, as `../` for the parent.
     fn picker(names: &[&str]) -> FilePicker {
         let directory = PathBuf::from("/base");
-        let mut entries = vec![Entry {
-            path: PathBuf::from("/"),
-            is_directory: true,
-        }];
-        entries.extend(names.iter().map(|name| Entry {
-            path: directory.join(name.trim_end_matches('/')),
-            is_directory: name.ends_with('/'),
+        let mut entries = vec![Entry::new(PathBuf::from("/"), true, true)];
+        entries.extend(names.iter().map(|name| {
+            Entry::new(
+                directory.join(name.trim_end_matches('/')),
+                name.ends_with('/'),
+                false,
+            )
         }));
         FilePicker {
             directory,
@@ -459,6 +508,79 @@ mod tests {
         }
         assert_eq!(picker.directory, PathBuf::from("/base"));
         assert!(picker.error.is_none());
+    }
+
+    #[test]
+    fn non_ascii_names_are_filtered_ignoring_case() {
+        let mut picker = picker(&["Ärger.pem", "ärmel.jks", "arm.pem"]);
+        type_text(&mut picker, "äR");
+        assert_eq!(listed(&picker), ["Ärger.pem", "ärmel.jks"]);
+        assert!(picker.clear_filter());
+        type_text(&mut picker, "AR");
+        assert_eq!(listed(&picker), ["arm.pem"]);
+    }
+
+    #[test]
+    fn listing_shows_directories_and_supported_files_and_follows_links() {
+        use crate::test_support::TestDirectory;
+        let directory = TestDirectory::new();
+        let path = directory.path();
+        fs::create_dir(path.join("folder")).unwrap();
+        fs::write(path.join("store.jks"), b"").unwrap();
+        fs::write(path.join("notes.txt"), b"").unwrap();
+        fs::create_dir(path.join("folder.pem")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(path.join("folder"), path.join("linked-folder")).unwrap();
+            symlink(path.join("store.jks"), path.join("linked.p12")).unwrap();
+            symlink(path.join("missing.jks"), path.join("broken.jks")).unwrap();
+            symlink(path.join("folder"), path.join("folder-link.jks")).unwrap();
+        }
+        let picker = FilePicker::new(path).unwrap();
+        let expected: &[&str] = if cfg!(unix) {
+            &[
+                "../",
+                "folder",
+                "folder-link.jks",
+                "folder.pem",
+                "linked-folder",
+                "linked.p12",
+                "store.jks",
+            ]
+        } else {
+            &["../", "folder", "folder.pem", "store.jks"]
+        };
+        assert_eq!(listed(&picker), expected);
+        let directories: Vec<_> = picker
+            .entries
+            .iter()
+            .map(|entry| entry.is_directory)
+            .collect();
+        let files = if cfg!(unix) { 2 } else { 1 };
+        assert_eq!(directories.iter().filter(|&&is| !is).count(), files);
+        assert_eq!(picker.entries[0].name, "..");
+
+        let all = picker.with_all_files().unwrap();
+        assert!(listed(&all).contains(&"notes.txt".to_owned()));
+        assert!(!listed(&all).contains(&"broken.jks".to_owned()));
+
+        let text = {
+            let mut picker = picker;
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 20)).unwrap();
+            terminal.draw(|frame| picker.draw(frame)).unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        for shown in ["../", "folder/", "folder.pem/", "store.jks "] {
+            assert!(text.contains(shown), "{shown} in {text}");
+        }
     }
 
     #[test]
