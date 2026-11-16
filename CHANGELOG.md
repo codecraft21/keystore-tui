@@ -13,6 +13,11 @@ All notable changes to keystore-tui are listed here. Versions follow
 - PKCS12 entry listing reuses parsed certificate metadata when building chains.
 - JCEKS key protection and recovery avoid allocating a digest buffer on every
   password derivation iteration.
+- Entry details wrap only the lines on screen when drawing, so scrolling large
+  revocation lists, ASN.1 dumps, and PEM stays fast on every redraw.
+- The file browser reads each entry's type from the directory listing instead
+  of querying every file, and no longer rebuilds or lowercases entry names on
+  every redraw and keystroke.
 
 ## 1.1.0
 

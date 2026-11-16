@@ -151,6 +151,53 @@ struct RenderCache {
     asn1: OnceCell<(Text<'static>, bool)>,
     pem: OnceCell<Text<'static>>,
     details: RefCell<Option<(bool, bool, Text<'static>)>>,
+    /// The cached pane's wrapped rows, for the pane, SHA-1 choice, and width
+    /// it was wrapped for.
+    rows: RefCell<Option<(RowsKey, Vec<usize>)>>,
+}
+
+/// What the cached pane's wrapped rows depend on: the pane, whether SHA-1
+/// is shown, and the width.
+type RowsKey = (Pane, bool, u16);
+
+/// The first wrapped row of each line of `text` at `width`, then the total
+/// number of rows, so a frame wraps only the lines it shows.
+fn row_starts(text: &Text, width: u16) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(text.lines.len() + 1);
+    let mut row = 0;
+    starts.push(row);
+    for line in &text.lines {
+        row += Paragraph::new(borrowed_line(line))
+            .wrap(Wrap { trim: false })
+            .line_count(width);
+        starts.push(row);
+    }
+    starts
+}
+
+/// The lines holding the `height` wrapped rows from row `top`, given their
+/// `row_starts`, and the row of the first of those lines that `top` is.
+fn shown_lines(starts: &[usize], top: usize, height: u16) -> (std::ops::Range<usize>, u16) {
+    let lines = starts.len() - 1;
+    let first = (starts.partition_point(|&start| start <= top) - 1).min(lines);
+    let last = starts
+        .partition_point(|&start| start < top + usize::from(height))
+        .clamp(first, lines);
+    let offset = u16::try_from(top.saturating_sub(starts[first])).unwrap_or(u16::MAX);
+    (first..last, offset)
+}
+
+/// A line borrowing `line`'s strings.
+fn borrowed_line<'a>(line: &'a Line<'_>) -> Line<'a> {
+    let mut borrowed = Line::from(
+        line.spans
+            .iter()
+            .map(|span| Span::styled(span.content.as_ref(), span.style))
+            .collect::<Vec<_>>(),
+    )
+    .style(line.style);
+    borrowed.alignment = line.alignment;
+    borrowed
 }
 
 enum Rendered<'a> {
@@ -172,22 +219,16 @@ impl std::ops::Deref for Rendered<'_> {
 }
 
 impl Rendered<'_> {
-    /// Borrow document strings while giving Ratatui the span metadata it owns.
-    fn borrowed(&self) -> Text<'_> {
+    /// Borrow the strings of the lines in `lines` while giving Ratatui the
+    /// span metadata it owns.
+    fn borrowed(
+        &self,
+        lines: impl std::slice::SliceIndex<[Line<'static>], Output = [Line<'static>]>,
+    ) -> Text<'_> {
         let mut text = Text::from(
-            self.lines
+            self.lines[lines]
                 .iter()
-                .map(|line| {
-                    let mut borrowed = Line::from(
-                        line.spans
-                            .iter()
-                            .map(|span| Span::styled(span.content.as_ref(), span.style))
-                            .collect::<Vec<_>>(),
-                    )
-                    .style(line.style);
-                    borrowed.alignment = line.alignment;
-                    borrowed
-                })
+                .map(borrowed_line)
                 .collect::<Vec<_>>(),
         )
         .style(self.style);
@@ -514,6 +555,21 @@ impl EntryDetails {
         })
     }
 
+    /// `row_starts` of the cached `text` that the pane shows, wrapped again
+    /// only when the pane, the SHA-1 choice, or the width changes. The
+    /// expiry only colours the details, so it does not change their rows.
+    fn cached_row_starts(&self, text: &Text, width: u16) -> Ref<'_, [usize]> {
+        let key = (self.pane, self.sha1, width);
+        let mut rows = self.cache.rows.borrow_mut();
+        if rows.as_ref().is_none_or(|(cached, _)| *cached != key) {
+            *rows = Some((key, row_starts(text, width)));
+        }
+        drop(rows);
+        Ref::map(self.cache.rows.borrow(), |rows| {
+            rows.as_ref().unwrap().1.as_slice()
+        })
+    }
+
     pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let (shortcuts, tree_title, details_title) = match &self.view {
@@ -624,18 +680,34 @@ impl EntryDetails {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs() as i64);
-        let text = self.text(now);
-        let paragraph = Paragraph::new(text.borrowed()).wrap(Wrap { trim: false });
         let page = inner.height.max(1);
-        let max_scroll = u16::try_from(
-            paragraph
-                .line_count(inner.width)
-                .saturating_sub(usize::from(inner.height)),
-        )
-        .unwrap_or(u16::MAX);
-        let scroll = self.scroll.min(max_scroll);
-        frame.render_widget(paragraph.scroll((scroll, 0)).block(block), details);
-        drop(text);
+        let (max_scroll, scroll) = {
+            let text = self.text(now);
+            // The diagnostics depend on the time, so only they are wrapped each frame.
+            let owned;
+            let cached;
+            let starts: &[usize] = if let Rendered::Owned(text) = &text {
+                owned = row_starts(text, inner.width);
+                &owned
+            } else {
+                cached = self.cached_row_starts(&text, inner.width);
+                &cached
+            };
+            let total = starts[starts.len() - 1];
+            let max_scroll =
+                u16::try_from(total.saturating_sub(usize::from(inner.height))).unwrap_or(u16::MAX);
+            let scroll = self.scroll.min(max_scroll);
+            // Only the lines holding the shown rows are wrapped and drawn.
+            let (lines, offset) = shown_lines(starts, usize::from(scroll), inner.height);
+            frame.render_widget(
+                Paragraph::new(text.borrowed(lines))
+                    .wrap(Wrap { trim: false })
+                    .scroll((offset, 0))
+                    .block(block),
+                details,
+            );
+            (max_scroll, scroll)
+        };
         self.page = page;
         self.max_scroll = max_scroll;
         self.scroll = scroll;
@@ -741,6 +813,73 @@ mod tests {
                 .all(|hash| hash.get().is_none())
         );
         assert!(view.text(0).to_string().contains("UTF8String \"root\""));
+    }
+
+    /// Wrapping only the shown lines draws what wrapping all of them does,
+    /// at every scroll position, including wide characters, long words,
+    /// empty lines, and styled spans.
+    #[test]
+    fn drawing_only_the_shown_lines_matches_drawing_them_all() {
+        let mut text = Text::from(format!(
+            "short\n\n{}\n{}\n\n\nend",
+            "word ".repeat(40),
+            "界".repeat(50)
+        ));
+        text.lines
+            .insert(3, Line::from(vec!["red ".red(), "x".repeat(70).into()]));
+        text.lines.push(Line::from("centred").centered());
+        let render = |paragraph: Paragraph, width: u16, height: u16| {
+            let mut buffer =
+                ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, width, height));
+            ratatui::widgets::Widget::render(paragraph, buffer.area, &mut buffer);
+            buffer
+        };
+        for (width, height) in [(1, 1), (7, 3), (20, 5), (33, 10), (200, 4)] {
+            let starts = row_starts(&text, width);
+            let all = Paragraph::new(text.clone()).wrap(Wrap { trim: false });
+            assert_eq!(starts.last(), Some(&all.line_count(width)));
+            for top in 0..=starts[starts.len() - 1] {
+                let (lines, offset) = shown_lines(&starts, top, height);
+                let shown = Text::from(text.lines[lines].to_vec());
+                let shown = Paragraph::new(shown)
+                    .wrap(Wrap { trim: false })
+                    .scroll((offset, 0));
+                let expected = all.clone().scroll((u16::try_from(top).unwrap(), 0));
+                assert_eq!(
+                    render(shown, width, height),
+                    render(expected, width, height),
+                    "width {width}, height {height}, top {top}"
+                );
+            }
+        }
+        assert_eq!(shown_lines(&[0], 0, 5), (0..0, 0));
+    }
+
+    #[test]
+    fn row_counts_are_wrapped_again_only_when_the_pane_hash_or_width_changes() {
+        let data = entry(vec![metadata_certificate("leaf", "leaf", &[1], &[])]);
+        let mut view = EntryDetails::new(&data, Path::new(""));
+        let key = |view: &EntryDetails| view.cache.rows.borrow().as_ref().map(|(key, _)| *key);
+        let rows = |view: &EntryDetails| view.cache.rows.borrow().as_ref().unwrap().1.as_ptr();
+        draw(&mut view, 80, 24);
+        assert_eq!(key(&view), Some((Pane::Details, false, 78)));
+        let wrapped = rows(&view);
+        draw(&mut view, 80, 24);
+        assert_eq!(rows(&view), wrapped);
+        draw(&mut view, 60, 24);
+        assert_eq!(key(&view), Some((Pane::Details, false, 58)));
+        view.handle_key(KeyCode::Char('f'));
+        draw(&mut view, 60, 24);
+        assert_eq!(key(&view), Some((Pane::Details, true, 58)));
+        view.handle_key(KeyCode::Char('a'));
+        draw(&mut view, 60, 24);
+        assert_eq!(key(&view), Some((Pane::Asn1, true, 58)));
+        // The diagnostics are wrapped on each frame and leave the cache alone.
+        view.handle_key(KeyCode::Char('d'));
+        let wrapped = rows(&view);
+        assert!(draw(&mut view, 60, 24).contains("[PASS]"));
+        assert_eq!(rows(&view), wrapped);
+        assert_eq!(key(&view), Some((Pane::Asn1, true, 58)));
     }
 
     #[test]
@@ -909,7 +1048,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     frame.render_widget(
-                        Paragraph::new(view.text(now).borrowed()).wrap(Wrap { trim: false }),
+                        Paragraph::new(view.text(now).borrowed(..)).wrap(Wrap { trim: false }),
                         frame.area(),
                     );
                 })
