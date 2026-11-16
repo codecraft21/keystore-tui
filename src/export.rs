@@ -3,6 +3,7 @@
 //! Existing files are never replaced.
 use crate::path_input::PathInput;
 use std::{
+    borrow::Cow,
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
@@ -157,20 +158,26 @@ pub fn is_der(path: &Path) -> bool {
 
 /// PEM concatenates blocks labelled `pem_label` in the given order; DER holds
 /// exactly one item.
-pub fn encode(items: &[Vec<u8>], der: bool, pem_label: &str) -> Result<Vec<u8>, &'static str> {
+pub fn encode<'a, T: AsRef<[u8]>>(
+    items: &'a [T],
+    der: bool,
+    pem_label: &str,
+) -> Result<Cow<'a, [u8]>, &'static str> {
     match (der, items) {
-        (true, [item]) => Ok(item.clone()),
+        (true, [item]) => Ok(Cow::Borrowed(item.as_ref())),
         (true, _) => Err("A DER file holds one certificate; use a .pem name for the chain."),
-        (false, _) => Ok(items
-            .iter()
-            .map(|item| pem::encode(pem_label, item))
-            .collect::<String>()
-            .into_bytes()),
+        (false, _) => Ok(Cow::Owned(
+            items
+                .iter()
+                .map(|item| pem::encode(pem_label, item.as_ref()))
+                .collect::<String>()
+                .into_bytes(),
+        )),
     }
 }
 
 /// Writes a new file, failing if `path` already exists.
-pub fn save(path: &Path, items: &[Vec<u8>], pem_label: &str) -> Result<(), String> {
+pub fn save<T: AsRef<[u8]>>(path: &Path, items: &[T], pem_label: &str) -> Result<(), String> {
     let data = encode(items, is_der(path), pem_label)?;
     let mut file = OpenOptions::new()
         .write(true)

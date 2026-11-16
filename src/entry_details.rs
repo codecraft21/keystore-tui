@@ -6,6 +6,7 @@ mod request;
 
 use std::{
     cell::{OnceCell, Ref, RefCell},
+    fmt::{Display, Write as _},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -38,28 +39,38 @@ use crl::CrlView;
 use request::RequestView;
 
 /// An indented section; each extension's title is followed by its decoded values.
-fn extensions_text(heading: &str, extensions: &[Extension]) -> String {
-    let items: Vec<_> = extensions
-        .iter()
-        .map(|extension| (extension.title(), extension.lines.clone()))
-        .collect();
-    section_text(heading, &items)
+fn write_extensions(text: &mut String, heading: &str, extensions: &[Extension]) {
+    write_section(
+        text,
+        heading,
+        extensions
+            .iter()
+            .map(|extension| (extension.title(), &extension.lines)),
+    );
 }
 
-/// An indented section of titled items, or `<heading>: None` when empty.
-fn section_text(heading: &str, items: &[(String, Vec<String>)]) -> String {
-    if items.is_empty() {
-        return format!("{heading}: None\n\n");
+/// Appends an indented section of titled items, or `<heading>: None` when empty.
+fn write_section<T, L>(
+    text: &mut String,
+    heading: impl Display,
+    items: impl IntoIterator<Item = (T, L)>,
+) where
+    T: Display,
+    L: IntoIterator<Item: Display>,
+{
+    let mut items = items.into_iter().peekable();
+    if items.peek().is_none() {
+        let _ = write!(text, "{heading}: None\n\n");
+        return;
     }
-    let mut text = format!("{heading}:\n");
+    let _ = writeln!(text, "{heading}:");
     for (title, lines) in items {
-        text.push_str(&format!("  {title}\n"));
+        let _ = writeln!(text, "  {title}");
         for line in lines {
-            text.push_str(&format!("    {line}\n"));
+            let _ = writeln!(text, "    {line}");
         }
     }
     text.push('\n');
-    text
 }
 
 /// The public key's algorithm and size, or `Unavailable` when it cannot be read.
@@ -324,20 +335,22 @@ impl EntryDetails {
     }
 
     /// The DER an export of `scope` saves.
-    fn export_items(&self, scope: Scope) -> Vec<Vec<u8>> {
+    fn export_items(&self, scope: Scope) -> Vec<&[u8]> {
         match (&self.view, scope) {
-            (View::Request(view), _) => vec![view.der.clone()],
-            (View::Crl(view), _) => vec![view.der.clone()],
-            (View::Chain(chain), Scope::Chain) => chain.certificates.clone(),
+            (View::Request(view), _) => vec![view.der.as_slice()],
+            (View::Crl(view), _) => vec![view.der.as_slice()],
+            (View::Chain(chain), Scope::Chain) => {
+                chain.certificates.iter().map(Vec::as_slice).collect()
+            }
             // Cut out of the certificate as stored; no key is decrypted.
             (View::Chain(chain), Scope::PublicKey) => self
                 .selected(chain)
                 .and_then(|index| subject_public_key_info(&chain.certificates[index]))
-                .map(|spki| vec![spki.to_vec()])
+                .map(|spki| vec![spki])
                 .unwrap_or_default(),
             (View::Chain(chain), _) => self
                 .selected(chain)
-                .map(|index| vec![chain.certificates[index].clone()])
+                .map(|index| vec![chain.certificates[index].as_slice()])
                 .unwrap_or_default(),
         }
     }

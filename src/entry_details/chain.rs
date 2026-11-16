@@ -5,7 +5,7 @@ use ratatui::{
     widgets::Row,
 };
 
-use super::{extensions_text, hierarchy_row, public_key_text, signature_line, weakness_lines};
+use super::{hierarchy_row, public_key_text, signature_line, weakness_lines, write_extensions};
 use crate::certificate::{
     self, Summary,
     details::{Details, time_text},
@@ -162,7 +162,7 @@ impl ChainView {
         }
         text.push_str(fingerprint);
         if let Some(info) = &self.metadata[index] {
-            text.push_str(&extensions_text("Extensions", &info.extensions));
+            write_extensions(&mut text, "Extensions", &info.extensions);
         }
         text.push_str(
             "Stored certificates only; signatures are checked within the chain, trust is not verified.",

@@ -2,7 +2,7 @@
 use ratatui::{text::Text, widgets::Row};
 
 use super::{
-    extensions_text, hierarchy_row, public_key_text, section_text, signature_line, weakness_lines,
+    hierarchy_row, public_key_text, signature_line, weakness_lines, write_extensions, write_section,
 };
 use crate::{
     certificate::{
@@ -77,12 +77,16 @@ impl RequestView {
         }
         text.push_str(fingerprint);
         if let Some(request) = &self.request {
-            text.push_str(&extensions_text(
-                "Requested extensions",
-                &request.extensions,
-            ));
+            write_extensions(&mut text, "Requested extensions", &request.extensions);
             if !request.attributes.is_empty() {
-                text.push_str(&section_text("Attributes", &request.attributes));
+                write_section(
+                    &mut text,
+                    "Attributes",
+                    request
+                        .attributes
+                        .iter()
+                        .map(|(title, lines)| (title, lines)),
+                );
             }
         }
         text.push_str(
