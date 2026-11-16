@@ -55,11 +55,28 @@ pub fn expiry_status(summary: &Summary, now: i64) -> ExpiryStatus {
 /// `needle` must already be lowercase; an empty needle matches everything.
 fn matches(entry: &KeystoreEntry, needle: &str) -> bool {
     needle.is_empty()
-        || entry.alias.to_lowercase().contains(needle)
+        || contains_lowercase(&entry.alias, needle)
         || entry
             .certificate
             .as_ref()
-            .is_some_and(|summary| summary.subject.to_lowercase().contains(needle))
+            .is_some_and(|summary| contains_lowercase(&summary.subject, needle))
+}
+
+/// Whether the Unicode lowercase of `haystack` contains the lowercase `needle`.
+/// ASCII text, the usual case, is compared without allocating: its lowercase
+/// is ASCII, so a needle with other characters cannot match it.
+fn contains_lowercase(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        true
+    } else if haystack.is_ascii() {
+        needle.is_ascii()
+            && haystack
+                .as_bytes()
+                .windows(needle.len())
+                .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+    } else {
+        haystack.to_lowercase().contains(needle)
+    }
 }
 
 /// Indices into `entries` of the entries to show, in display order.
@@ -171,5 +188,18 @@ mod tests {
         ] {
             assert_eq!(expiry_status(&summary, now), status, "{now}");
         }
+    }
+
+    #[test]
+    fn matches_unicode_lowercase_substrings() {
+        assert!(contains_lowercase("CN=Server", "n=ser"));
+        assert!(contains_lowercase("anything", ""));
+        assert!(!contains_lowercase("CN=Server", "client"));
+        assert!(!contains_lowercase("ab", "abc"));
+        // A non-ASCII needle never matches ASCII text.
+        assert!(!contains_lowercase("strasse", "straße"));
+        assert!(contains_lowercase("STRASSE ÄRGER", "ärger"));
+        // The Kelvin sign lowercases to an ASCII `k`.
+        assert!(contains_lowercase("\u{212A}ey", "key"));
     }
 }

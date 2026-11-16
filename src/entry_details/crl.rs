@@ -2,11 +2,12 @@
 //! hierarchy.
 use ratatui::{text::Text, widgets::Row};
 
-use super::{extensions_text, hierarchy_row, section_text};
+use super::{hierarchy_row, write_extensions, write_section};
 use crate::{
     certificate::{details::time_text, extensions},
     revocation_list::List,
 };
+use std::fmt::Write as _;
 
 /// A revocation list, decoded once.
 pub(super) struct CrlView {
@@ -41,7 +42,8 @@ impl CrlView {
             text.push_str(fingerprint);
             return Text::from(text);
         };
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "Version: {}\n\nIssuer: {}\n\nThis Update: {}\n\nNext Update: {}\n\nSignature Algorithm: {}\nSignature: not checked (the issuer's certificate is not part of a revocation list).\n\n",
             list.version,
             list.issuer,
@@ -50,29 +52,26 @@ impl CrlView {
                 .as_ref()
                 .map_or_else(|| "None".into(), time_text),
             list.signature_algorithm,
-        ));
+        );
         text.push_str(fingerprint);
-        text.push_str(&extensions_text("Extensions", &list.extensions));
-        let revoked: Vec<_> = list
-            .revoked
-            .iter()
-            .map(|entry| {
-                let mut lines = vec![format!("Revoked: {}", time_text(&entry.date))];
-                lines.extend(entry.extensions.iter().map(|extension| {
-                    let name = extension
-                        .oid
-                        .as_ref()
-                        .and_then(extensions::name)
-                        .map_or_else(|| extension.title(), Into::into);
-                    format!("{name}: {}", extension.lines.join(", "))
-                }));
-                (format!("Serial Number: {}", entry.serial), lines)
-            })
-            .collect();
-        text.push_str(&section_text(
-            &format!("Revoked certificates ({})", revoked.len()),
-            &revoked,
-        ));
+        write_extensions(&mut text, "Extensions", &list.extensions);
+        let revoked = list.revoked.iter().map(|entry| {
+            let mut lines = vec![format!("Revoked: {}", time_text(&entry.date))];
+            lines.extend(entry.extensions.iter().map(|extension| {
+                let name = extension
+                    .oid
+                    .as_ref()
+                    .and_then(extensions::name)
+                    .map_or_else(|| extension.title(), Into::into);
+                format!("{name}: {}", extension.lines.join(", "))
+            }));
+            (format!("Serial Number: {}", entry.serial), lines)
+        });
+        write_section(
+            &mut text,
+            format_args!("Revoked certificates ({})", list.revoked.len()),
+            revoked,
+        );
         text.push_str(
             "Whether the list is current, and whether its issuer is trusted, is not checked.",
         );
