@@ -74,28 +74,37 @@ jobs:
   # Builds and tests on the other release platforms. macOS runs all tests,
   # including the PTY smoke tests. Windows builds the app, including the
   # Windows crossterm backend, and runs the unit tests; the PTY smoke tests
-  # are Unix only.
-  platforms:
+  # are Unix only. These are separate jobs rather than a matrix, because
+  # `ci-ok` sees only one result for a whole matrix, which does not report a
+  # cancelled leg, such as a macOS job that never got a runner.
+  macos:
 
-    name: platforms (${{ matrix.os }})
+    name: macOS
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-        - os: macos-latest
-          test: cargo test --locked --verbose
-        - os: windows-latest
-          test: cargo test --locked --verbose
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
 
     steps:
     - uses: actions/checkout@v7
     - name: Build
       run: cargo build --locked --verbose
-    - name: Test
-      run: ${{ matrix.test }}
+    - name: Run tests, including terminal interaction and restoration
+      run: cargo test --locked --verbose
+      timeout-minutes: 10
+
+  windows:
+
+    name: Windows
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Build
+      run: cargo build --locked --verbose
+    - name: Run unit tests
+      run: cargo test --locked --verbose
       timeout-minutes: 10
 
   # Measures line coverage of all tests, including the PTY smoke tests, which
@@ -129,16 +138,25 @@ jobs:
         disable_search: true
         use_oidc: true
 
-  # The single required check for branch protection. It passes when every job
-  # above succeeded or was skipped for a docs-only change, so skipped jobs
-  # don't leave PRs waiting for checks that never report.
+  # The single required check for branch protection. It passes only when
+  # every job above succeeded or was skipped for a docs-only change, so
+  # skipped jobs don't leave PRs waiting for checks that never report, and a
+  # failed, cancelled, or otherwise unfinished job fails it.
   ci-ok:
 
-    needs: [changes, build, msrv, platforms, coverage]
+    needs: [changes, build, msrv, macos, windows, coverage]
     if: always()
     runs-on: ubuntu-latest
 
     steps:
-    - name: Check that no job failed or was cancelled
-      if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-      run: exit 1
+    - name: Check that every job succeeded or was skipped
+      env:
+        RESULTS: ${{ join(needs.*.result, ' ') }}
+      run: |
+        echo "Job results: $RESULTS"
+        for result in $RESULTS; do
+          case "$result" in
+            success | skipped) ;;
+            *) echo "A job ended with '$result'."; exit 1 ;;
+          esac
+        done
