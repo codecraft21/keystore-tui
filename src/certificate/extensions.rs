@@ -1,5 +1,6 @@
 //! Display text for X.509 v3 extensions. Values are decoded for reading only;
 //! nothing here affects trust, and undecodable values fall back to hex.
+use std::fmt::Write as _;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crown::{
@@ -345,7 +346,7 @@ fn basic_constraints(value: &[u8]) -> CryptoResult<Vec<String>> {
     let mut line = format!("CA: {ca}");
     match path_length {
         Some(length) if length < 0 => return Err(invalid()),
-        Some(length) => line.push_str(&format!(", path length: {length}")),
+        Some(length) => write!(line, ", path length: {length}").unwrap(),
         None if ca => line.push_str(", path length: unlimited"),
         None => {}
     }

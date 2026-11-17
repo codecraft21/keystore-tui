@@ -1,4 +1,6 @@
 //! A certificate request in the detail view, shown in place of a hierarchy.
+use std::fmt::Write as _;
+
 use ratatui::{text::Text, widgets::Row};
 
 use super::{
@@ -61,13 +63,15 @@ impl RequestView {
         let summary = self.summary.as_ref();
         let mut lines = Vec::new();
         if let Some(request) = &self.request {
-            text.push_str(&format!(
+            write!(
+                text,
                 "Version: {}\n\nSubject: {}\n\nPublic Key: {}\n\nSignature Algorithm: {}\n",
                 request.version,
                 request.subject,
                 public_key_text(summary),
                 request.signature_algorithm,
-            ));
+            )
+            .unwrap();
             lines.extend(Text::from(text).lines);
             lines.extend(weakness_lines(summary));
             lines.push(signature_line(self.signature, "its own public key"));

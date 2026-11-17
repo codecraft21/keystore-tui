@@ -1,4 +1,6 @@
 //! A stored chain in the detail view: the hierarchy and each certificate's details.
+use std::fmt::Write as _;
+
 use ratatui::{
     style::Stylize,
     text::{Line, Span, Text},
@@ -23,6 +25,8 @@ pub(super) struct ChainView {
     /// or with its own key when it is the last and self-issued. `None` when
     /// the issuer is not stored.
     pub(super) signatures: Vec<Option<Signature>>,
+    /// The hierarchy labels, root first: each subject indented by its depth.
+    labels: Vec<String>,
 }
 
 impl ChainView {
@@ -49,6 +53,22 @@ impl ChainView {
                 ))
             })
             .collect();
+        let labels = metadata
+            .iter()
+            .enumerate()
+            .rev()
+            .enumerate()
+            .map(|(depth, (index, info))| {
+                let mut label = "  ".repeat(depth.min(8));
+                match info.as_ref().map(|info| info.subject.to_string()) {
+                    Some(subject) if !subject.is_empty() => label.push_str(&subject),
+                    _ => {
+                        write!(label, "Certificate {} (unreadable or unnamed)", index + 1).unwrap()
+                    }
+                }
+                label
+            })
+            .collect();
         Self {
             certificates: certificates.to_vec(),
             chain_warning,
@@ -58,6 +78,7 @@ impl ChainView {
                 .map(|der| certificate::summarize(der))
                 .collect(),
             signatures,
+            labels,
         }
     }
 
@@ -89,25 +110,15 @@ impl ChainView {
     }
 
     /// The hierarchy, root first, indented by depth.
-    pub(super) fn hierarchy_rows(&self) -> Vec<Row<'static>> {
-        self.metadata
-            .iter()
-            .enumerate()
+    pub(super) fn hierarchy_rows(&self) -> Vec<Row<'_>> {
+        (0..self.labels.len())
             .rev()
-            .enumerate()
-            .map(|(depth, (index, info))| {
-                let label = info
-                    .as_ref()
-                    .map(|info| info.subject.to_string())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| {
-                        format!("Certificate {} (unreadable or unnamed)", index + 1)
-                    });
+            .zip(&self.labels)
+            .map(|(index, label)| {
                 let weak = self.summaries[index]
                     .as_ref()
                     .is_some_and(|summary| !summary.weaknesses.is_empty());
-                let indent = "  ".repeat(depth.min(8));
-                hierarchy_row(format!("{indent}{label}"), weak, self.signatures[index])
+                hierarchy_row(label.as_str(), weak, self.signatures[index])
             })
             .collect()
     }
@@ -122,7 +133,7 @@ impl ChainView {
         fingerprint: &str,
     ) -> Text<'static> {
         if let Some(warning) = self.chain_warning {
-            text.push_str(&format!("{warning}\n\n"));
+            write!(text, "{warning}\n\n").unwrap();
         }
         let Some(index) = index else {
             text.push_str("No certificate is stored with this entry.");
@@ -131,11 +142,12 @@ impl ChainView {
         let mut lines = Vec::new();
         if let Some(info) = &self.metadata[index] {
             let summary = self.summaries[index].as_ref();
-            text.push_str(&format!(
+            write!(
+                text,
                 "Version: {}\n\nSubject: {}\n\nIssuer: {}\n\nSerial Number (hex): {}\n\nSerial Number (dec): {}\n\nValid From: {}\n\n",
                 info.version, info.subject, info.issuer, info.serial_hex, info.serial_decimal,
                 time_text(&info.not_before),
-            ));
+            ).unwrap();
             lines.extend(Text::from(text).lines);
             let expiry = Span::raw(time_text(&info.not_after));
             lines.push(Line::from(vec![

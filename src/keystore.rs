@@ -1,4 +1,7 @@
-use std::{fmt, ops::Range};
+use std::{
+    fmt::{self, Write as _},
+    ops::Range,
+};
 
 use sha1::{Digest, Sha1};
 use zeroize::Zeroize;
@@ -327,7 +330,12 @@ impl Writable {
     pub fn encode(&self, password: &str) -> Vec<u8> {
         let mut stored: Vec<_> = self.entries.iter().collect();
         stored.sort_by_key(|(offset, _)| *offset);
-        let mut data = self.header.to_vec();
+        let size = self.header.len()
+            + 4
+            + stored.iter().map(|(_, entry)| entry.len()).sum::<usize>()
+            + DIGEST_LEN;
+        let mut data = Vec::with_capacity(size);
+        data.extend_from_slice(&self.header);
         data.extend_from_slice(&(stored.len() as u32).to_be_bytes());
         for (_, entry) in stored {
             data.extend_from_slice(entry);
@@ -612,12 +620,16 @@ impl<'a> Reader<'a> {
         }
         // Java strings may hold unpaired surrogates. Show each as a \uXXXX
         // escape so aliases that differ only in them stay distinguishable.
-        Ok(char::decode_utf16(units)
-            .map(|unit| match unit {
-                Ok(ch) => ch.to_string(),
-                Err(error) => format!("\\u{:04X}", error.unpaired_surrogate()),
-            })
-            .collect())
+        let mut text = String::with_capacity(units.len());
+        for unit in char::decode_utf16(units) {
+            match unit {
+                Ok(ch) => text.push(ch),
+                Err(error) => {
+                    write!(text, "\\u{:04X}", error.unpaired_surrogate()).unwrap();
+                }
+            }
+        }
+        Ok(text)
     }
 }
 
