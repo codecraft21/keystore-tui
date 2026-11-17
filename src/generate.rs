@@ -2,6 +2,7 @@
 //! another private key of the keystore: the key algorithms, and adding the
 //! result to the open keystore once its form is filled in.
 use std::{
+    fmt::Write as _,
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
     time::{Instant, SystemTime, UNIX_EPOCH},
@@ -297,7 +298,7 @@ impl App {
                     job.alias
                 );
                 if let Some(signer) = &job.signer {
-                    message.push_str(&format!(", signed by '{signer}'"));
+                    write!(message, ", signed by '{signer}'").unwrap();
                 }
                 message.push('.');
                 self.modified = true;

@@ -4,6 +4,8 @@ pub mod extensions;
 pub mod security;
 pub mod signature;
 
+use std::borrow::Cow;
+
 use crown::{
     asn1::{Asn1Time, Reader, der::Class, oid},
     x509::name::Name,
@@ -25,16 +27,17 @@ pub struct Summary {
 }
 
 impl Summary {
-    pub fn key_size_text(&self) -> String {
+    /// The key size, or "-" without allocating when it is unknown.
+    pub fn key_size_text(&self) -> Cow<'static, str> {
         self.key_size
-            .map_or_else(|| "-".into(), |bits| format!("{bits} bits"))
+            .map_or("-".into(), |bits| format!("{bits} bits").into())
     }
 
-    pub fn expiry_text(&self) -> String {
-        self.not_after.map_or_else(
-            || "-".into(),
-            |time| format!("{:04}-{:02}-{:02}", time.year, time.month, time.day),
-        )
+    /// The expiry date, or "-" without allocating when there is none.
+    pub fn expiry_text(&self) -> Cow<'static, str> {
+        self.not_after.map_or("-".into(), |time| {
+            format!("{:04}-{:02}-{:02}", time.year, time.month, time.day).into()
+        })
     }
 
     pub fn is_expired(&self, now: i64) -> bool {

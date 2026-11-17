@@ -5,6 +5,7 @@ mod crl;
 mod request;
 
 use std::{
+    borrow::Cow,
     cell::{OnceCell, Ref, RefCell},
     fmt::{Display, Write as _},
     path::{Path, PathBuf},
@@ -111,7 +112,11 @@ fn signature_line(result: Signature, key: &str) -> Line<'static> {
 }
 
 /// A hierarchy row: the label, then a `[weak]` tag and the signature tag.
-fn hierarchy_row(label: String, weak: bool, signature: Option<Signature>) -> Row<'static> {
+fn hierarchy_row<'a>(
+    label: impl Into<Cow<'a, str>>,
+    weak: bool,
+    signature: Option<Signature>,
+) -> Row<'a> {
     let mut spans = vec![Span::raw(label)];
     if weak {
         spans.extend([Span::raw(" "), Span::raw("[weak]").yellow()]);

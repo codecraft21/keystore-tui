@@ -88,7 +88,7 @@ pub fn parse(data: &[u8]) -> Result<CertificateFile, &'static str> {
         return Err("the file contains no certificates or certificate requests");
     }
     Ok(CertificateFile {
-        entries: entries(&items),
+        entries: entries(items),
         skipped,
     })
 }
@@ -164,7 +164,7 @@ fn name_key(raw: &[u8]) -> Vec<u8> {
     )
 }
 
-fn entries(items: &[Item]) -> Vec<KeystoreEntry> {
+fn entries(items: Vec<Item>) -> Vec<KeystoreEntry> {
     // Requests have no issuer and are never part of a chain.
     let names: Vec<_> = items
         .iter()
@@ -176,26 +176,13 @@ fn entries(items: &[Item]) -> Vec<KeystoreEntry> {
     let der = |index: usize| match &items[index] {
         Item::Certificate(der) | Item::Request(der) | Item::Crl(der) => der,
     };
-    (0..items.len())
+    // Certificates may appear in several chains, so their entries copy them;
+    // requests and revocation lists are then moved into theirs.
+    let chains: Vec<_> = (0..items.len())
         .map(|index| {
-            if let Item::Request(request) = &items[index] {
-                return KeystoreEntry {
-                    alias: certificate_request::subject_name(request)
-                        .unwrap_or_else(|| format!("Certificate request {}", index + 1)),
-                    certificate: certificate_request::summarize(request),
-                    content: Content::Request(request.clone()),
-                    chain_warning: None,
-                };
-            }
-            if let Item::Crl(list) = &items[index] {
-                return KeystoreEntry {
-                    alias: revocation_list::issuer_name(list)
-                        .unwrap_or_else(|| format!("Revocation list {}", index + 1)),
-                    certificate: None,
-                    content: Content::Crl(list.clone()),
-                    chain_warning: None,
-                };
-            }
+            let Item::Certificate(certificate) = &items[index] else {
+                return None;
+            };
             // Follow issuers through the file, stopping at a self-issued
             // certificate, a missing issuer, or a certificate already used.
             let mut chain = vec![index];
@@ -210,15 +197,37 @@ fn entries(items: &[Item]) -> Vec<KeystoreEntry> {
             {
                 chain.push(next);
             }
-            KeystoreEntry {
-                alias: alias(index, der(index)),
-                certificate: certificate::summarize(der(index)),
+            Some(KeystoreEntry {
+                alias: alias(index, certificate),
+                certificate: certificate::summarize(certificate),
                 content: Content::Certificates {
                     kind: Kind::Certificate,
                     certificates: chain.iter().map(|&i| der(i).clone()).collect(),
                 },
                 chain_warning: None,
-            }
+            })
+        })
+        .collect();
+    items
+        .into_iter()
+        .zip(chains)
+        .enumerate()
+        .map(|(index, (item, chain))| match item {
+            Item::Certificate(_) => chain.expect("every certificate has a chain entry"),
+            Item::Request(request) => KeystoreEntry {
+                alias: certificate_request::subject_name(&request)
+                    .unwrap_or_else(|| format!("Certificate request {}", index + 1)),
+                certificate: certificate_request::summarize(&request),
+                content: Content::Request(request),
+                chain_warning: None,
+            },
+            Item::Crl(list) => KeystoreEntry {
+                alias: revocation_list::issuer_name(&list)
+                    .unwrap_or_else(|| format!("Revocation list {}", index + 1)),
+                certificate: None,
+                content: Content::Crl(list),
+                chain_warning: None,
+            },
         })
         .collect()
 }

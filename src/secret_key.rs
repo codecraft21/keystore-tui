@@ -283,8 +283,12 @@ pub fn from_file(content: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
 /// The key as a line of hex digits.
 pub fn hex(key: &[u8]) -> Zeroizing<String> {
     let mut text = Zeroizing::new(String::with_capacity(key.len() * 2 + 1));
+    // Push each digit directly: a formatted temporary would hold key
+    // material that is never wiped.
     for byte in key {
-        text.push_str(&format!("{byte:02x}"));
+        for nibble in [byte >> 4, byte & 0xf] {
+            text.push(char::from_digit(u32::from(nibble), 16).unwrap());
+        }
     }
     text.push('\n');
     text
