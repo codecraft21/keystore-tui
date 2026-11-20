@@ -848,10 +848,11 @@ fn replace(path: &Path, data: &[u8]) -> io::Result<()> {
     name.push(format!(".{}.tmp", std::process::id()));
     let temporary = directory.join(name);
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options.open(&temporary)?;
         file.write_all(data)?;
         file.set_permissions(fs::metadata(&target)?.permissions())?;
         file.sync_all()?;
