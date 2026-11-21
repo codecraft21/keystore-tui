@@ -3,7 +3,7 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.1.1
 
 - Fix TUI and workflow correctness issues:
   - Accept unchanged CSR subjects with legacy non-2-letter `C` (country) values
