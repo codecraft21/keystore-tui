@@ -252,11 +252,21 @@ mod tests {
         press(&mut input, KeyCode::Left);
         press(&mut input, KeyCode::Backspace);
         assert_eq!(&*input, "ab");
-        assert!(!input.handle_key(KeyEvent::new(
+        // Ctrl+Alt+u never clears: on Windows it is AltGr text input; elsewhere it is ignored.
+        let handled = input.handle_key(KeyEvent::new(
             KeyCode::Char('u'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
-        )));
-        assert_eq!(&*input, "ab");
+        ));
+        #[cfg(windows)]
+        {
+            assert!(handled);
+            assert_eq!(&*input, "uab");
+        }
+        #[cfg(not(windows))]
+        {
+            assert!(!handled);
+            assert_eq!(&*input, "ab");
+        }
         assert!(input.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)));
         assert_eq!(&*input, "");
         assert!(!input.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
