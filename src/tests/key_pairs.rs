@@ -350,24 +350,42 @@ fn key_pairs_are_imported_from_and_into_pkcs12_keystores() {
         ed25519_pkcs8(5)
     );
 
-    // A passwordless truststore has no password to protect a key with. The
+    // A passwordless truststore has no password to protect a key with, and
+    // neither has a Java store whose empty password is a NUL character. The
     // certificate request in the key's file is passed over.
     let mut text = key_pem("PRIVATE KEY", &key, &[&leaf]).into_bytes();
     text.extend_from_slice(test_support::KEYTOOL_REQUEST);
     write("request.pem", &text);
-    let path = directory.path().join("open.p12");
-    fs::write(
-        &path,
-        include_bytes!("../../tests/fixtures/passwordless.p12"),
-    )
-    .unwrap();
-    let mut app = App::default();
-    app.open_file(path);
-    assert!(app.document.is_some());
-    import(&mut app, "request");
-    press(&mut app, KeyCode::Enter);
-    assert!(red_text(&mut app).contains("a key needs a keystore password that is not empty"));
-    assert!(!app.modified);
+    for (name, data) in [
+        (
+            "open.p12",
+            &include_bytes!("../../tests/fixtures/passwordless.p12")[..],
+        ),
+        (
+            "empty.p12",
+            include_bytes!("../../tests/fixtures/empty-password.p12"),
+        ),
+        (
+            "nul.p12",
+            include_bytes!("../../tests/fixtures/nul-password.p12"),
+        ),
+    ] {
+        let path = directory.path().join(name);
+        fs::write(&path, data).unwrap();
+        let mut app = App::default();
+        app.open_file(path.clone());
+        assert!(app.document.is_some(), "{name}");
+        let listed = app.entries.len();
+        import(&mut app, "request");
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            red_text(&mut app).contains("a key needs a keystore password that is not empty"),
+            "{name}"
+        );
+        assert!(!app.modified, "{name}");
+        assert_eq!(app.entries.len(), listed, "{name}");
+        assert_eq!(fs::read(&path).unwrap(), data, "{name}");
+    }
 }
 
 #[test]
