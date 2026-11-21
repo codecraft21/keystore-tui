@@ -16,7 +16,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `src/path_input.rs` | The cursor-edited, horizontally scrolled text input shared by every file name prompt |
 | `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
 | `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate or a key pair under the typed alias |
-| `src/generate.rs` | Generating a key pair: the RSA, EC, and Ed25519 keys as PKCS #8, and adding the result with its certificate, self-signed or signed by another private key, under the typed alias; the key and certificate are made on a background thread while the keystore is read-only |
+| `src/generate.rs` | Generating a key pair: the RSA, EC, and Ed25519 keys as PKCS #8, and adding the result with its certificate, self-signed or signed by another private key, under the typed alias; the key and certificate are made on a worker thread while a cancellable modal waits for them |
 | `src/certificate_form.rs` | The form asking what a new key pair's certificate or a certificate request holds, its checks, and the private key that signs a new key pair, if any |
 | `src/ca_reply.rs` | Importing a CA reply: building the issued chain from the reply file and the keystore's certificates, and replacing a private key's chain with it |
 | `src/new_request.rs` | Making a certificate request for a private key: starting the form from its certificate, the file name prompt, and writing the request |
@@ -73,4 +73,3 @@ Dependencies are deliberately few:
 
 The PTY smoke tests also use `rustix` (Unix only, a dev-dependency) for
 pseudo-terminals; crossterm already depends on it.
-

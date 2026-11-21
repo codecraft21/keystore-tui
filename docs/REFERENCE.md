@@ -162,11 +162,9 @@ next to the app name, but nothing changes on disk until you save.
   signing. Press `Enter`, then confirm or edit the alias; `Esc` there goes
   back to the form. The new key gets a self-signed certificate and is stored
   under the keystore's password.
-  The key is made in the background: the status bar shows the algorithm,
-  an activity indicator, and the elapsed time, and you can keep browsing,
-  filtering, and viewing details. Editing and saving are unavailable until
-  it is done; quitting or opening another file first asks, since the key
-  pair would be lost.
+  The key is made while a box shows the algorithm, an activity indicator,
+  and the elapsed time. Press `Esc` to cancel, which adds nothing, or
+  `Ctrl+C` to quit; other keys are ignored until the key pair is ready.
 - **Make a certificate request:** press `c` on a private key. The form
   starts from the key's certificate; change the subject or the alternative
   names if the request should differ, and choose a purpose to ask for key
@@ -423,6 +421,6 @@ the private key. Check the file with `openssl pkey -pubin -in <file> -text -noou
 | --- | --- |
 | `q` | The entry list (when not typing a filter, alias, or file name) or detail view (when not typing an export name); asks first with unsaved changes |
 | `Esc` | The entry list, when not typing a filter, alias, or file name; asks first with unsaved changes |
-| `Ctrl+C` | Any view, including the file browser, the password prompt, and while typing a filter or file name; discards unsaved changes without asking |
+| `Ctrl+C` | Any view, including the file browser, the password prompt, while typing a filter or file name, and while a key pair is generated; discards unsaved changes without asking |
 
 The terminal is restored when the app exits.
