@@ -1264,15 +1264,19 @@ fn read_limited(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
 }
 
 /// Reads at most `limit + 1` bytes, so an oversized input is detected without
-/// reading all of it. `size_hint` pre-sizes the buffer to avoid regrowth.
+/// reading all of it. `size_hint` pre-sizes the buffer (with one extra byte for
+/// the EOF probe) to avoid regrowth.
 fn read_bounded(reader: impl Read, size_hint: u64, limit: u64) -> io::Result<Vec<u8>> {
-    let capacity = usize::try_from(size_hint.min(limit + 1)).unwrap_or(0);
-    let mut data = Vec::with_capacity(capacity);
-    reader.take(limit + 1).read_to_end(&mut data)?;
+    let capacity =
+        usize::try_from(size_hint.saturating_add(1).min(limit.saturating_add(1))).unwrap_or(0);
+    let mut data = Zeroizing::new(Vec::with_capacity(capacity));
+    reader
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut data)?;
     if data.len() as u64 > limit {
         return Err(too_large(limit));
     }
-    Ok(data)
+    Ok(std::mem::take(&mut *data))
 }
 
 fn too_large(limit: u64) -> io::Error {

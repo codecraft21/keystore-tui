@@ -554,11 +554,19 @@ impl Document {
                     "Not converted: two entries would share the alias '{alias}'."
                 ));
             }
+            // Certificate-only entries store a single certificate; PKCS12
+            // attaches any issuer found in the store when listing, whereas
+            // JKS and JCEKS do not.
+            let certificates = if key.is_none() && secret.is_none() {
+                entry.certificates().first().cloned().into_iter().collect()
+            } else {
+                entry.certificates().to_vec()
+            };
             expected.push(Converted {
                 alias,
                 key,
                 secret,
-                certificates: entry.certificates().to_vec(),
+                certificates,
             });
         }
         let created = |index: usize| match self {
@@ -649,6 +657,11 @@ impl Document {
                 .map(|(index, entry)| {
                     let is_key = entry.kind() == Kind::PrivateKey.label();
                     let is_secret = entry.kind() == Kind::SecretKey.label();
+                    let certificates = if !is_key && !is_secret {
+                        entry.certificates().first().cloned().into_iter().collect()
+                    } else {
+                        entry.certificates().to_vec()
+                    };
                     Some(Converted {
                         alias: entry.alias.clone(),
                         key: match is_key {
@@ -659,7 +672,7 @@ impl Document {
                             true => Some(document.secret_key(index).ok()?),
                             false => None,
                         },
-                        certificates: entry.certificates().to_vec(),
+                        certificates,
                     })
                 })
                 .collect::<Option<Vec<_>>>()
@@ -776,38 +789,30 @@ impl Format {
     }
 }
 
-/// Writes a new file, failing if `path` already exists.
+/// Writes a new file, failing if `path` already exists. On Unix only the
+/// owner can read or write it.
 pub fn create(path: &Path, data: &[u8]) -> Result<(), String> {
-    create_with(path, data, false)
-}
-
-/// Like `create`, for a file holding a private key: on Unix only the owner
-/// can read or write it.
-pub fn create_private(path: &Path, data: &[u8]) -> Result<(), String> {
-    create_with(path, data, true)
-}
-
-fn create_with(path: &Path, data: &[u8], private: bool) -> Result<(), String> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    if private {
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    }
-    #[cfg(not(unix))]
-    let _ = private;
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     let mut file = options.open(path).map_err(|error| match error.kind() {
         io::ErrorKind::AlreadyExists => {
             format!("'{}' already exists; choose another name.", path.display())
         }
         _ => format!("Cannot create '{}': {error}", path.display()),
     })?;
-    file.write_all(data)
-        .and_then(|()| file.sync_all())
-        .map_err(|error| {
-            drop(fs::remove_file(path));
-            format!("Cannot write '{}': {error}", path.display())
-        })
+    let result = file.write_all(data).and_then(|()| file.sync_all());
+    drop(file);
+    result.map_err(|error| {
+        let _ = fs::remove_file(path);
+        format!("Cannot write '{}': {error}", path.display())
+    })
+}
+
+/// Like `create`, for a file holding a private or secret key.
+pub fn create_private(path: &Path, data: &[u8]) -> Result<(), String> {
+    create(path, data)
 }
 
 fn key_error(error: KeyError) -> String {
@@ -833,23 +838,66 @@ fn listed_at(entries: &[KeystoreEntry], alias: &str) -> usize {
 /// temporary file in the same directory, which is then renamed over `path`.
 /// A symbolic link is followed, and the file keeps its permissions.
 fn replace(path: &Path, data: &[u8]) -> io::Result<()> {
-    let target = fs::canonicalize(path)?;
-    let invalid = || io::Error::other("not a file path");
-    let directory = target.parent().ok_or_else(invalid)?;
-    let mut name = target.file_name().ok_or_else(invalid)?.to_os_string();
-    name.push(format!(".{}.tmp", std::process::id()));
-    let temporary = directory.join(name);
-    let result = (|| {
+    replace_with(path, data, random_u64)
+}
+
+fn random_u64() -> io::Result<u64> {
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).map_err(|_| io::Error::other(NO_RANDOMNESS))?;
+    Ok(u64::from_ne_bytes(bytes))
+}
+
+fn create_temp_file(
+    directory: &Path,
+    file_name: &std::ffi::OsStr,
+    mut next_suffix: impl FnMut() -> io::Result<u64>,
+) -> io::Result<(PathBuf, File)> {
+    const MAX_ATTEMPTS: usize = 64;
+    let mut last_error = None;
+    for _ in 0..MAX_ATTEMPTS {
+        let suffix = next_suffix()?;
+        let mut name = file_name.to_os_string();
+        name.push(format!(".{}.{suffix:016x}.tmp", std::process::id()));
+        let temporary = directory.join(name);
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut file = options.open(&temporary)?;
+        match options.open(&temporary) {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                last_error = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, "temporary file exists")))
+}
+
+fn replace_with(
+    path: &Path,
+    data: &[u8],
+    next_suffix: impl FnMut() -> io::Result<u64>,
+) -> io::Result<()> {
+    let target = fs::canonicalize(path)?;
+    let invalid = || io::Error::other("not a file path");
+    let directory = target.parent().ok_or_else(invalid)?;
+    let file_name = target.file_name().ok_or_else(invalid)?;
+    let (temporary, mut file) = create_temp_file(directory, file_name, next_suffix)?;
+    let result = (|| {
         file.write_all(data)?;
-        file.set_permissions(fs::metadata(&target)?.permissions())?;
+        let permissions = fs::metadata(&target)?.permissions();
+        #[cfg(unix)]
+        file.set_permissions(permissions)?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&temporary, &target)
+        fs::rename(&temporary, &target)?;
+        #[cfg(not(unix))]
+        if permissions.readonly() {
+            let _ = fs::set_permissions(&target, permissions);
+        }
+        Ok(())
     })();
     match result {
         Ok(()) => {
@@ -862,10 +910,7 @@ fn replace(path: &Path, data: &[u8]) -> io::Result<()> {
             Ok(())
         }
         Err(error) => {
-            // Never remove another process's file that had the same name.
-            if error.kind() != io::ErrorKind::AlreadyExists {
-                let _ = fs::remove_file(&temporary);
-            }
+            let _ = fs::remove_file(&temporary);
             Err(error)
         }
     }
@@ -1161,27 +1206,90 @@ mod tests {
         assert!(error.contains("not a PKCS #8 key"), "{error}");
     }
 
+    #[cfg(unix)]
     #[test]
-    fn a_failed_replacement_keeps_the_file_and_other_temporary_files() {
+    fn create_and_save_new_use_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
         let directory = TestDirectory::new();
-        // Renaming a file over a directory fails, and the temporary file
-        // written for it is removed.
+        let created = directory.path().join("converted.p12");
+        create(&created, b"keystore").unwrap();
+        assert_eq!(
+            fs::metadata(&created).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let (entries, document) = open(KEYTOOL_JKS, "changeit");
+        let saved_as = directory.path().join("copy.jks");
+        document.save_new(&saved_as, &entries).unwrap();
+        assert_eq!(
+            fs::metadata(&saved_as).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn temporary_filename_uses_random_suffix_and_retries_on_collision() {
+        let directory = TestDirectory::new();
+        let name = std::ffi::OsStr::new("store.jks");
+        let (first, first_file) = create_temp_file(directory.path(), name, random_u64).unwrap();
+        let (second, second_file) = create_temp_file(directory.path(), name, random_u64).unwrap();
+        drop(first_file);
+        drop(second_file);
+        assert_ne!(first, second);
+        let prefix = format!("store.jks.{}.", std::process::id());
+        for temp in [&first, &second] {
+            let file_name = temp.file_name().unwrap().to_str().unwrap();
+            let rest = file_name
+                .strip_prefix(&prefix)
+                .and_then(|s| s.strip_suffix(".tmp"))
+                .unwrap();
+            assert_eq!(rest.len(), 16, "{file_name}");
+            assert!(rest.chars().all(|c| c.is_ascii_hexdigit()), "{file_name}");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    fs::metadata(temp).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+            fs::remove_file(temp).unwrap();
+        }
+
+        // Colliding first suffix is skipped without touching the existing file.
+        let path = directory.path().join("store.jks");
+        fs::write(&path, b"original").unwrap();
+        let colliding = directory.path().join(format!(
+            "store.jks.{}.0000000000000001.tmp",
+            std::process::id()
+        ));
+        fs::write(&colliding, b"other").unwrap();
+        let mut suffixes = [1u64, 2u64].into_iter();
+        replace_with(&path, b"updated", || Ok(suffixes.next().unwrap())).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"updated");
+        assert_eq!(fs::read(&colliding).unwrap(), b"other");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+
+        // Exhausting retries fails with AlreadyExists and leaves both files intact.
+        let error = replace_with(&path, b"never", || Ok(1)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&colliding).unwrap(), b"other");
+        assert_eq!(fs::read(&path).unwrap(), b"updated");
+    }
+
+    #[test]
+    fn a_failed_replacement_removes_its_temporary_file() {
+        let directory = TestDirectory::new();
+        // Renaming a file over a directory fails (empty or non-empty), and the
+        // temporary file written for it is removed.
         let target = directory.path().join("folder");
         fs::create_dir(&target).unwrap();
         assert!(replace(&target, b"data").is_err());
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
 
-        // A file that already has the temporary name is left alone.
-        let path = directory.path().join("store.jks");
-        fs::write(&path, b"original").unwrap();
-        let temporary = directory
-            .path()
-            .join(format!("store.jks.{}.tmp", std::process::id()));
-        fs::write(&temporary, b"other").unwrap();
-        let error = replace(&path, b"data").unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-        assert_eq!(fs::read(&temporary).unwrap(), b"other");
-        assert_eq!(fs::read(&path).unwrap(), b"original");
+        fs::write(target.join("inside"), b"x").unwrap();
+        assert!(replace(&target, b"data").is_err());
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     #[test]
@@ -1190,5 +1298,82 @@ mod tests {
         let path = directory.path().join("missing").join("out.pem");
         let error = create_private(&path, b"data").unwrap_err();
         assert!(error.contains("Cannot create"), "{error}");
+    }
+
+    #[test]
+    fn conversion_with_issuer_and_issued_certificates_succeeds_in_both_directions() {
+        use crate::test_support::metadata_certificate;
+        let root = metadata_certificate("Root CA", "Root CA", &[1], &[]);
+        let leaf = metadata_certificate("Leaf", "Root CA", &[2], &[]);
+
+        // PKCS12 -> JKS and PKCS12 -> JCEKS
+        let mut p12 = pkcs12::Writable::empty("changeit");
+        p12.insert_trusted_certificate("root", &root).unwrap();
+        let p12_entries = p12.insert_trusted_certificate("leaf", &leaf).unwrap();
+        let leaf_entry = p12_entries.iter().find(|e| e.alias == "leaf").unwrap();
+        assert_eq!(leaf_entry.certificates(), &[leaf.clone(), root.clone()]);
+        let p12_doc = Document::Pkcs12(p12);
+
+        for target in [Format::Jks, Format::Jceks] {
+            let data = p12_doc.convert(&p12_entries, target).unwrap();
+            let (entries, doc) = open(&data, "changeit");
+            assert_eq!(doc.format(), target);
+            assert_eq!(entries.len(), 2);
+            let leaf_entry = entries.iter().find(|e| e.alias == "leaf").unwrap();
+            let root_entry = entries.iter().find(|e| e.alias == "root").unwrap();
+            assert_eq!(leaf_entry.certificates(), std::slice::from_ref(&leaf));
+            assert_eq!(root_entry.certificates(), std::slice::from_ref(&root));
+
+            // Round-trip back: JKS -> PKCS12 and JCEKS -> PKCS12
+            let back = doc.convert(&entries, Format::Pkcs12).unwrap();
+            let (verified, _) = pkcs12::parse(&back).unwrap().open("changeit").unwrap();
+            assert_eq!(verified.entries.len(), 2);
+            let leaf_back = verified.entries.iter().find(|e| e.alias == "leaf").unwrap();
+            let root_back = verified.entries.iter().find(|e| e.alias == "root").unwrap();
+            assert_eq!(leaf_back.certificates(), &[leaf.clone(), root.clone()]);
+            assert_eq!(root_back.certificates(), std::slice::from_ref(&root));
+        }
+    }
+
+    #[test]
+    fn conversion_still_checks_full_certificate_chain_for_private_keys() {
+        use crate::test_support::{TestRng, metadata_certificate, synthetic_pkcs8};
+        let key = synthetic_pkcs8(b"synthetic");
+        let root = metadata_certificate("Root CA", "Root CA", &[1], &[]);
+        let leaf = metadata_certificate("Leaf", "Root CA", &[2], &[]);
+        let unrelated = metadata_certificate("Other CA", "Other CA", &[3], &[]);
+
+        // An unlinked private-key chain must still fail JKS -> PKCS12 conversion.
+        let mut writable = keystore::Writable::empty(false);
+        let protected = key_protection::protect(&key, "changeit", false, &mut TestRng(0)).unwrap();
+        writable
+            .insert_private_key(0, "key", &protected, &[leaf.clone(), unrelated], 1)
+            .unwrap();
+        let jks_bytes = writable.encode("changeit");
+        let (entries, document) = open(&jks_bytes, "changeit");
+        let error = document.convert(&entries, Format::Pkcs12).unwrap_err();
+        assert!(
+            error.contains("would not read back with the same entries and keys"),
+            "{error}"
+        );
+
+        // A properly linked private-key chain succeeds in both directions and
+        // preserves the full chain.
+        let mut writable = keystore::Writable::empty(false);
+        writable
+            .insert_private_key(0, "key", &protected, &[leaf.clone(), root.clone()], 1)
+            .unwrap();
+        let jks_bytes = writable.encode("changeit");
+        let (entries, document) = open(&jks_bytes, "changeit");
+        let p12_bytes = document.convert(&entries, Format::Pkcs12).unwrap();
+        let (verified, p12_writable) = pkcs12::parse(&p12_bytes).unwrap().open("changeit").unwrap();
+        assert_eq!(
+            verified.entries[0].certificates(),
+            &[leaf.clone(), root.clone()]
+        );
+        let p12_doc = Document::Pkcs12(p12_writable.unwrap());
+        let jks_back = p12_doc.convert(&verified.entries, Format::Jks).unwrap();
+        let (back_entries, _) = open(&jks_back, "changeit");
+        assert_eq!(back_entries[0].certificates(), &[leaf, root]);
     }
 }
