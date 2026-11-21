@@ -1521,4 +1521,60 @@ mod tests {
         }
         assert!(draw(&mut view, 40, 8).contains("Resize terminal"));
     }
+
+    #[test]
+    fn escapes_control_characters_in_distinguished_names() {
+        use crate::test_support::ed25519_request;
+        use crown::{
+            asn1::{Asn1Time, oid},
+            x509::name::Name,
+        };
+
+        // Certificate Subject and Issuer with newline and ANSI escape.
+        let spoof = "evil\nIssuer: CN=Trusted\x1b[31m";
+        let leaf = metadata_certificate(spoof, spoof, &[1], &[]);
+        let issuer = metadata_certificate(spoof, spoof, &[2], &[]);
+        let cert_entry = entry(vec![leaf, issuer]);
+        let view = EntryDetails::new(&cert_entry, Path::new(""));
+        let text = view.text(0).to_string();
+        assert!(text.contains("Subject: CN=evil\\u{a}Issuer: CN=Trusted\\u{1b}[31m"));
+        assert!(text.contains("Issuer: CN=evil\\u{a}Issuer: CN=Trusted\\u{1b}[31m"));
+        assert!(!text.contains("\nIssuer: CN=Trusted"));
+        assert!(!text.contains('\x1b'));
+
+        // CSR Subject with newline and ANSI escape.
+        let csr = ed25519_request(spoof, &[]);
+        let csr_entry = KeystoreEntry {
+            content: Content::Request(csr),
+            ..entry(vec![])
+        };
+        let view = EntryDetails::new(&csr_entry, Path::new(""));
+        let text = view.text(0).to_string();
+        assert!(text.contains("Subject: CN=evil\\u{a}Issuer: CN=Trusted\\u{1b}[31m"));
+        assert!(!text.contains("\nIssuer: CN=Trusted"));
+        assert!(!text.contains('\x1b'));
+
+        // CRL Issuer with newline and ANSI escape.
+        let ed25519 =
+            der::algorithm_identifier(&ObjectIdentifier::new(oid::OID_ED25519).unwrap(), None);
+        let this_update = Asn1Time::new(2026, 1, 1, 0, 0, 0, true).unwrap();
+        let tbs = der::sequence(
+            &[
+                ed25519.clone(),
+                Name::from_common_name(spoof).encode(),
+                der::time(&this_update),
+            ]
+            .concat(),
+        );
+        let crl = der::sequence(&[tbs, ed25519, der::bit_string(0, &[1, 2, 3])].concat());
+        let crl_entry = KeystoreEntry {
+            content: Content::Crl(crl),
+            ..entry(vec![])
+        };
+        let view = EntryDetails::new(&crl_entry, Path::new(""));
+        let text = view.text(0).to_string();
+        assert!(text.contains("Issuer: CN=evil\\u{a}Issuer: CN=Trusted\\u{1b}[31m"));
+        assert!(!text.contains("\nIssuer: CN=Trusted"));
+        assert!(!text.contains('\x1b'));
+    }
 }

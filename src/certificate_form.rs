@@ -254,7 +254,8 @@ impl Form {
             return Err((COMMON_NAME, "A common name is required.".into()));
         }
         let country = field(COUNTRY).to_ascii_uppercase();
-        if !country.is_empty()
+        if kept.is_none()
+            && !country.is_empty()
             && (country.len() != 2 || !country.bytes().all(|byte| byte.is_ascii_uppercase()))
         {
             return Err((
@@ -337,15 +338,14 @@ impl Form {
                 _ => {
                     let cursor = if selected { "_" } else { "" };
                     let room = width - VALUE_COLUMN - cursor.len();
-                    let skipped = self.text[index].chars().count().saturating_sub(room);
-                    let shown: String = self.text[index].chars().skip(skipped).collect();
+                    let shown = crate::path_input::tail_fit(&self.text[index], room);
                     format!("{shown}{cursor}")
                 }
             };
             let row = format!(" {label:<20} {value}");
             if selected {
                 Line::styled(
-                    format!("{row:<width$}"),
+                    crate::path_input::pad_to_width(&row, width),
                     Style::default()
                         .fg(Color::Rgb(0, 0, 0))
                         .bg(Color::Rgb(175, 255, 255))
@@ -586,5 +586,43 @@ mod tests {
         assert!(matches!(press(&mut form, KeyCode::Enter), Outcome::Editing));
         assert!(screen(&form, 80, 24).contains("A common name is required."));
         assert!(screen(&form, 80, 24).contains("Common name (CN)     _"));
+
+        // A legacy non-2-letter country code is kept while the subject is
+        // unchanged, and validated once any subject field changes.
+        let mut legacy = Subject {
+            common_name: "host.test",
+            ..Subject::default()
+        }
+        .name();
+        legacy.rdns.push(Rdn {
+            attributes: vec![AttributeTypeAndValue::from_utf8(
+                ObjectIdentifier::new(oid::OID_AT_COUNTRY).unwrap(),
+                "USA",
+            )],
+        });
+        let mut form = Form::for_request(String::new(), &legacy, &[]);
+        let Outcome::Submitted(_, request) = press(&mut form, KeyCode::Enter) else {
+            panic!("unchanged legacy country code should be accepted");
+        };
+        assert_eq!(request.subject, legacy);
+        type_text(&mut form, "x");
+        assert!(matches!(press(&mut form, KeyCode::Enter), Outcome::Editing));
+        assert!(
+            form.error
+                .as_deref()
+                .is_some_and(|e| e.contains("two-letter"))
+        );
+    }
+
+    #[test]
+    fn wide_unicode_fields_scroll_by_display_width() {
+        let mut form = Form {
+            selected: COMMON_NAME,
+            ..Form::default()
+        };
+        form.text[COMMON_NAME] = format!("{}end", "日".repeat(30));
+        let shown = screen(&form, 72, 16);
+        // Each 2-column glyph occupies two buffer cells ("日" + " ").
+        assert!(shown.contains("日 end_│"), "{shown}");
     }
 }

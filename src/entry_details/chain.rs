@@ -60,7 +60,10 @@ impl ChainView {
             .enumerate()
             .map(|(depth, (index, info))| {
                 let mut label = "  ".repeat(depth.min(8));
-                match info.as_ref().map(|info| info.subject.to_string()) {
+                match info
+                    .as_ref()
+                    .map(|info| certificate::name_text(&info.subject))
+                {
                     Some(subject) if !subject.is_empty() => label.push_str(&subject),
                     _ => {
                         write!(label, "Certificate {} (unreadable or unnamed)", index + 1).unwrap()
@@ -145,9 +148,14 @@ impl ChainView {
             write!(
                 text,
                 "Version: {}\n\nSubject: {}\n\nIssuer: {}\n\nSerial Number (hex): {}\n\nSerial Number (dec): {}\n\nValid From: {}\n\n",
-                info.version, info.subject, info.issuer, info.serial_hex, info.serial_decimal,
+                info.version,
+                certificate::name_text(&info.subject),
+                certificate::name_text(&info.issuer),
+                info.serial_hex,
+                info.serial_decimal,
                 time_text(&info.not_before),
-            ).unwrap();
+            )
+            .unwrap();
             lines.extend(Text::from(text).lines);
             let expiry = Span::raw(time_text(&info.not_after));
             lines.push(Line::from(vec![
@@ -202,7 +210,7 @@ impl ChainView {
         } else {
             let issuer = self.metadata[index + 1]
                 .as_ref()
-                .map(|info| info.subject.to_string())
+                .map(|info| certificate::name_text(&info.subject))
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| format!("certificate {}", index + 2));
             format!("the public key of {issuer}")

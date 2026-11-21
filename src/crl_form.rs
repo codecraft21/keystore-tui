@@ -256,12 +256,11 @@ impl CrlForm {
             // Show the end of a text too long for the row.
             let cursor = if selected { "_" } else { "" };
             let room = width - VALUE_COLUMN - cursor.len();
-            let skipped = self.text[index].chars().count().saturating_sub(room);
-            let shown: String = self.text[index].chars().skip(skipped).collect();
+            let shown = crate::path_input::tail_fit(&self.text[index], room);
             let row = format!(" {label:<20} {shown}{cursor}");
             if selected {
                 Line::styled(
-                    format!("{row:<width$}"),
+                    crate::path_input::pad_to_width(&row, width),
                     Style::default()
                         .fg(Color::Rgb(0, 0, 0))
                         .bg(Color::Rgb(175, 255, 255))
@@ -438,5 +437,14 @@ mod tests {
             wrong(NEXT_UPDATE, "2026-01-01").contains("The next update comes after this update.")
         );
         assert!(wrong(NUMBER, "-1").contains("The CRL number is a whole number"));
+    }
+
+    #[test]
+    fn wide_unicode_field_scrolls_by_display_width() {
+        let mut form = form();
+        type_text(&mut form, &format!("{}05", "日".repeat(30)));
+        let shown = screen(&form, 72, 12);
+        // Each 2-column glyph occupies two buffer cells ("日" + " ").
+        assert!(shown.contains("日 05_ │"), "{shown}");
     }
 }

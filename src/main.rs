@@ -51,7 +51,7 @@ use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     layout::{Constraint, Layout},
     style::{Color, Style, Stylize},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
 
@@ -1072,8 +1072,13 @@ impl App {
                 editing::Action::GenerateSecret(_) => "Alias for the generated secret key: ".into(),
                 editing::Action::ImportSecret(_) => "Alias for the imported secret key: ".into(),
             };
+            let label = Span::raw(label).bold();
+            let room = usize::from(width)
+                .saturating_sub(label.width())
+                .saturating_sub(1);
+            let shown = path_input::tail_fit(&prompt.alias, room);
             vec![
-                Line::from(vec![label.bold(), format!("{}_", prompt.alias).into()]),
+                Line::from(vec![label, format!("{shown}_").into()]),
                 "Enter Confirm | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit".into(),
             ]
         } else if let Some((_, prompt)) = self

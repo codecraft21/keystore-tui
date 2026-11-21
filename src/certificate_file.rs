@@ -42,7 +42,13 @@ enum Item {
 }
 
 pub fn is_pem(data: &[u8]) -> bool {
-    data.windows(11).any(|window| window == b"-----BEGIN ")
+    std::str::from_utf8(data).is_ok_and(|text| {
+        text.lines().any(|line| {
+            line.trim_start_matches('\u{feff}')
+                .trim_start()
+                .starts_with("-----BEGIN ")
+        })
+    })
 }
 
 pub fn has_extension(path: &std::path::Path) -> bool {
@@ -432,6 +438,19 @@ mod tests {
         assert_eq!(
             openssl.entries[0].content,
             Content::Request(OPENSSL_REQUEST_DER.to_vec())
+        );
+    }
+
+    #[test]
+    fn binary_der_containing_pem_marker_is_not_misclassified_as_pem() {
+        let cert = metadata_certificate("-----BEGIN CERTIFICATE-----\nspoof", "ca", &[0x80], &[]);
+        assert!(!is_pem(&cert));
+        let file = parse(&cert).unwrap();
+        assert_eq!(file.entries.len(), 1);
+        assert_eq!(file.entries[0].certificates(), [cert]);
+        assert_eq!(
+            file.entries[0].alias,
+            "-----BEGIN CERTIFICATE-----\\u{a}spoof"
         );
     }
 

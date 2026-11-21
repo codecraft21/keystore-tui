@@ -491,15 +491,50 @@ fn secret_keys_are_copied_from_another_keystore() {
     );
     assert!(key(&app, "again") == key(&source, "one"));
 
-    // A JKS keystore takes no secret key.
+    // A JKS keystore rejects a single secret key up front without opening the alias prompt.
     let (mut jks, _) = editing(&directory);
     import(&mut jks, "source");
     type_password(&mut jks, "sourcepw");
     press(&mut jks, KeyCode::Enter);
-    press(&mut jks, KeyCode::Enter);
+    assert!(jks.alias_prompt.is_none());
     assert!(
         red_text(&mut jks).contains("a JKS keystore cannot hold secret keys"),
         "{:?}",
         jks.message
     );
+
+    // In bulk copy into JKS, secret keys are blocked up front so 'a' copies
+    // only the supported entries without partial failure.
+    let cert_path = directory.path().join("extra.pem");
+    fs::write(&cert_path, test_support::TRUSTED_CERT_PEM).unwrap();
+    import(&mut source, "extra");
+    type_alias(&mut source, "extra-cert");
+    press(&mut source, KeyCode::Char('w'));
+    assert_eq!(source.entries.len(), 2);
+
+    let original_count = jks.entries.len();
+    import(&mut jks, "source");
+    type_password(&mut jks, "sourcepw");
+    press(&mut jks, KeyCode::Enter);
+    let rendered = screen(&mut jks, 120, 24);
+    assert!(
+        rendered.contains("[-] one | Secret key (a JKS keystore cannot hold secret keys)"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("[ ] extra-cert | Trusted certificate"),
+        "{rendered}"
+    );
+    press(&mut jks, KeyCode::Char('a'));
+    press(&mut jks, KeyCode::Enter);
+    // Only the single non-blocked entry ('extra-cert') was chosen, so it opens the alias prompt.
+    assert!(
+        screen(&mut jks, 120, 24).contains("Alias for the imported certificate: extra-cert_"),
+        "{:?}",
+        jks.message
+    );
+    press(&mut jks, KeyCode::Enter);
+    assert_eq!(jks.entries.len(), original_count + 1);
+    assert!(jks.entries.iter().any(|e| e.alias == "extra-cert"));
+    assert!(!jks.entries.iter().any(|e| e.alias == "one"));
 }

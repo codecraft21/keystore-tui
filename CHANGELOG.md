@@ -5,6 +5,37 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- Fix TUI and workflow correctness issues:
+  - Accept unchanged CSR subjects with legacy non-2-letter `C` (country) values
+    when generating a certificate signing request from an existing certificate.
+  - Block secret-key entries up front when copying entries from another keystore
+    into a JKS keystore so bulk copy cannot fail mid-way after partial mutation.
+  - Handle Windows `AltGr` (`Ctrl+Alt`) consistently in the startup password
+    prompt (not cancelling on `Ctrl+Alt+c`/`Ctrl+Alt+d`) and in the file picker
+    filter.
+  - Avoid double-joining relative directories in `SaveAsPrompt::suggesting`.
+  - Scroll certificate, signing, and CRL form fields and the alias prompt by
+    Unicode display width so wide characters and long aliases stay visible.
+- Fix X.509, CSR, and CRL parsing, verification, weak-algorithm detection, and
+  display issues:
+  - Escape control characters in rendered Subject and Issuer distinguished names
+    across certificate, CSR, and CRL views, aliases, and the signing form so
+    newlines and terminal escapes cannot spoof TUI fields.
+  - Reject trailing bytes when parsing certificates, issuer certificates, and
+    CSRs for signature verification, and report `UnsupportedOperation` from
+    signature verification as unchecked rather than failed.
+  - Detect weak `RSASSA-PSS` signatures using SHA-1 (including the RFC 4055
+    default), `md4WithRSAEncryption`, OIW `dsaWithSHA1`, and `secp192r1` EC
+    keys, and inspect the outer `signatureAlgorithm` consistently with the
+    detail view.
+  - Validate and respect `BIT STRING` unused bits when checking issuer
+    `Key Usage` `keyCertSign` in offline chain diagnostics.
+  - Require valid UTF-8 and a `-----BEGIN ` line for PEM detection so binary
+    DER files containing `-----BEGIN ` bytes are not misclassified as invalid
+    UTF-8 PEM.
+  - Parse X.509 CRLs directly from ASN.1 so minimal v1/v2 CRLs omitting
+    optional fields, negative revoked serials, and malformed extensions are
+    displayed gracefully using the outer `signatureAlgorithm`.
 - Harden PKCS12 reading, writing, bag ownership, and KDF handling:
   - Stage PKCS12 password changes and key imports on a clone before verifying OS
     RNG success so a mid-operation RNG failure leaves the in-memory keystore

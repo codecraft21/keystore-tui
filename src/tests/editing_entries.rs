@@ -312,3 +312,20 @@ fn rename_and_import_need_an_editable_keystore() {
         assert!(app.sign_menu.is_none());
     }
 }
+
+#[test]
+fn alias_prompt_scrolls_long_and_wide_unicode_aliases() {
+    let directory = TestDirectory::new();
+    let (mut app, _) = editing(&directory);
+    press(&mut app, KeyCode::Char('r'));
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    type_password(&mut app, &format!("{}tail", "a".repeat(80)));
+    let rendered = screen(&mut app, 80, 24);
+    assert!(rendered.contains("aaatail_"), "{rendered}");
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    type_password(&mut app, &format!("{}end", "日".repeat(40)));
+    let rendered = screen(&mut app, 80, 24);
+    // Each 2-column glyph occupies two buffer cells ("日" + " ").
+    assert!(rendered.contains("日 end_"), "{rendered}");
+}

@@ -77,9 +77,9 @@ impl SignForm {
             }
         }
         Self {
-            title,
-            subject,
-            public_key,
+            title: extensions::printable(&title),
+            subject: extensions::printable(&subject),
+            public_key: extensions::printable(&public_key),
             days: "365".into(),
             serial: String::new(),
             with_chain: true,
@@ -206,11 +206,11 @@ impl SignForm {
         ])
         .areas(inner);
         let width = usize::from(inner.width);
-        let clipped = |text: String| text.chars().take(width).collect::<String>();
+        let clipped = |text: &str| crate::path_input::head_fit(text, width).to_owned();
         frame.render_widget(
             Paragraph::new(vec![
-                Line::from(clipped(format!(" {:<20} {}", "Subject", self.subject))),
-                Line::from(clipped(format!(
+                Line::from(clipped(&format!(" {:<20} {}", "Subject", self.subject))),
+                Line::from(clipped(&format!(
                     " {:<20} {}",
                     "Public key", self.public_key
                 ))),
@@ -221,12 +221,15 @@ impl SignForm {
             let selected = row == self.selected;
             let cursor = if selected { "_" } else { "" };
             let text = match row {
-                DAYS => format!(" {:<20} {}{cursor}", "Valid for (days)", self.days),
+                DAYS => {
+                    let room = width - VALUE_COLUMN - cursor.len();
+                    let shown = crate::path_input::tail_fit(&self.days, room);
+                    format!(" {:<20} {shown}{cursor}", "Valid for (days)")
+                }
                 SERIAL => {
                     // Show the end of a serial number too long for the row.
                     let room = width - VALUE_COLUMN - cursor.len();
-                    let skipped = self.serial.chars().count().saturating_sub(room);
-                    let shown: String = self.serial.chars().skip(skipped).collect();
+                    let shown = crate::path_input::tail_fit(&self.serial, room);
                     format!(" {:<20} {shown}{cursor}", "Serial number (hex)")
                 }
                 SAVE => format!(
@@ -258,10 +261,10 @@ impl SignForm {
                     format!(" [{mark}] {name}: {}", extension.lines.join(", "))
                 }
             };
-            let text = clipped(text);
+            let text = clipped(&text);
             if selected {
                 Line::styled(
-                    format!("{text:<width$}"),
+                    crate::path_input::pad_to_width(&text, width),
                     Style::default()
                         .fg(Color::Rgb(0, 0, 0))
                         .bg(Color::Rgb(175, 255, 255))
@@ -530,5 +533,34 @@ mod tests {
         ] {
             assert!(serial(wrong).is_err(), "{wrong}");
         }
+    }
+
+    #[test]
+    fn escapes_control_characters_in_subject_and_title() {
+        let form = SignForm::new(
+            " Sign \x1b[31m ".into(),
+            "CN=evil\nPublic key           RSA 4096".into(),
+            "EC 256 bits".into(),
+            &[],
+        );
+        let shown = screen(&form, 80, 24);
+        assert!(shown.contains("CN=evil\\u{a}Public key"));
+        assert!(shown.contains("EC 256 bits"));
+        assert!(!shown.contains('\x1b'));
+    }
+
+    #[test]
+    fn wide_unicode_text_fits_within_the_form_width() {
+        let mut form = SignForm::new(
+            " Sign ".into(),
+            format!("CN={}", "日".repeat(40)),
+            "EC 256 bits".into(),
+            &[],
+        );
+        press(&mut form, KeyCode::Down); // SERIAL
+        type_text(&mut form, &format!("{}ab", "日".repeat(30)));
+        let shown = screen(&form, 72, 16);
+        // Each 2-column glyph occupies two buffer cells ("日" + " ").
+        assert!(shown.contains("日 ab_ │"), "{shown}");
     }
 }

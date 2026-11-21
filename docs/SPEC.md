@@ -853,7 +853,8 @@ any existing incomplete-entry warnings.
 - Entries that cannot be copied are greyed, marked `[-]`, and followed by the
   reason: private keys that the source's password does not
   unlock or that are not in PKCS #8 form, and secret keys that it does not
-  recover. A secret key is copied only into a JCEKS or PKCS12 keystore. An entry whose alias the open
+  recover or when the open keystore is JKS. A secret key is copied only into a
+  JCEKS or PKCS12 keystore. An entry whose alias the open
   keystore already has, ignoring case, is followed by `(alias exists)`.
 - `Enter` imports the chosen entries, or the highlighted one when none is
   chosen:
@@ -1191,7 +1192,8 @@ any existing incomplete-entry warnings.
 - A certificate is weak when either:
   - its RSA, RSASSA-PSS, or DSA key is shorter than 2048 bits, or its EC curve
     is smaller than 256 bits (NIST SP 800-131A); or
-  - it is signed with MD2, MD5, or SHA-1 (RSA, ECDSA, or DSA signatures).
+  - it is signed with MD2, MD4, MD5, or SHA-1 (RSA, RSASSA-PSS including the
+    RFC 4055 SHA-1 default, ECDSA, or DSA signatures).
 - The signature of a self-signed certificate (issuer and subject encoded
   identically) is not checked: a root is trusted for where it is stored, not
   for its signature. Its key size is still checked.

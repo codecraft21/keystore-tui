@@ -104,7 +104,7 @@ fn request_form(title: String, request: &[u8]) -> Option<SignForm> {
         .unwrap_or_default();
     Some(SignForm::new(
         title,
-        certificate::subject_text(&parsed.subject.encode()),
+        certificate::name_text(&parsed.subject),
         public_key,
         &parsed.extensions,
     ))

@@ -65,12 +65,18 @@ fn constraints(value: &[u8]) -> Result<(bool, Option<i64>), ()> {
 
 fn signing_usage(value: &[u8]) -> Result<bool, ()> {
     let mut reader = Reader::new(value);
-    let (_, bits) = reader.read_bit_string().map_err(|_| ())?;
+    let (unused, bits) = reader.read_bit_string().map_err(|_| ())?;
     reader.expect_end().map_err(|_| ())?;
-    if bits.is_empty() {
+    if unused > 7 || bits.is_empty() {
         return Err(());
     }
-    Ok(bits[0] & 4 != 0)
+    let bit_count = bits
+        .len()
+        .checked_mul(8)
+        .and_then(|total| total.checked_sub(usize::from(unused)))
+        .ok_or(())?;
+    // keyCertSign is bit 5 (0x04 in byte 0), which requires at least 6 bits.
+    Ok(bit_count > 5 && bits[0] & 4 != 0)
 }
 
 fn key_id(value: &[u8], authority: bool) -> Result<Option<Vec<u8>>, ()> {
@@ -530,6 +536,14 @@ mod tests {
             assert!(constraints(&valid[..end]).is_err());
         }
         assert!(signing_usage(&[3, 2, 8, 0]).is_err());
+        assert!(signing_usage(&[3, 1, 0]).is_err());
+        assert!(signing_usage(&[3, 1, 1]).is_err());
+        // Bit 5 (0x04) is valid with 2 unused bits (6 bits total),
+        // but falls in the unused padding with 3 or more unused bits.
+        assert_eq!(signing_usage(&der::bit_string(2, &[0x04])), Ok(true));
+        assert_eq!(signing_usage(&der::bit_string(3, &[0x04])), Ok(false));
+        assert_eq!(signing_usage(&der::bit_string(7, &[0x84])), Ok(false));
+        assert_eq!(signing_usage(&der::bit_string(7, &[0x04, 0x00])), Ok(true));
         assert!(key_id(&[der::octet_string(&[1]), vec![0]].concat(), false).is_err());
     }
 }

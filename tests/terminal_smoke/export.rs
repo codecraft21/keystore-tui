@@ -16,10 +16,9 @@ fn certificate_file(exit_key: &[u8]) {
     app.expect(&["Certificate hierarchy", "x Export certificate"]);
     app.send(b"x");
     app.expect(&["Save certificate to:"]);
-    app.send(b"\x15"); // Ctrl+U clears the suggested absolute path.
-    app.expect(&["Save certificate to:"]);
-    app.send(b"q"); // Typed into the name, not a quit.
-    app.expect(&["Save certificate to: q"]);
+    // Ctrl+U clears the suggested absolute path; `q` is typed into the name, not a quit.
+    app.send(b"\x15q");
+    app.expect(&["Save certificate to: q "]);
     assert_eq!(app.exited(), None);
     app.send(b"x\x1b[D\x1b[Dp"); // Left twice, then insert at the start.
     app.expect(&["Save certificate to: pqx"]);

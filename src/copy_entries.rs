@@ -13,7 +13,7 @@ use crate::{
     editing::{Action, AliasPrompt},
     key_import::Key,
     keystore::{Content, KeystoreEntry, Kind},
-    save::Document,
+    save::{Document, Format},
     secret_key::SecretKey,
 };
 
@@ -49,7 +49,12 @@ pub struct Selection {
 }
 
 impl Selection {
-    pub fn new(file: String, source: Document, entries: Vec<KeystoreEntry>) -> Self {
+    pub fn new(
+        file: String,
+        source: Document,
+        entries: Vec<KeystoreEntry>,
+        allows_secret_keys: bool,
+    ) -> Self {
         let blocked = entries
             .iter()
             .enumerate()
@@ -58,6 +63,10 @@ impl Selection {
                     kind: Kind::PrivateKey,
                     ..
                 } => readable(source.private_key(index).map(drop)),
+                Content::Certificates {
+                    kind: Kind::SecretKey,
+                    ..
+                } if !allows_secret_keys => Some("a JKS keystore cannot hold secret keys"),
                 Content::Certificates {
                     kind: Kind::SecretKey,
                     ..
@@ -198,7 +207,11 @@ impl App {
             return Err(format!("'{file}' holds no entries."));
         }
         let single = entries.len() == 1;
-        self.copying = Some(Selection::new(file, source, entries));
+        let allows_secret_keys = self
+            .document
+            .as_ref()
+            .is_none_or(|document| document.format() != Format::Jks);
+        self.copying = Some(Selection::new(file, source, entries, allows_secret_keys));
         if single {
             self.copy_chosen();
         }
@@ -321,12 +334,30 @@ mod tests {
             chain_warning: None,
         };
         let source = Document::jks(Writable::empty(true), "");
-        let mut selection = Selection::new("source.jceks".into(), source, vec![entry]);
+        let mut selection = Selection::new("source.jceks".into(), source, vec![entry], true);
         let reason = "its key cannot be read";
         assert_eq!(selection.blocked, [Some(reason)]);
         // It is not chosen with the others.
         selection.toggle_all();
         assert_eq!(selection.chosen, [false]);
         assert_eq!(selection.item(0).err().as_deref(), Some(reason));
+
+        // Copying into JKS blocks secret keys up front.
+        let entry = KeystoreEntry {
+            alias: "aes".into(),
+            certificate: None,
+            content: Content::Certificates {
+                kind: Kind::SecretKey,
+                certificates: vec![],
+            },
+            chain_warning: None,
+        };
+        let source = Document::jks(Writable::empty(true), "");
+        let mut selection = Selection::new("source.jceks".into(), source, vec![entry], false);
+        let jks_reason = "a JKS keystore cannot hold secret keys";
+        assert_eq!(selection.blocked, [Some(jks_reason)]);
+        selection.toggle_all();
+        assert_eq!(selection.chosen, [false]);
+        assert_eq!(selection.item(0).err().as_deref(), Some(jks_reason));
     }
 }
