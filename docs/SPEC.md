@@ -979,8 +979,9 @@ any existing incomplete-entry warnings.
 - A PKCS12 keystore needs a password that is not empty; with an empty one a
   red message says so and nothing is created.
 - Confirming the password writes an empty keystore, in the version Java
-  writes, to the new file and opens it. A green message names it. If the file
-  cannot be created, a red message explains why and the loaded file stays.
+  writes, to the new file and opens it. On Unix only its owner can read or
+  write it. A green message names it. If the file cannot be created, a red
+  message explains why and the loaded file stays.
 
 ## Saving
 
@@ -1011,9 +1012,10 @@ any existing incomplete-entry warnings.
   `Ctrl+U` clears the name, `Enter` saves, `Esc`
   cancels, and a relative name is resolved against the opened file's
   directory.
-- The "save as" file must not exist yet; it is never replaced. On failure a
-  red message explains why and the prompt stays open. On success the new file
-  becomes the opened file, so later saves go to it.
+- The "save as" file must not exist yet; it is never replaced. On Unix only
+  its owner can read or write it. On failure a red message explains why and
+  the prompt stays open. On success the new file becomes the opened file, so
+  later saves go to it.
 - A green message names the saved file, and `[modified]` disappears.
 
 ### Writing PKCS12 keystores

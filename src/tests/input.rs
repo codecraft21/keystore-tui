@@ -125,6 +125,24 @@ fn oversized_files_are_rejected_without_reading_them_fully() {
 }
 
 #[test]
+fn read_bounded_with_exact_size_hint_does_not_reallocate_on_eof() {
+    let payload: Vec<u8> = (0..128).collect();
+    let data = read_bounded(&payload[..], payload.len() as u64, 1000).unwrap();
+    assert_eq!(data, payload);
+    assert_eq!(data.capacity(), payload.len() + 1);
+
+    let directory = TestDirectory::new();
+    let path = directory.path().join("key.bin");
+    fs::write(&path, &payload).unwrap();
+    let file_data = read_limited(&path, 1000).unwrap();
+    assert_eq!(file_data, payload);
+    assert_eq!(file_data.capacity(), payload.len() + 1);
+    let exact_limit = read_limited(&path, payload.len() as u64).unwrap();
+    assert_eq!(exact_limit, payload);
+    assert_eq!(exact_limit.capacity(), payload.len() + 1);
+}
+
+#[test]
 fn ctrl_alt_c_does_not_quit() {
     let mut app = App::default();
     let altgr_c = KeyEvent::new(

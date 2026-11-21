@@ -259,25 +259,38 @@ pub fn from_pkcs8(pkcs8: &[u8]) -> Option<SecretKey> {
 /// or without spaces, colons, and line breaks, or else the content as it
 /// is. `None` for no key, and for one longer than `MAX_KEY_SIZE`.
 pub fn from_file(content: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
-    let digits: Option<Vec<u8>> = content
-        .iter()
-        .filter(|byte| !byte.is_ascii_whitespace() && **byte != b':')
-        .map(|&byte| char::from(byte).to_digit(16).map(|digit| digit as u8))
-        .collect();
-    let key = match digits {
-        Some(digits) if !digits.is_empty() && digits.len() % 2 == 0 => {
-            let key = digits
-                .chunks(2)
-                .map(|pair| pair[0] << 4 | pair[1])
-                .collect();
-            // The digits spell the key.
-            drop(Zeroizing::new(digits));
-            key
+    let mut hex_count = 0usize;
+    let mut all_hex = true;
+    for &byte in content {
+        if byte.is_ascii_whitespace() || byte == b':' {
+            continue;
         }
-        _ => content.to_vec(),
-    };
-    let key = Zeroizing::new(key);
-    (1..=MAX_KEY_SIZE).contains(&key.len()).then_some(key)
+        if byte.is_ascii_hexdigit() {
+            hex_count += 1;
+        } else {
+            all_hex = false;
+            break;
+        }
+    }
+    if all_hex && hex_count > 0 && hex_count.is_multiple_of(2) {
+        let key_len = hex_count / 2;
+        if key_len > MAX_KEY_SIZE {
+            return None;
+        }
+        let mut key = Zeroizing::new(Vec::with_capacity(key_len));
+        let mut nibbles = content
+            .iter()
+            .copied()
+            .filter(|byte| !byte.is_ascii_whitespace() && *byte != b':')
+            .filter_map(|byte| char::from(byte).to_digit(16).map(|digit| digit as u8));
+        while let (Some(high), Some(low)) = (nibbles.next(), nibbles.next()) {
+            key.push(high << 4 | low);
+        }
+        return Some(key);
+    }
+    (1..=MAX_KEY_SIZE)
+        .contains(&content.len())
+        .then(|| Zeroizing::new(content.to_vec()))
 }
 
 /// The key as a line of hex digits.
@@ -463,7 +476,11 @@ mod tests {
             Some(MAX_KEY_SIZE)
         );
         assert_eq!(read(&[1; MAX_KEY_SIZE + 1]), None);
+        assert_eq!(read(hex(&[0xab; MAX_KEY_SIZE + 1]).as_bytes()), None);
         assert_eq!(hex(&[1, 0xa4]).as_str(), "01a4\n");
+        let parsed = from_file(b" 01:A4 0f\r\n").unwrap();
+        assert_eq!(*parsed, [1, 0xa4, 0x0f]);
+        assert_eq!(parsed.capacity(), 3);
         assert_eq!(read(hex(&[0xab; 32]).as_bytes()), Some(vec![0xab; 32]));
     }
 }

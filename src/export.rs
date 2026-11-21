@@ -189,12 +189,12 @@ pub fn save<T: AsRef<[u8]>>(path: &Path, items: &[T], pem_label: &str) -> Result
             }
             _ => format!("Cannot create '{}': {error}", path.display()),
         })?;
-    file.write_all(&data)
-        .and_then(|()| file.sync_all())
-        .map_err(|error| {
-            drop(fs::remove_file(path));
-            format!("Cannot write '{}': {error}", path.display())
-        })
+    let result = file.write_all(&data).and_then(|()| file.sync_all());
+    drop(file);
+    result.map_err(|error| {
+        let _ = fs::remove_file(path);
+        format!("Cannot write '{}': {error}", path.display())
+    })
 }
 
 #[cfg(test)]

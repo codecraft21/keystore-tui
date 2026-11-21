@@ -367,14 +367,18 @@ impl Writable {
         let failed = |_| "the PKCS12 keystore could not be encrypted";
         let mut safes = Vec::new();
         for (safe, &encrypted) in self.safes.iter().enumerate() {
-            let bags: Vec<u8> = self
+            let total_len: usize = self
                 .bags
                 .iter()
                 .filter(|bag| bag.safe == safe)
-                .flat_map(|bag| bag.raw.iter().copied())
-                .collect();
-            if bags.is_empty() {
+                .map(|bag| bag.raw.len())
+                .sum();
+            if total_len == 0 {
                 continue;
+            }
+            let mut bags = Zeroizing::new(Vec::with_capacity(total_len));
+            for bag in self.bags.iter().filter(|bag| bag.safe == safe) {
+                bags.extend_from_slice(&bag.raw);
             }
             let contents = Zeroizing::new(der::sequence(&bags));
             let info = if encrypted {
@@ -411,9 +415,10 @@ impl Writable {
         let mac = if self.mac {
             let mut salt = vec![0; SALT_SIZE];
             rng.fill_bytes(&mut salt);
+            let password = Zeroizing::new(pkcs12_password(&self.password));
             let key = pkcs12kdf::derive(
                 Hash::Sha256.factory(),
-                &pkcs12_password(&self.password),
+                &password,
                 &salt,
                 3,
                 u64::from(PBE_ITERATIONS),

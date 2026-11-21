@@ -5,6 +5,21 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- Fix keystore conversion between PKCS12 and JKS/JCEKS failing when a
+  certificate entry's issuer is also present in the store, by comparing only the
+  entry's own certificate for certificate-only entries while still verifying
+  full certificate chains on private-key entries.
+- Create new, "save as", and converted keystore files with owner-only (`0600`)
+  permissions on Unix, use a random suffix with collision retries for atomic
+  save temporary files, and fix temporary/failed file cleanup on Windows and
+  failed renames.
+- Close additional secret-zeroization gaps in key import, PKCS12 writing, and
+  JKS/JCEKS protection: reserve an extra byte for EOF probing and wipe buffers
+  on error in bounded file reads, decode hex secret-key files without an
+  unwiped intermediate buffer, wipe PKCS12 MAC password and safe-bag buffers,
+  pre-allocate exact UTF-16 capacity for JKS passwords, and enable `sha1`'s
+  `zeroize` feature so SHA-1 state and block buffers are wiped on drop.
+
 - While a key pair is generated, a box now waits for it, showing the
   algorithm, an activity indicator, and the elapsed time. `Esc` cancels and
   adds nothing, `Ctrl+C` quits, and other keys are ignored. This replaces the

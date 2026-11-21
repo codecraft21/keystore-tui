@@ -114,28 +114,34 @@ fn object_id(arcs: &[u64]) -> ObjectIdentifier {
 
 /// The password as Java hashes it: its UTF-16 units, big-endian.
 fn jks_password(password: &str) -> Zeroizing<Vec<u8>> {
-    Zeroizing::new(password.encode_utf16().flat_map(u16::to_be_bytes).collect())
+    let mut encoded = Zeroizing::new(Vec::with_capacity(password.encode_utf16().count() * 2));
+    for unit in password.encode_utf16() {
+        let mut bytes = unit.to_be_bytes();
+        encoded.extend_from_slice(&bytes);
+        bytes.zeroize();
+    }
+    encoded
 }
 
 /// XORs `data` with the keystream: SHA-1 of the password and the salt, then
 /// of the password and each previous block.
 fn jks_keystream(password: &[u8], salt: &[u8], data: &mut [u8]) {
-    let mut block: [u8; SHA1_SIZE] = Sha1::new()
-        .chain_update(password)
-        .chain_update(salt)
-        .finalize()
-        .into();
+    let mut block = Zeroizing::new(<[u8; SHA1_SIZE]>::from(
+        Sha1::new()
+            .chain_update(password)
+            .chain_update(salt)
+            .finalize(),
+    ));
     for chunk in data.chunks_mut(SHA1_SIZE) {
-        for (byte, mask) in chunk.iter_mut().zip(block) {
+        for (byte, &mask) in chunk.iter_mut().zip(block.iter()) {
             *byte ^= mask;
         }
-        block = Sha1::new()
+        *block = Sha1::new()
             .chain_update(password)
-            .chain_update(block)
+            .chain_update(block.as_slice())
             .finalize()
             .into();
     }
-    block.zeroize();
 }
 
 fn jks_digest(password: &[u8], key: &[u8]) -> [u8; SHA1_SIZE] {
@@ -401,5 +407,25 @@ mod tests {
         ] {
             assert_eq!(recover(&protected, "changeit"), Err(Error::Unsupported));
         }
+    }
+
+    #[test]
+    fn jks_password_preallocates_exact_utf16_capacity() {
+        for (password, expected) in [
+            ("", vec![]),
+            ("ab", vec![0x00, b'a', 0x00, b'b']),
+            ("pä", vec![0x00, b'p', 0x00, 0xe4]),
+            ("🔑", vec![0xd8, 0x3d, 0xdd, 0x11]),
+        ] {
+            let encoded = jks_password(password);
+            assert_eq!(*encoded, expected);
+            assert_eq!(encoded.capacity(), expected.len());
+        }
+    }
+
+    #[test]
+    fn sha1_zeroizes_state_on_drop() {
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<Sha1>();
     }
 }
