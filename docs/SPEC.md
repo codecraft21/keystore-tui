@@ -218,9 +218,10 @@ any existing incomplete-entry warnings.
   sequence. Any other decryption failure, or decrypted contents that do not
   parse (a wrong key can pass the CBC padding check, and RC4 has no padding),
   prompts for a password or allows a retry. An encrypted safe that is
-  malformed, uses an unsupported algorithm, or exceeds the iteration or salt
-  limits is not a password error; it is skipped and the list is marked
-  incomplete. The RC4 schemes are identified by their RFC 7292 OIDs
+  malformed, uses an unsupported algorithm, or exceeds the per-safe or
+  cumulative iteration or salt limits is not a password error; it is skipped and
+  the list is marked incomplete. Both DER primitive and BER constructed `[0]`
+  encrypted safe content (definite or indefinite length) are accepted. The RC4 schemes are identified by their RFC 7292 OIDs
   (`1.2.840.113549.1.12.1.1` is 128-bit, `.2` is 40-bit), as OpenSSL
   writes them. A present MAC must verify; PBMAC1 (RFC 9579) is not supported.
 - Unicode aliases are supported.
@@ -228,12 +229,14 @@ any existing incomplete-entry warnings.
   listed under the subject name (common name, else the full subject) of the
   certificate sharing its local key ID, else as `Private key N`.
 - Certificates marked with Java's trusted-key-usage attribute are `Trusted
-  certificate` entries, named by their friendly name. Every such certificate
+  certificate` entries, named by their friendly name, and are never paired with
+  a private key even if they carry a matching local key ID. Every such certificate
   is listed, even if another certificate or key has the same name or a name
   differing only in case. Identical copies, with the same name and the same
-  certificate, are listed once. A certificate without it
+  certificate, are listed once. An unnamed certificate without it
   is listed as a `Certificate` entry unless it is part of a private key's
-  chain. Such an entry is named by its friendly name, else its subject name,
+  chain; a standalone named certificate stays listed even if it also appears in
+  a private key's chain. Such an entry is named by its friendly name, else its subject name,
   else `Certificate N`.
 - A verified store may still contain entries that cannot be read. In that case
   the readable entries are listed, along with a persistent warning that the list
@@ -362,9 +365,9 @@ any existing incomplete-entry warnings.
 - While the list differs from the file, `[modified]` is shown in yellow after
   the app name. Entries sharing an alias are deleted one at a time.
 - In PKCS12, deleting a private key also removes its certificate and the
-  chain certificates that no other entry uses, which would otherwise be
-  listed as entries of their own. Certificates another key's chain needs, and
-  trusted certificates, stay.
+  unnamed chain certificates that no other entry uses, which would otherwise be
+  listed as entries of their own. Certificates another key's chain needs,
+  standalone named certificates, and trusted certificates stay.
 - For a certificate file, `d`, `Delete`, `r`, `i`, `g`, `c`, `R`, `C`, `p`, `w`, and `W` show a
   red message that only keystores can be changed. A PKCS12 keystore whose
   entry list is incomplete (see [PKCS12
@@ -1027,11 +1030,16 @@ any existing incomplete-entry warnings.
   again, and one that was not stays unencrypted; a safe left without bags is
   dropped.
 - Encrypted safes are written with PBES2: AES-256-CBC with a key from PBKDF2
-  with HMAC-SHA256, 10,000 iterations, and a new random 20-byte salt and IV on
+  with HMAC-SHA256, at least 10,000 iterations (preserving any higher count the
+  safe already used), and a new random 20-byte salt and IV on
   every save. This replaces older encryption, such as RC2 or Triple DES.
-- A keystore that had an integrity MAC gets a new one: HMAC-SHA256 with 10,000
-  iterations and a new random 20-byte salt. A keystore without a MAC stays
+- A keystore that had an integrity MAC gets a new one: HMAC-SHA256 with at least
+  10,000 iterations (preserving any higher count the MAC already used) and a new
+  random 20-byte salt. A keystore without a MAC stays
   without one, so a passwordless Java truststore stays passwordless.
+- Re-encrypted keys on password change preserve any higher iteration count they
+  already used (with a minimum of 10,000), and newly added keys match the
+  store's highest MAC or safe iteration count (at least 10,000).
 - An empty password keeps the encoding it was read with, empty or a NUL
   character.
 - A new keystore has a MAC and encrypts its certificates.

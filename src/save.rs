@@ -43,19 +43,26 @@ pub(crate) struct OsRng {
 }
 
 impl OsRng {
+    /// Fills `out` with random bytes from the operating system, recording any
+    /// failure so a later [`check`](Self::check) also reports it.
+    pub(crate) fn try_fill_bytes(&mut self, out: &mut [u8]) -> Result<(), String> {
+        if self.failed || getrandom::fill(out).is_err() {
+            self.failed = true;
+            return Err(NO_RANDOMNESS.into());
+        }
+        Ok(())
+    }
+
     /// Fails if any request for random numbers was not met.
     pub(crate) fn check(mut self) -> Result<(), String> {
         // Also catches a source that fails before it is first used.
-        self.fill_bytes(&mut [0]);
-        (!self.failed)
-            .then_some(())
-            .ok_or_else(|| NO_RANDOMNESS.into())
+        self.try_fill_bytes(&mut [0])
     }
 }
 
 impl Rng for OsRng {
     fn fill_bytes(&mut self, out: &mut [u8]) {
-        self.failed |= getrandom::fill(out).is_err();
+        let _ = self.try_fill_bytes(out);
     }
 }
 
@@ -69,15 +76,22 @@ impl Document {
 
     /// Saves under `password` from now on; the old one is wiped.
     pub fn set_password(&mut self, new: &str) -> Result<(), String> {
+        if matches!(self, Self::Pkcs12(_)) {
+            // Re-encrypting keys needs salts; check for them first, so
+            // that a failure leaves the keystore as it was.
+            OsRng::default().check()?;
+        }
+        self.set_password_with_rng(new, OsRng::default())
+    }
+
+    fn set_password_with_rng(&mut self, new: &str, mut rng: OsRng) -> Result<(), String> {
         match self {
             Self::Jks { password, .. } => *password = Zeroizing::new(new.to_owned()),
             Self::Pkcs12(writable) => {
-                // Re-encrypting keys needs salts; check for them first, so
-                // that a failure leaves the keystore as it was.
-                OsRng::default().check()?;
-                let mut rng = OsRng::default();
-                writable.set_password(new, &mut rng)?;
+                let mut changed = writable.clone();
+                changed.set_password(new, &mut rng)?;
                 rng.check()?;
+                *writable = changed;
             }
         }
         Ok(())
@@ -275,9 +289,19 @@ impl Document {
         key: &[u8],
         chain: &[Vec<u8>],
     ) -> Result<usize, String> {
-        let failed = |error: String| format!("Not imported: {error}.");
         OsRng::default().check()?;
-        let mut rng = OsRng::default();
+        self.import_key_pair_with_rng(entries, alias, key, chain, OsRng::default())
+    }
+
+    fn import_key_pair_with_rng(
+        &mut self,
+        entries: &mut Vec<KeystoreEntry>,
+        alias: String,
+        key: &[u8],
+        chain: &[Vec<u8>],
+        mut rng: OsRng,
+    ) -> Result<usize, String> {
+        let failed = |error: String| format!("Not imported: {error}.");
         match self {
             Self::Jks { writable, password } => {
                 let protected =
@@ -321,10 +345,12 @@ impl Document {
                         held.alias
                     )));
                 }
-                let listed = writable
+                let mut changed = writable.clone();
+                let listed = changed
                     .insert_private_key(&alias, key, chain, &mut rng)
                     .map_err(|error| failed(error.to_owned()))?;
                 rng.check()?;
+                *writable = changed;
                 *entries = listed;
                 Ok(listed_at(entries, &alias))
             }
@@ -339,12 +365,21 @@ impl Document {
         alias: String,
         key: &SecretKey,
     ) -> Result<usize, String> {
+        OsRng::default().check()?;
+        self.import_secret_key_with_rng(entries, alias, key, OsRng::default())
+    }
+
+    fn import_secret_key_with_rng(
+        &mut self,
+        entries: &mut Vec<KeystoreEntry>,
+        alias: String,
+        key: &SecretKey,
+        mut rng: OsRng,
+    ) -> Result<usize, String> {
         let failed = |error: String| format!("Not added: {error}.");
         let created = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_millis() as u64);
-        OsRng::default().check()?;
-        let mut rng = OsRng::default();
         match self {
             Self::Jks { writable, password } => {
                 if !writable.is_jceks() {
@@ -377,10 +412,12 @@ impl Document {
                         key.algorithm
                     ))
                 })?;
-                let listed = writable
+                let mut changed = writable.clone();
+                let listed = changed
                     .insert_secret_key(&alias, &wrapped, created, &mut rng)
                     .map_err(|error| failed(error.to_owned()))?;
                 rng.check()?;
+                *writable = changed;
                 *entries = listed;
                 Ok(listed_at(entries, &alias))
             }
@@ -1375,5 +1412,80 @@ mod tests {
         let jks_back = p12_doc.convert(&verified.entries, Format::Jks).unwrap();
         let (back_entries, _) = open(&jks_back, "changeit");
         assert_eq!(back_entries[0].certificates(), &[leaf, root]);
+    }
+
+    #[test]
+    fn os_rng_short_circuits_after_failure() {
+        let mut rng = OsRng { failed: true };
+        let mut buf = [0xaa; 8];
+        assert_eq!(rng.try_fill_bytes(&mut buf), Err(NO_RANDOMNESS.into()));
+        assert_eq!(buf, [0xaa; 8]);
+        assert_eq!(rng.check(), Err(NO_RANDOMNESS.into()));
+    }
+
+    #[test]
+    fn pkcs12_mutations_leave_document_unchanged_on_rng_failure() {
+        use crate::test_support::{metadata_certificate, synthetic_pkcs8};
+
+        let cert = metadata_certificate("leaf", "leaf", &[1], &[]);
+        let key = synthetic_pkcs8(b"synthetic key");
+        let secret = SecretKey {
+            algorithm: "AES".into(),
+            key: Zeroizing::new(vec![0x42; 16]),
+        };
+
+        let mut writable = pkcs12::Writable::empty("changeit");
+        let mut entries = writable
+            .insert_private_key(
+                "existing",
+                &key,
+                std::slice::from_ref(&cert),
+                &mut crate::test_support::TestRng(0),
+            )
+            .unwrap();
+        let mut doc = Document::Pkcs12(writable);
+        let original_aliases: Vec<String> = entries.iter().map(|e| e.alias.clone()).collect();
+
+        // Failing RNG on set_password must not change the stored password or keys.
+        let error = doc
+            .set_password_with_rng("newpass", OsRng { failed: true })
+            .unwrap_err();
+        assert_eq!(error, NO_RANDOMNESS);
+        assert_eq!(doc.password(), "changeit");
+        assert_eq!(*doc.private_key(0).unwrap(), key);
+
+        // Failing RNG on import_key_pair must not mutate writable or entries.
+        let other_cert = metadata_certificate("other", "other", &[2], &[]);
+        let error = doc
+            .import_key_pair_with_rng(
+                &mut entries,
+                "other".into(),
+                &key,
+                std::slice::from_ref(&other_cert),
+                OsRng { failed: true },
+            )
+            .unwrap_err();
+        assert_eq!(error, NO_RANDOMNESS);
+        assert_eq!(
+            entries.iter().map(|e| e.alias.as_str()).collect::<Vec<_>>(),
+            original_aliases
+        );
+        assert!(doc.encode(&entries).is_ok());
+
+        // Failing RNG on import_secret_key must not mutate writable or entries.
+        let error = doc
+            .import_secret_key_with_rng(
+                &mut entries,
+                "secret".into(),
+                &secret,
+                OsRng { failed: true },
+            )
+            .unwrap_err();
+        assert_eq!(error, NO_RANDOMNESS);
+        assert_eq!(
+            entries.iter().map(|e| e.alias.as_str()).collect::<Vec<_>>(),
+            original_aliases
+        );
+        assert!(doc.encode(&entries).is_ok());
     }
 }

@@ -13,10 +13,11 @@ pub(super) const ANY_EXTENDED_KEY_USAGE: &[u64] = &[2, 5, 29, 37, 0];
 #[derive(Clone)]
 pub struct Writable {
     pub(super) bags: Vec<MetadataBag>,
-    /// Whether each safe, by a bag's `safe` index, is written encrypted.
-    pub(super) safes: Vec<bool>,
-    /// Whether the store gets an integrity MAC.
-    pub(super) mac: bool,
+    /// For each safe, by a bag's `safe` index, `Some(iterations)` if written
+    /// encrypted, or `None` if unencrypted.
+    pub(super) safes: Vec<Option<u32>>,
+    /// The MAC iteration count when the store gets an integrity MAC.
+    pub(super) mac_iterations: Option<u32>,
     /// The password as the store encodes it, which for an empty password
     /// may be a NUL character.
     pub(super) password: Zeroizing<Vec<u8>>,
@@ -30,8 +31,8 @@ impl Writable {
         Self {
             bags: Vec::new(),
             // Certificates are encrypted; keys carry their own encryption.
-            safes: vec![true, false],
-            mac: true,
+            safes: vec![Some(PBE_ITERATIONS), None],
+            mac_iterations: Some(PBE_ITERATIONS),
             password: Zeroizing::new(password.as_bytes().to_vec()),
             sources: Vec::new(),
         }
@@ -121,8 +122,11 @@ impl Writable {
                 &der::oid(&object_id(ANY_EXTENDED_KEY_USAGE)),
             ),
         ];
-        self.push_certificate(certificate, attributes)?;
-        Ok(self.relist())
+        let mut changed = self.clone();
+        changed.push_certificate(certificate, attributes)?;
+        let listed = changed.relist();
+        *self = changed;
+        Ok(listed)
     }
 
     /// Adds a certificate bag with these attributes to the safe that
@@ -139,11 +143,11 @@ impl Writable {
             ]
             .concat(),
         );
-        let safe = match self.safes.iter().position(|&encrypted| encrypted) {
+        let safe = match self.safes.iter().position(Option::is_some) {
             Some(safe) => safe,
             None if !self.safes.is_empty() => 0,
             None => {
-                self.safes.push(self.mac);
+                self.safes.push(self.mac_iterations);
                 0
             }
         };
@@ -173,6 +177,16 @@ impl Writable {
         Ok(())
     }
 
+    fn key_iterations(&self) -> u32 {
+        self.safes
+            .iter()
+            .flatten()
+            .copied()
+            .chain(self.mac_iterations)
+            .fold(PBE_ITERATIONS, u32::max)
+            .min(MAX_ITERATIONS)
+    }
+
     fn encrypt_new_key(&self, key: &[u8], rng: &mut impl Rng) -> Result<Vec<u8>, WriteError> {
         // Java can encode an empty store password as a NUL character.
         if self.password().trim_end_matches('\0').is_empty() {
@@ -180,7 +194,7 @@ impl Writable {
                 "a key needs a keystore password that is not empty; change the password first (p)",
             );
         }
-        encrypt_key(key, &self.password, rng)
+        encrypt_key_with_iterations(key, &self.password, self.key_iterations(), rng)
     }
 
     /// Adds a private key, given as its PKCS #8 encoding, with its
@@ -196,35 +210,38 @@ impl Writable {
         rng: &mut impl Rng,
     ) -> Result<Vec<KeystoreEntry>, WriteError> {
         let encrypted = self.encrypt_new_key(key, rng)?;
+        let mut changed = self.clone();
         let mut attributes = vec![friendly_name_attribute(alias)];
         if let Some((leaf, issuers)) = chain.split_first() {
             let id: [u8; 20] = Sha1::digest(leaf).into();
             let key_id = attribute(oid::OID_PKCS9_LOCAL_KEY_ID, &der::octet_string(&id));
             attributes.push(key_id.clone());
-            self.push_certificate(leaf, vec![friendly_name_attribute(alias), key_id])?;
+            changed.push_certificate(leaf, vec![friendly_name_attribute(alias), key_id])?;
             for issuer in issuers {
-                let held = self.bags.iter().any(|bag| {
+                let held = changed.bags.iter().any(|bag| {
                     bag.certificate_der.as_deref() == Some(issuer) && bag.attributes.is_empty()
                 });
                 if !held {
-                    self.push_certificate(issuer, vec![])?;
+                    changed.push_certificate(issuer, vec![])?;
                 }
             }
         }
-        let safe = match self.safes.iter().position(|&encrypted| !encrypted) {
+        let safe = match changed.safes.iter().position(Option::is_none) {
             Some(safe) => safe,
             None => {
-                self.safes.push(false);
-                self.safes.len() - 1
+                changed.safes.push(None);
+                changed.safes.len() - 1
             }
         };
-        self.push_bag(
+        changed.push_bag(
             oid::OID_PKCS12_SHROUDED_KEY_BAG,
             &encrypted,
             attributes,
             safe,
         )?;
-        Ok(self.relist())
+        let listed = changed.relist();
+        *self = changed;
+        Ok(listed)
     }
 
     /// Replaces the certificate chain, leaf first, of the private key
@@ -240,8 +257,10 @@ impl Writable {
     ) -> Result<Vec<KeystoreEntry>, WriteError> {
         const NOT_REBUILT: WriteError = "the entry could not be rebuilt";
         let (leaf, issuers) = chain.split_first().ok_or("the chain is empty")?;
-        let key = self.sources[index]
-            .first()
+        let key = self
+            .sources
+            .get(index)
+            .and_then(|sources| sources.first())
             .map(|&bag| &self.bags[bag])
             .filter(|bag| matches!(bag.bag, Bag::ShroudedKey(_)))
             .ok_or("not a private key entry")?;
@@ -252,18 +271,21 @@ impl Writable {
             .map_err(|_| NOT_REBUILT)?;
         let mut rebuilt = parse_metadata_bag(&raw).ok().flatten().ok_or(NOT_REBUILT)?;
         rebuilt.safe = key.safe;
-        self.remove(index);
-        self.push_certificate(leaf, vec![friendly_name_attribute(alias), key_id])?;
+        let mut changed = self.clone();
+        changed.remove(index);
+        changed.push_certificate(leaf, vec![friendly_name_attribute(alias), key_id])?;
         for issuer in issuers {
-            let held = self.bags.iter().any(|bag| {
+            let held = changed.bags.iter().any(|bag| {
                 bag.certificate_der.as_deref() == Some(issuer) && bag.attributes.is_empty()
             });
             if !held {
-                self.push_certificate(issuer, vec![])?;
+                changed.push_certificate(issuer, vec![])?;
             }
         }
-        self.bags.push(rebuilt);
-        Ok(self.relist())
+        changed.bags.push(rebuilt);
+        let listed = changed.relist();
+        *self = changed;
+        Ok(listed)
     }
 
     /// The PKCS #8 encoding of the private key listed at `index`, decrypted
@@ -308,20 +330,23 @@ impl Writable {
                 &der::octet_string(id.as_bytes()),
             ),
         ];
-        let safe = match self.safes.iter().position(|&encrypted| !encrypted) {
+        let mut changed = self.clone();
+        let safe = match changed.safes.iter().position(Option::is_none) {
             Some(safe) => safe,
             None => {
-                self.safes.push(false);
-                self.safes.len() - 1
+                changed.safes.push(None);
+                changed.safes.len() - 1
             }
         };
-        self.push_bag(
+        changed.push_bag(
             oid::OID_PKCS12_SECRET_BAG,
             &secret_value(&encrypted),
             attributes,
             safe,
         )?;
-        Ok(self.relist())
+        let listed = changed.relist();
+        *self = changed;
+        Ok(listed)
     }
 
     /// Protects the store with `password` from now on. Java expects keys to
@@ -335,7 +360,10 @@ impl Writable {
         }
         let is_key =
             |bag: &MetadataBag| matches!(bag.bag, Bag::ShroudedKey(_) | Bag::Secret { .. });
-        if !self.mac && !self.safes.contains(&true) && !self.bags.iter().any(is_key) {
+        if self.mac_iterations.is_none()
+            && !self.safes.iter().any(Option::is_some)
+            && !self.bags.iter().any(is_key)
+        {
             return Err("This PKCS12 keystore is not protected by a password.");
         }
         let mut rebuilt = Vec::new();
@@ -366,7 +394,7 @@ impl Writable {
     pub fn encode(&self, rng: &mut impl Rng) -> Result<Vec<u8>, WriteError> {
         let failed = |_| "the PKCS12 keystore could not be encrypted";
         let mut safes = Vec::new();
-        for (safe, &encrypted) in self.safes.iter().enumerate() {
+        for (safe, &iterations) in self.safes.iter().enumerate() {
             let total_len: usize = self
                 .bags
                 .iter()
@@ -381,14 +409,14 @@ impl Writable {
                 bags.extend_from_slice(&bag.raw);
             }
             let contents = Zeroizing::new(der::sequence(&bags));
-            let info = if encrypted {
+            let info = if let Some(iterations) = iterations {
                 let mut salt = vec![0; SALT_SIZE];
                 rng.fill_bytes(&mut salt);
                 let mut iv = vec![0; 16];
                 rng.fill_bytes(&mut iv);
                 let pbe = Pbes2 {
                     salt,
-                    iterations: PBE_ITERATIONS,
+                    iterations,
                     key_length: None,
                     prf: Hash::Sha256,
                     cipher: Pbes2Cipher::Aes256Cbc { iv },
@@ -412,7 +440,7 @@ impl Writable {
             safes.extend(info.encode());
         }
         let authenticated_safe = der::sequence(&safes);
-        let mac = if self.mac {
+        let mac = if let Some(iterations) = self.mac_iterations {
             let mut salt = vec![0; SALT_SIZE];
             rng.fill_bytes(&mut salt);
             let password = Zeroizing::new(pkcs12_password(&self.password));
@@ -421,7 +449,7 @@ impl Writable {
                 &password,
                 &salt,
                 3,
-                u64::from(PBE_ITERATIONS),
+                u64::from(iterations),
                 32,
             )
             .map(Zeroizing::new)
@@ -432,7 +460,7 @@ impl Writable {
                 digest_algorithm: AlgorithmIdentifier::with_null(object_id(Hash::Sha256.oid())),
                 digest: hmac.sum(),
                 salt,
-                iterations: PBE_ITERATIONS,
+                iterations,
             })
         } else {
             None

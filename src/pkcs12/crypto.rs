@@ -8,7 +8,11 @@ pub(super) enum SafeError {
     Decryption,
 }
 
-pub(super) fn decrypt_safe(content: &[u8], password: &[u8]) -> Result<Vec<u8>, SafeError> {
+pub(super) fn decrypt_safe(
+    content: &[u8],
+    password: &[u8],
+    remaining_iterations: &mut u64,
+) -> Result<(Vec<u8>, u32), SafeError> {
     let unreadable = |_| SafeError::Unreadable;
     let mut reader = Reader::new(content);
     let mut sequence = reader.read_sequence().map_err(unreadable)?;
@@ -16,8 +20,34 @@ pub(super) fn decrypt_safe(content: &[u8], password: &[u8]) -> Result<Vec<u8>, S
     let mut info = sequence.read_sequence().map_err(unreadable)?;
     let _content_type = info.read_oid().map_err(unreadable)?;
     let algorithm = AlgorithmIdentifier::parse(&mut info).map_err(unreadable)?;
-    let ciphertext = info.read_implicit(0, false).map_err(unreadable)?;
-    pbe_decrypt(&algorithm, ciphertext, password)
+    let ciphertext = read_encrypted_content(&mut info)?;
+    pbe_decrypt_with_budget(
+        &algorithm,
+        &ciphertext,
+        password,
+        Some(remaining_iterations),
+    )
+}
+
+/// Reads `[0] IMPLICIT OCTET STRING` in either DER primitive form (`0x80`) or
+/// BER constructed form (`0xA0`, definite or indefinite length, concatenating
+/// its OCTET STRING segments).
+fn read_encrypted_content(info: &mut Reader<'_>) -> Result<Vec<u8>, SafeError> {
+    let unreadable = |_| SafeError::Unreadable;
+    let (tag, content) = info.read_tlv().map_err(unreadable)?;
+    if tag.class != der::Class::ContextSpecific || tag.number != 0 {
+        return Err(SafeError::Unreadable);
+    }
+    if !tag.constructed {
+        return Ok(content.to_vec());
+    }
+    let mut segments = Reader::new(content);
+    let mut out = Vec::new();
+    while !segments.is_empty() {
+        let chunk = segments.read_octet_string_owned().map_err(unreadable)?;
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
 }
 
 /// The PKCS #8 private key `key` as an encoded `EncryptedPrivateKeyInfo`
@@ -27,8 +57,19 @@ pub(crate) fn encrypt_key(
     password: &[u8],
     rng: &mut impl Rng,
 ) -> Result<Vec<u8>, WriteError> {
+    encrypt_key_with_iterations(key, password, PBE_ITERATIONS, rng)
+}
+
+/// The PKCS #8 private key `key` as an encoded `EncryptedPrivateKeyInfo`
+/// under `password` using `iterations` PBKDF2 rounds.
+pub(super) fn encrypt_key_with_iterations(
+    key: &[u8],
+    password: &[u8],
+    iterations: u32,
+    rng: &mut impl Rng,
+) -> Result<Vec<u8>, WriteError> {
     let cipher = Pbes2Cipher::Aes256Cbc { iv: Vec::new() };
-    encrypt_private_key(key, password, cipher, PBE_ITERATIONS, rng)
+    encrypt_private_key(key, password, cipher, iterations, rng)
         .map(|encrypted| encrypted.encode())
         .map_err(|_| "the key could not be encrypted")
 }
@@ -45,30 +86,48 @@ pub(super) fn decrypt_info(
 ) -> Option<Zeroizing<Vec<u8>>> {
     pbe_decrypt(&info.algorithm, &info.encrypted_data, password)
         .ok()
-        .map(Zeroizing::new)
+        .map(|(key, _)| Zeroizing::new(key))
         .filter(|key| is_private_key_info(key))
 }
 
-/// Decrypts `ciphertext` as its password-based encryption `algorithm` says.
+/// Decrypts `ciphertext` as its password-based encryption `algorithm` says,
+/// returning the plaintext and the KDF iteration count used.
 pub(super) fn pbe_decrypt(
     algorithm: &AlgorithmIdentifier,
     ciphertext: &[u8],
     password: &[u8],
-) -> Result<Vec<u8>, SafeError> {
+) -> Result<(Vec<u8>, u32), SafeError> {
+    pbe_decrypt_with_budget(algorithm, ciphertext, password, None)
+}
+
+/// Decrypts `ciphertext` as its password-based encryption `algorithm` says,
+/// deducting its iteration count from `budget` before running the KDF.
+fn pbe_decrypt_with_budget(
+    algorithm: &AlgorithmIdentifier,
+    ciphertext: &[u8],
+    password: &[u8],
+    mut budget: Option<&mut u64>,
+) -> Result<(Vec<u8>, u32), SafeError> {
     let unreadable = |_| SafeError::Unreadable;
-    let check = |iterations, salt: &[u8], block_size| {
+    let mut check = |iterations: u32, salt: &[u8], block_size: usize| {
         if iterations == 0
             || iterations > MAX_ITERATIONS
             || salt.len() > MAX_SALT_SIZE
             || ciphertext.is_empty()
             || !ciphertext.len().is_multiple_of(block_size)
         {
-            Err(SafeError::Unreadable)
-        } else {
-            Ok(())
+            return Err(SafeError::Unreadable);
         }
+        if let Some(remaining) = budget.as_deref_mut() {
+            let cost = u64::from(iterations);
+            if cost > *remaining {
+                return Err(SafeError::Unreadable);
+            }
+            *remaining -= cost;
+        }
+        Ok(())
     };
-    let decrypted = if algorithm.oid.matches(oid::OID_PBES2) {
+    let (decrypted, iterations) = if algorithm.oid.matches(oid::OID_PBES2) {
         let pbe = Pbes2::parse(algorithm).map_err(unreadable)?;
         let block_size = match pbe.cipher {
             Pbes2Cipher::Aes128Cbc { .. }
@@ -77,7 +136,7 @@ pub(super) fn pbe_decrypt(
             Pbes2Cipher::DesEde3Cbc { .. } => 8,
         };
         check(pbe.iterations, &pbe.salt, block_size)?;
-        pbe.decrypt(ciphertext, password)
+        (pbe.decrypt(ciphertext, password), pbe.iterations)
     } else {
         let mut pbe = LegacyPbe::parse(algorithm).map_err(unreadable)?;
         if algorithm.oid.matches(PBE_SHA1_128BIT_RC4) {
@@ -90,13 +149,15 @@ pub(super) fn pbe_decrypt(
             LegacyPbeKind::DesEde3 | LegacyPbeKind::DesEde2 | LegacyPbeKind::Rc2_40 => 8,
         };
         check(pbe.iterations, &pbe.salt, block_size)?;
-        pbe.decrypt(ciphertext, password)
+        (pbe.decrypt(ciphertext, password), pbe.iterations)
     };
     // An unsupported parameter is not a wrong password; any other failure can be.
-    decrypted.map_err(|error| match error {
-        CryptoError::UnsupportedOperation(_) => SafeError::Unreadable,
-        _ => SafeError::Decryption,
-    })
+    decrypted
+        .map(|plaintext| (plaintext, iterations))
+        .map_err(|error| match error {
+            CryptoError::UnsupportedOperation(_) => SafeError::Unreadable,
+            _ => SafeError::Decryption,
+        })
 }
 
 pub(super) const OTHER_KEY_PASSWORD: WriteError = "A key in this keystore is protected by another password, so the keystore password was not changed.";
@@ -121,8 +182,8 @@ pub(super) fn reencrypt_key(
         }
         _ => return Err(UNSUPPORTED_KEY),
     };
-    let key = pbe_decrypt(&info.algorithm, &info.encrypted_data, old)
-        .map(Zeroizing::new)
+    let (key, old_iterations) = pbe_decrypt(&info.algorithm, &info.encrypted_data, old)
+        .map(|(key, iterations)| (Zeroizing::new(key), iterations))
         .map_err(|error| match error {
             SafeError::Unreadable => UNSUPPORTED_KEY,
             SafeError::Decryption => OTHER_KEY_PASSWORD,
@@ -135,7 +196,7 @@ pub(super) fn reencrypt_key(
         &key,
         new,
         Pbes2Cipher::Aes256Cbc { iv: Vec::new() },
-        PBE_ITERATIONS,
+        old_iterations.max(PBE_ITERATIONS),
         rng,
     )
     .map_err(|_| UNSUPPORTED_KEY)?

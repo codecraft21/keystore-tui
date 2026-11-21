@@ -310,7 +310,9 @@ fn decrypted_keys(data: &[u8], password: &str) -> Vec<Vec<u8>> {
             _ => None,
         })
         .filter_map(|info| {
-            pbe_decrypt(&info.algorithm, &info.encrypted_data, password.as_bytes()).ok()
+            pbe_decrypt(&info.algorithm, &info.encrypted_data, password.as_bytes())
+                .ok()
+                .map(|(key, _)| key)
         })
         .collect()
 }
@@ -370,7 +372,7 @@ fn changing_the_password_re_encrypts_keys_without_changing_them() {
             assert!(
                 pbe_decrypt(&info.algorithm, &info.encrypted_data, b"changeit")
                     .ok()
-                    .is_none_or(|key| !is_private_key_info(&key))
+                    .is_none_or(|(key, _)| !is_private_key_info(&key))
             );
         }
     }
@@ -483,12 +485,12 @@ fn inserted_secret_keys_are_stored_as_java_stores_them() {
     let wrapped = synthetic_pkcs8(b"synthetic secret");
     let mut writable = Writable::empty("changeit");
     // A store whose only safe is encrypted gets a plain one for keys.
-    writable.safes = vec![true];
+    writable.safes = vec![Some(PBE_ITERATIONS)];
     let mut rng = TestRng(0);
     let entries = writable
         .insert_secret_key("aes", &wrapped, 1_700_000_000_000, &mut rng)
         .unwrap();
-    assert_eq!(writable.safes, [true, false]);
+    assert_eq!(writable.safes, [Some(PBE_ITERATIONS), None]);
     assert_eq!(entries.len(), 1);
     assert_eq!(
         (entries[0].alias.as_str(), entries[0].kind()),
@@ -537,7 +539,7 @@ fn inserted_private_keys_share_issuers_and_decrypt_again() {
     let key = synthetic_pkcs8(b"synthetic, not a private key");
     let mut writable = Writable::empty("changeit");
     // A store whose only safe is encrypted gets a plain one for keys.
-    writable.safes = vec![true];
+    writable.safes = vec![Some(PBE_ITERATIONS)];
     let mut rng = TestRng(0);
     for leaf in [&first, &second] {
         let chain = [leaf.clone(), ca.clone()];
@@ -548,7 +550,7 @@ fn inserted_private_keys_share_issuers_and_decrypt_again() {
     let entries = writable
         .insert_private_key("bare", &key, &[], &mut rng)
         .unwrap();
-    assert_eq!(writable.safes, [true, false]);
+    assert_eq!(writable.safes, [Some(PBE_ITERATIONS), None]);
     // The second chain reuses the issuer the first one stored.
     let held = |certificate: &Vec<u8>| {
         writable
@@ -565,4 +567,261 @@ fn inserted_private_keys_share_issuers_and_decrypt_again() {
     let entries = writable.insert_trusted_certificate("trusted", &ca).unwrap();
     let trusted = entries.iter().position(|entry| entry.alias == "trusted");
     assert!(writable.private_key(trusted.unwrap()).is_none());
+}
+
+#[test]
+fn removing_or_renaming_key_preserves_standalone_named_and_trusted_certs() {
+    use crate::test_support::metadata_certificate;
+    use crown::x509::attribute::Attribute;
+
+    let leaf = metadata_certificate("leaf", "ca", &[1], &[]);
+    let ca = metadata_certificate("ca", "ca", &[2], &[]);
+    let trusted_attr = Attribute::new(
+        ObjectIdentifier::new(TRUSTED_KEY_USAGE).unwrap(),
+        vec![der::oid(
+            &ObjectIdentifier::new(ANY_EXTENDED_KEY_USAGE).unwrap(),
+        )],
+    );
+    let data = synthetic(vec![
+        shrouded_key(vec![friendly_name("my-key"), local_key_id(&[1])]),
+        raw_certificate(&leaf, vec![friendly_name("my-key"), local_key_id(&[1])]),
+        raw_certificate(
+            &leaf,
+            vec![
+                friendly_name("trusted-leaf"),
+                local_key_id(&[1]),
+                trusted_attr,
+            ],
+        ),
+        raw_certificate(&ca, vec![friendly_name("named-ca")]),
+    ]);
+    let (entries, mut writable) = open(&data, "changeit");
+    let aliases = |entries: &[KeystoreEntry]| -> Vec<String> {
+        entries.iter().map(|e| e.alias.clone()).collect()
+    };
+    assert_eq!(aliases(&entries), ["my-key", "named-ca", "trusted-leaf"]);
+
+    // Renaming my-key must not touch trusted-leaf or named-ca.
+    let entries = writable.rename(0, "renamed-key").unwrap();
+    assert_eq!(
+        aliases(&entries),
+        ["named-ca", "renamed-key", "trusted-leaf"]
+    );
+
+    // Deleting renamed-key must NOT delete named-ca or trusted-leaf.
+    let entries = writable.remove(1);
+    assert_eq!(aliases(&entries), ["named-ca", "trusted-leaf"]);
+    let saved = writable.encode(&mut TestRng(0)).unwrap();
+    let verified = parse(&saved).unwrap().verify("changeit").unwrap();
+    assert!(!verified.incomplete);
+    assert_eq!(verified.entries, entries);
+}
+
+#[test]
+fn set_chain_and_insert_private_key_are_atomic_on_error() {
+    use crate::test_support::metadata_certificate;
+
+    let leaf = metadata_certificate("leaf", "leaf", &[1], &[]);
+    let new_leaf = metadata_certificate("new-leaf", "new-leaf", &[2], &[]);
+    let key = synthetic_pkcs8(b"synthetic key");
+
+    let mut writable = Writable::empty("changeit");
+    let entries = writable
+        .insert_private_key("key", &key, std::slice::from_ref(&leaf), &mut TestRng(0))
+        .unwrap();
+    let bags_before = writable.bags.len();
+    let safes_before = writable.safes.clone();
+    let sources_before = writable.sources.clone();
+
+    // Out-of-bounds index and empty chain leave writable untouched.
+    assert!(
+        writable
+            .set_chain(99, "key", std::slice::from_ref(&new_leaf))
+            .is_err()
+    );
+    assert!(writable.set_chain(0, "key", &[]).is_err());
+    assert_eq!(writable.bags.len(), bags_before);
+    assert_eq!(writable.safes, safes_before);
+    assert_eq!(writable.sources, sources_before);
+
+    // Corrupted raw key bag makes set_chain fail without dropping the entry.
+    let key_bag_idx = writable.sources[0][0];
+    let saved_raw = writable.bags[key_bag_idx].raw.clone();
+    writable.bags[key_bag_idx].raw = vec![0x00];
+    assert!(
+        writable
+            .set_chain(0, "key", std::slice::from_ref(&new_leaf))
+            .is_err()
+    );
+    writable.bags[key_bag_idx].raw = saved_raw;
+    assert_eq!(writable.bags.len(), bags_before);
+    assert_eq!(writable.sources, sources_before);
+    let encoded = writable.encode(&mut TestRng(0)).unwrap();
+    assert_eq!(
+        parse(&encoded).unwrap().verify("changeit").unwrap().entries,
+        entries
+    );
+}
+
+#[test]
+fn preserves_higher_kdf_iterations_on_save_password_change_and_key_insert() {
+    use crate::test_support::metadata_certificate;
+
+    let leaf = metadata_certificate("leaf", "leaf", &[1], &[]);
+    let priv_key = synthetic_pkcs8(b"synthetic private key");
+    let sec_key = synthetic_pkcs8(b"synthetic secret key");
+    let extra_key = synthetic_pkcs8(b"extra private key");
+
+    let mac_iters: u32 = 25_000;
+    let safe_iters: u32 = 20_000;
+    let priv_iters: u32 = 15_000;
+    let sec_iters: u32 = 18_000;
+
+    let priv_enc = encrypt_private_key(
+        &priv_key,
+        b"changeit",
+        Pbes2Cipher::Aes256Cbc { iv: Vec::new() },
+        priv_iters,
+        &mut TestRng(1),
+    )
+    .unwrap();
+    let sec_enc = encrypt_private_key(
+        &sec_key,
+        b"changeit",
+        Pbes2Cipher::Aes256Cbc { iv: Vec::new() },
+        sec_iters,
+        &mut TestRng(2),
+    )
+    .unwrap();
+
+    let cert_safe_contents = encode_safe_contents(&[raw_certificate(
+        &leaf,
+        vec![friendly_name("my-key"), local_key_id(&[1])],
+    )]);
+    let safe_pbe = Pbes2 {
+        salt: vec![9; 20],
+        iterations: safe_iters,
+        key_length: None,
+        prf: Hash::Sha256,
+        cipher: Pbes2Cipher::Aes256Cbc { iv: vec![4; 16] },
+    };
+    let cert_ciphertext = safe_pbe.encrypt(&cert_safe_contents, b"changeit").unwrap();
+    let data_oid = ObjectIdentifier::new(oid::OID_PKCS7_DATA).unwrap();
+    let enc_safe = ContentInfo {
+        content_type: ObjectIdentifier::new(oid::OID_PKCS7_ENCRYPTED_DATA).unwrap(),
+        content: der::sequence(
+            &[
+                der::integer(&[0]),
+                der::sequence(
+                    &[
+                        der::oid(&data_oid),
+                        safe_pbe.to_algorithm().encode(),
+                        der::implicit(0, false, &cert_ciphertext),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+        ),
+    };
+    let key_safe_contents = encode_safe_contents(&[
+        SafeBag {
+            bag: Bag::ShroudedKey(priv_enc),
+            attributes: vec![friendly_name("my-key"), local_key_id(&[1])],
+        },
+        SafeBag {
+            bag: Bag::Secret {
+                oid: ObjectIdentifier::new(oid::OID_PKCS12_SHROUDED_KEY_BAG).unwrap(),
+                value: der::explicit(0, &der::octet_string(&sec_enc.encode())),
+            },
+            attributes: vec![friendly_name("my-secret")],
+        },
+    ]);
+    let key_safe = ContentInfo::data(&key_safe_contents);
+    let auth_safe_der = der::sequence(&[enc_safe.encode(), key_safe.encode()].concat());
+    let mac_salt = vec![7u8; 20];
+    let mac_pw = pkcs12_password(b"changeit");
+    let mac_key = pkcs12kdf::derive(
+        Hash::Sha256.factory(),
+        &mac_pw,
+        &mac_salt,
+        3,
+        u64::from(mac_iters),
+        32,
+    )
+    .unwrap();
+    let mut hmac = EvpHash::new_sha256_hmac(&mac_key).unwrap();
+    hmac.write_all(&auth_safe_der).unwrap();
+    let original_bytes = Pfx {
+        version: 3,
+        auth_safe: ContentInfo::data(&auth_safe_der),
+        mac: Some(MacData {
+            digest_algorithm: AlgorithmIdentifier::with_null(object_id(Hash::Sha256.oid())),
+            digest: hmac.sum(),
+            salt: mac_salt,
+            iterations: mac_iters,
+        }),
+    }
+    .encode();
+
+    // Helper to inspect encrypted safe PBES2 iterations in a PFX.
+    let encrypted_safe_iterations = |bytes: &[u8]| -> Vec<u32> {
+        let pfx = Pfx::parse(bytes).unwrap();
+        let auth = pfx.authenticated_safe().unwrap();
+        let mut reader = Reader::new(&auth);
+        let mut seq = reader.read_sequence().unwrap();
+        let mut out = Vec::new();
+        while !seq.is_empty() {
+            let info = ContentInfo::parse_reader(&mut seq).unwrap();
+            if info.content_type.matches(oid::OID_PKCS7_ENCRYPTED_DATA) {
+                let mut r = Reader::new(&info.content);
+                let mut s = r.read_sequence().unwrap();
+                let _ = s.read_integer().unwrap();
+                let mut eci = s.read_sequence().unwrap();
+                let _ = eci.read_oid().unwrap();
+                let alg = AlgorithmIdentifier::parse(&mut eci).unwrap();
+                out.push(Pbes2::parse(&alg).unwrap().iterations);
+            }
+        }
+        out
+    };
+
+    // 1. Open and re-save: MAC and encrypted safe iterations are preserved.
+    let (_, mut writable) = open(&original_bytes, "changeit");
+    let resaved = writable.encode(&mut TestRng(3)).unwrap();
+    assert_eq!(
+        Pfx::parse(&resaved).unwrap().mac.unwrap().iterations,
+        mac_iters
+    );
+    assert_eq!(encrypted_safe_iterations(&resaved), vec![safe_iters]);
+
+    // 2. Change password and insert a new private key: higher counts are preserved
+    //    on MAC, safe, re-encrypted keys, and new key.
+    writable.set_password("newpass", &mut TestRng(4)).unwrap();
+    writable
+        .insert_private_key("extra", &extra_key, &[], &mut TestRng(5))
+        .unwrap();
+    let changed = writable.encode(&mut TestRng(6)).unwrap();
+    let store = parse(&changed).unwrap();
+    assert_eq!(store.0.mac.as_ref().unwrap().iterations, mac_iters);
+    assert_eq!(encrypted_safe_iterations(&changed), vec![safe_iters]);
+
+    let bags = store.read_bags(b"newpass").unwrap().bags;
+    let key_iters = |alias: &str| -> u32 {
+        let bag = bags
+            .iter()
+            .find(|b| b.friendly_name().as_deref() == Some(alias) && b.certificate_der.is_none())
+            .unwrap();
+        match &bag.bag {
+            Bag::ShroudedKey(info) => Pbes2::parse(&info.algorithm).unwrap().iterations,
+            Bag::Secret { oid, value } => {
+                let info = secret_info(oid, value).unwrap();
+                Pbes2::parse(&info.algorithm).unwrap().iterations
+            }
+            _ => panic!("expected key bag"),
+        }
+    };
+    assert_eq!(key_iters("my-key"), priv_iters);
+    assert_eq!(key_iters("my-secret"), sec_iters);
+    assert_eq!(key_iters("extra"), mac_iters);
 }

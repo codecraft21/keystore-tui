@@ -1,22 +1,59 @@
 name: Dependabot auto-merge
 
-# Turns on auto-merge for every Dependabot PR, so GitHub merges it once the
-# required checks pass. The checks, not this workflow, decide whether it lands.
-on: pull_request
+# Turns on auto-merge for minor and patch Dependabot PRs that don't touch
+# release workflows, so GitHub merges them once the required checks pass.
+# Uses pull_request_target without checking out PR code so GITHUB_TOKEN has
+# write permission for Dependabot PRs.
+on: pull_request_target
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   auto-merge:
 
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     # Only for PRs that Dependabot opened and last pushed to.
     if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
 
     steps:
+    - name: Dependabot metadata
+      id: metadata
+      uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      with:
+        github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+    - name: Check changed files
+      id: files
+      if: >-
+        steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+        steps.metadata.outputs.update-type == 'version-update:semver-minor'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        files=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename')
+        if [ -z "$files" ]; then
+          echo "No changed files returned; refusing auto-merge."
+          echo "allow=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        while IFS= read -r file; do
+          case "$file" in
+            .github/workflows/publish-crates.yml | .github/workflows/tag-release.yml | .github/workflows/release.yml)
+              echo "PR touches release workflow '$file'; skipping auto-merge."
+              echo "allow=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+        done <<< "$files"
+        echo "allow=true" >> "$GITHUB_OUTPUT"
+
     - name: Enable auto-merge with a merge commit
+      if: steps.files.outputs.allow == 'true'
       run: gh pr merge --auto --merge "$PR_URL"
       env:
         PR_URL: ${{ github.event.pull_request.html_url }}
