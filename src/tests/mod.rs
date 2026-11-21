@@ -22,7 +22,7 @@ mod creating;
 mod editing_entries;
 mod entry_list_view;
 mod generating;
-mod generation_lock;
+mod generation_wait;
 mod input;
 mod key_pairs;
 mod key_passwords;

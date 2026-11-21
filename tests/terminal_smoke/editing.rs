@@ -355,6 +355,33 @@ fn generate_key_pair_save_and_quit_restores_terminal() {
     app.assert_restored();
 }
 
+/// SPEC: [Generating key pairs](../../docs/SPEC.md#generating-key-pairs),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn cancel_key_pair_generation_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    let original = empty_password_fixture();
+    fs::write(&path, &original).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "g Generate"]);
+    // One step left of EC P-256 is RSA 4096, which takes a while.
+    app.send(b"g\x1b[D\x1b[Bslow.smoke\r");
+    app.expect(&["Alias for the generated key pair: slow.smoke_"]);
+    app.send(b"\r");
+    app.expect(&[
+        "Generating RSA 4096 key pair 'slow.smoke'...",
+        "Esc Cancel | Ctrl+C Quit",
+    ]);
+    // `q` is ignored while waiting; Esc cancels.
+    app.send(b"q\x1b");
+    app.expect(&["Generating RSA 4096 key pair 'slow.smoke' was cancelled."]);
+    // Nothing was added, so quitting does not ask.
+    app.send(b"q");
+    app.assert_restored();
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
 /// SPEC: [Making certificate requests](../../docs/SPEC.md#making-certificate-requests),
 /// [Generating key pairs](../../docs/SPEC.md#generating-key-pairs),
 /// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
