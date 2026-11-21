@@ -134,6 +134,13 @@ pub fn fingerprint(encoding: &[u8], sha1: bool) -> String {
     }
 }
 
+/// Decimal conversion is O(N^2) in byte length; integers wider than this
+/// (well above RFC 5280's 20-byte limit) fall back to hexadecimal.
+const MAX_DECIMAL_BYTES: usize = 64;
+
+/// Maximum certificates followed when assembling a descriptive chain.
+pub(crate) const MAX_CHAIN_DEPTH: usize = 32;
+
 /// INTEGER content is signed two's complement and is not limited to machine integers.
 /// A positive serial number's magnitude in hex, such as `0x01A4`.
 pub fn serial_hex(magnitude: &[u8]) -> String {
@@ -142,22 +149,27 @@ pub fn serial_hex(magnitude: &[u8]) -> String {
 
 pub(super) fn serial_text(bytes: &[u8], hex: bool) -> String {
     let negative = bytes.first().is_some_and(|byte| byte & 0x80 != 0);
-    let mut magnitude = bytes.to_vec();
-    if negative {
+    let owned;
+    let raw = if negative {
+        let mut magnitude = bytes.to_vec();
         let mut carry = 1u16;
         for byte in magnitude.iter_mut().rev() {
             let value = u16::from(!*byte) + carry;
             *byte = value as u8;
             carry = value >> 8;
         }
-    }
-    let first = magnitude
+        owned = magnitude;
+        owned.as_slice()
+    } else {
+        bytes
+    };
+    let first = raw
         .iter()
         .position(|&byte| byte != 0)
-        .unwrap_or(magnitude.len().saturating_sub(1));
-    let magnitude = &magnitude[first..];
+        .unwrap_or(raw.len().saturating_sub(1));
+    let magnitude = &raw[first..];
     let sign = if negative { "-" } else { "" };
-    if hex {
+    if hex || magnitude.len() > MAX_DECIMAL_BYTES {
         return format!(
             "{sign}0x{}",
             magnitude
@@ -299,6 +311,9 @@ impl<'a> ParsedPool<'a> {
             };
             if chain.iter().any(|der| der.as_slice() == *issuer) {
                 return (chain, Some("Certificate chain contains a cycle."));
+            }
+            if chain.len() >= MAX_CHAIN_DEPTH {
+                return (chain, Some("Certificate chain exceeds the maximum depth."));
             }
             chain.push(issuer.to_vec());
             current = Some(metadata);
@@ -526,6 +541,60 @@ mod tests {
         let wrong_serial = metadata_certificate("issuer", "issuer", &[3], &[ski(7)]);
         let (certificates, warning) = chain(&leaf, &[&wrong_id, &wrong_serial, &issuer]);
         assert_eq!(certificates, [leaf, issuer]);
+        assert_eq!(warning, None);
+    }
+
+    #[test]
+    fn oversized_serials_fall_back_to_hex_without_quadratic_work() {
+        let at_limit = vec![0x01; MAX_DECIMAL_BYTES];
+        let info = Details::parse(&metadata_certificate("leaf", "issuer", &at_limit, &[])).unwrap();
+        assert!(info.serial_decimal.chars().all(|ch| ch.is_ascii_digit()));
+
+        let mut over_limit = vec![0x01];
+        over_limit.resize(MAX_DECIMAL_BYTES + 1, 0xab);
+        let info =
+            Details::parse(&metadata_certificate("leaf", "issuer", &over_limit, &[])).unwrap();
+        assert_eq!(info.serial_decimal, info.serial_hex);
+        assert!(info.serial_decimal.starts_with("0x01AB"));
+
+        let mut negative_over = vec![0x80];
+        negative_over.resize(MAX_DECIMAL_BYTES + 1, 0x00);
+        let info =
+            Details::parse(&metadata_certificate("leaf", "issuer", &negative_over, &[])).unwrap();
+        assert_eq!(info.serial_decimal, info.serial_hex);
+        assert!(info.serial_decimal.starts_with("-0x80"));
+
+        let huge = vec![0x7f; 4096];
+        assert_eq!(serial_text(&huge, false), serial_text(&huge, true));
+    }
+
+    #[test]
+    fn caps_deep_chains_at_max_depth() {
+        let total = MAX_CHAIN_DEPTH + 4;
+        let certs: Vec<Vec<u8>> = (0..total)
+            .map(|i| {
+                let subject = format!("c{i}");
+                let issuer = if i + 1 == total {
+                    subject.clone()
+                } else {
+                    format!("c{}", i + 1)
+                };
+                metadata_certificate(&subject, &issuer, &[(i + 1) as u8], &[])
+            })
+            .collect();
+        let pool_slices: Vec<&[u8]> = certs.iter().map(Vec::as_slice).collect();
+        let pool = ParsedPool::new(&pool_slices);
+
+        let (capped, warning) = pool.chain(&certs[0]);
+        assert_eq!(capped.len(), MAX_CHAIN_DEPTH);
+        assert_eq!(capped, certs[..MAX_CHAIN_DEPTH]);
+        assert_eq!(
+            warning,
+            Some("Certificate chain exceeds the maximum depth.")
+        );
+
+        let (exact, warning) = pool.chain(&certs[total - MAX_CHAIN_DEPTH]);
+        assert_eq!(exact.len(), MAX_CHAIN_DEPTH);
         assert_eq!(warning, None);
     }
 }

@@ -690,3 +690,45 @@ fn private_keys_without_certificates_are_copied_into_every_format() {
         assert_eq!(saved, expected, "{name}");
     }
 }
+
+#[test]
+fn failed_certificate_read_clears_pending_key_import() {
+    use crate::test_support::{ed25519_certificate, ed25519_pkcs8};
+    let directory = TestDirectory::new();
+    let (mut app, _) = editing(&directory);
+    let write = |name: &str, data: &[u8]| fs::write(directory.path().join(name), data).unwrap();
+    write("only.key", &ed25519_pkcs8(5));
+    fs::File::create(directory.path().join("huge.crt"))
+        .unwrap()
+        .set_len(MAX_KEYSTORE_SIZE + 1)
+        .unwrap();
+    write("five.crt", &ed25519_certificate("five", "five", 5, 5));
+
+    // Importing a standalone key enters the certificate-picker stage with the
+    // decrypted key held in `key_import`.
+    import(&mut app, "only");
+    assert!(app.key_import.is_some());
+    assert!(screen(&mut app, 120, 24).contains(" Certificate file of the imported key "));
+
+    // If reading the chosen certificate file fails, the pending key is dropped
+    // and subsequent `o` and `i` picker flows are not corrupted.
+    type_password(&mut app, "huge");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("Cannot read"));
+    assert!(app.key_import.is_none() && !app.importing);
+
+    press(&mut app, KeyCode::Char('o'));
+    assert!(!screen(&mut app, 120, 24).contains(" Certificate file of the imported key "));
+    press(&mut app, KeyCode::Esc);
+
+    press(&mut app, KeyCode::Char('i'));
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains(" Import certificate or key pair from file "));
+    assert!(!rendered.contains(" Certificate file of the imported key "));
+    type_password(&mut app, "five");
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Alias for the imported certificate: five_"));
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Imported certificate as 'five'."));
+    assert_eq!(app.entries[0].kind(), "Trusted certificate");
+}

@@ -79,7 +79,7 @@ impl Request {
                 ),
                 _ => (
                     "Malformed attribute".into(),
-                    vec![format!("Could not decode; encoding: {}", hex(encoding))],
+                    vec!["Could not decode; encoding not shown.".into()],
                 ),
             });
             return;
@@ -273,11 +273,29 @@ mod tests {
                     ]
                     .concat(),
                 ),
+                // Non-SEQUENCE outer tag holding a challenge password.
+                der::set(
+                    &[
+                        der::oid(&ObjectIdentifier::new(OID_CHALLENGE_PASSWORD).unwrap()),
+                        der::utf8_string("synthetic-outer"),
+                    ]
+                    .concat(),
+                ),
+                // Preceding element before the challenge password OID.
+                der::sequence(
+                    &[
+                        der::null(),
+                        der::oid(&ObjectIdentifier::new(OID_CHALLENGE_PASSWORD).unwrap()),
+                        der::set(&der::utf8_string("synthetic-preceded")),
+                    ]
+                    .concat(),
+                ),
             ],
         );
         let request = Request::parse(&der).unwrap();
         let shown = format!("{:?}", request.attributes);
         assert!(!shown.contains("synthetic"));
+        assert!(!shown.contains(&hex(b"synthetic")));
         assert_eq!(
             request.attributes,
             [
@@ -296,11 +314,19 @@ mod tests {
                 ),
                 (
                     "Malformed attribute".into(),
-                    vec!["Could not decode; encoding: 30:02:05:00".into()]
+                    vec!["Could not decode; encoding not shown.".into()]
                 ),
                 (
                     "Challenge Password (1.2.840.113549.1.9.7)".into(),
                     vec!["Could not decode; value not shown.".into()]
+                ),
+                (
+                    "Malformed attribute".into(),
+                    vec!["Could not decode; encoding not shown.".into()]
+                ),
+                (
+                    "Malformed attribute".into(),
+                    vec!["Could not decode; encoding not shown.".into()]
                 ),
             ]
         );

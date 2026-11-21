@@ -200,11 +200,12 @@ impl App {
     /// Imports from the file chosen in the file browser: a key pair if the
     /// file holds a private key, a trusted certificate otherwise.
     pub(crate) fn import_file(&mut self, path: &Path) {
+        let pending = self.key_import.take();
         let read = read_limited(path, MAX_KEYSTORE_SIZE)
             .map(Zeroizing::new)
             .map_err(|error| format!("Cannot read {}: {error}", path.display()));
         let file = name(path);
-        let result = read.and_then(|data| match self.key_import.take() {
+        let result = read.and_then(|data| match pending {
             Some(KeyImport {
                 stage: Stage::Certificates(key),
                 ..

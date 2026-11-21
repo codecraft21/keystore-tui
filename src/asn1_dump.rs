@@ -114,6 +114,9 @@ pub fn dump(encoding: &[u8], request: bool) -> Dump {
     }
     dumper.elements(encoding, 0);
     if dumper.truncated {
+        if dumper.request {
+            dumper.withheld = true;
+        }
         dumper
             .lines
             .push(format!("Output stopped after {MAX_LINES} lines."));
@@ -292,7 +295,6 @@ impl<'a> Dumper<'a> {
         let mut reader = Reader::new(content);
         // An attribute's values follow its type; a challenge password's are hidden.
         let mut hide_values = false;
-        let mut first = true;
         while !reader.is_empty() {
             let rest = &content[content.len() - reader.remaining()..];
             let element = reader.read_raw_tlv().and_then(|raw| {
@@ -316,11 +318,10 @@ impl<'a> Dumper<'a> {
                 );
                 continue;
             }
-            if first && tag == der::OBJECT_IDENTIFIER {
+            if self.request && tag == der::OBJECT_IDENTIFIER {
                 hide_values = ObjectIdentifier::from_der_content(inner)
                     .is_ok_and(|oid| oid.matches(OID_CHALLENGE_PASSWORD));
             }
-            first = false;
             self.element(raw, tag, inner, depth);
         }
     }
@@ -341,6 +342,9 @@ impl<'a> Dumper<'a> {
         let offset = self.offset(raw);
         let name = tag_name(tag);
         if depth >= MAX_DEPTH {
+            if self.request {
+                self.withheld = true;
+            }
             self.line(
                 Some(offset),
                 depth,
@@ -576,6 +580,42 @@ mod tests {
         assert!(!text.contains("synthetic"));
         let secret = hex(b"synthetic-secret");
         assert!(!text.contains(&secret[..20]));
+
+        // A preceding element before the OID in the same container must not bypass redaction.
+        let preceded = der::sequence(
+            &[
+                der::null(),
+                oid(OID_CHALLENGE_PASSWORD),
+                der::set(&der::utf8_string("preceded-secret")),
+            ]
+            .concat(),
+        );
+        let request = ed25519_request("device", &[preceded]);
+        let dump = self::dump(&request, true);
+        let text = joined(&dump);
+        assert!(dump.withheld);
+        assert!(text.contains("(challengePassword)"));
+        assert!(text.contains("SET (challenge password; not shown)"));
+        assert!(!text.contains("preceded-secret"));
+        let secret = hex(b"preceded-secret");
+        assert!(!text.contains(&secret[..20]));
+    }
+
+    #[test]
+    fn challenge_password_oid_in_non_request_is_not_withheld() {
+        let encoding = der::sequence(
+            &[
+                oid(OID_CHALLENGE_PASSWORD),
+                der::set(&der::utf8_string("visible-in-cert")),
+            ]
+            .concat(),
+        );
+        let dump = dump(&encoding, false);
+        let text = joined(&dump);
+        assert!(!dump.withheld);
+        assert!(text.contains("(challengePassword)"));
+        assert!(text.contains("UTF8String \"visible-in-cert\""));
+        assert!(!text.contains("(challenge password; not shown)"));
     }
 
     #[test]
@@ -627,18 +667,40 @@ mod tests {
 
     #[test]
     fn deep_nesting_and_huge_values_are_bounded() {
-        let mut nested = der::null();
-        for _ in 0..200 {
+        let mut nested = der::sequence(
+            &[
+                oid(OID_CHALLENGE_PASSWORD),
+                der::set(&der::utf8_string("deep-secret")),
+            ]
+            .concat(),
+        );
+        for _ in 0..MAX_DEPTH + 10 {
             nested = der::sequence(&nested);
         }
-        let text = joined(&dump(&nested, false));
-        assert!(text.contains("SEQUENCE (nested too deeply; not shown)"));
+        let cert_dump = dump(&nested, false);
+        assert!(!cert_dump.withheld);
+        assert!(joined(&cert_dump).contains("SEQUENCE (nested too deeply; not shown)"));
+
+        let request_dump = dump(&nested, true);
+        assert!(request_dump.withheld);
+        let request_text = joined(&request_dump);
+        assert!(request_text.contains("SEQUENCE (nested too deeply; not shown)"));
+        assert!(!request_text.contains("deep-secret"));
 
         let huge = der::octet_string(&vec![0x11; MAX_LINES * HEX_ROW * 2]);
-        let dump = dump(&huge, false);
-        assert_eq!(dump.lines.len(), MAX_LINES + 1);
+        let cert_dump = dump(&huge, false);
+        assert!(!cert_dump.withheld);
+        assert_eq!(cert_dump.lines.len(), MAX_LINES + 1);
         assert_eq!(
-            dump.lines.last().unwrap(),
+            cert_dump.lines.last().unwrap(),
+            &format!("Output stopped after {MAX_LINES} lines.")
+        );
+
+        let request_dump = dump(&huge, true);
+        assert!(request_dump.withheld);
+        assert_eq!(request_dump.lines.len(), MAX_LINES + 1);
+        assert_eq!(
+            request_dump.lines.last().unwrap(),
             &format!("Output stopped after {MAX_LINES} lines.")
         );
     }

@@ -1087,7 +1087,8 @@ any existing incomplete-entry warnings.
   certificate:
   - version
   - subject and issuer
-  - serial number, in both hexadecimal and decimal
+  - serial number, in both hexadecimal and decimal (values wider than 64 bytes
+    fall back to hexadecimal)
   - validity timestamps in UTC; "Valid Until" turns red once the certificate
     has expired
   - public key algorithm and size
@@ -1124,11 +1125,12 @@ any existing incomplete-entry warnings.
     [Extensions](#extensions); `Requested extensions: None` when there are none
   - "Attributes:", only when the request has other attributes. A challenge
     password is shown as `Present; not shown.` and its value is never
-    displayed, not even in hex when the attribute is malformed. An unstructured name is shown as text, with control characters
-    escaped. Other attributes show their OID and each value in hex. An
-    extension request whose value cannot be decoded is listed here with
-    `Could not decode; value:` and its hex, and a malformed attribute as
-    "Malformed attribute" with its encoding in hex.
+    displayed, not even in hex when the attribute is malformed. An unstructured
+    name is shown as text, with control characters escaped. Other attributes
+    show their OID and each value in hex. An extension request whose value
+    cannot be decoded is listed here with `Could not decode; value:` and its
+    hex, and a malformed attribute as "Malformed attribute" without its
+    encoding, because it could hold a challenge password.
   - a closing note that a request has no issuer or validity and is not trusted.
 - A request whose fields cannot be decoded, including one with data after it,
   shows "Certificate request could not be decoded." and its fingerprint, and
@@ -1199,10 +1201,10 @@ any existing incomplete-entry warnings.
   | Extension | Shows |
   | --- | --- |
   | Subject / Issuer Alternative Name | DNS names, IPv4/IPv6 addresses, emails, URIs, directory names, registered IDs; other name forms in hex |
-  | Key Usage | Named usages on one line (Digital Signature, Certificate Sign, ...); unknown bits as `Bit N` |
+  | Key Usage | Named usages on one line (Digital Signature, Certificate Sign, ...); up to 16 unknown bits as `Bit N`, summarizing any beyond that |
   | Extended Key Usage | `serverAuth`, `clientAuth`, `codeSigning`, `emailProtection`, `timeStamping`, `OCSPSigning`, `anyExtendedKeyUsage`; others as dotted OIDs |
   | Basic Constraints | CA flag and path length (`unlimited` for a CA without one) |
-  | CRL Number | The number in decimal (in a revocation list) |
+  | CRL Number | The number in decimal, or hexadecimal over 64 bytes (in a revocation list) |
   | Reason Code | The reason's name, such as `keyCompromise`, or `Reason N` for an unknown code (in a revocation list) |
   | Subject / Authority Key Identifier | Key identifiers in hex; the authority's issuer names and serial when present |
   | CRL Distribution Points | Distribution point names (usually URIs) and CRL issuers; reasons and relative names in hex |
@@ -1224,11 +1226,13 @@ any existing incomplete-entry warnings.
 - **JKS:** the hierarchy is the chain stored in the keystore.
 - **PKCS12:** the app links certificates stored in the file by issuer identity
   and by any authority and subject key identifiers. It stops with an explanation
-  when an issuer is missing or ambiguous, or when it finds a cycle.
+  when an issuer is missing or ambiguous, when it finds a cycle, or when a chain
+  exceeds 32 certificates.
 - **Certificate files:** each entry's chain follows issuer names to the first
   certificate in the same file with that subject. Names are compared by their
   decoded text, ignoring case. The chain stops at a self-issued certificate, a
-  missing issuer, or a certificate already in the chain.
+  missing issuer, a certificate already in the chain, or after 32 certificates
+  (with a warning).
 - The app never fetches certificates and never verifies trust.
 
 ### Signature checks
@@ -1409,11 +1413,13 @@ idle, so a missed resize notification does not require a key press to redraw.
     reported with their length and the reason, followed by their hex.
   - Elements nested more than 48 levels deep are summarized, and the dump stops
     after 20,000 lines with a note.
-- A request's challenge password value is never shown: elements after the
-  challenge password OID in its attribute are listed as `(challenge password;
-  not shown)`. A request's undecodable bytes are reported without their hex,
-  because they could hold a password. When anything is left out, a yellow
-  note says so, and the PEM view shows a yellow explanation instead of the
-  encoding; `x` can still export the request.
+- A request's challenge password value is never shown: elements after a
+  challenge password OID in the same constructed element are listed as
+  `(challenge password; not shown)`. A request's undecodable bytes are reported
+  without their hex, because they could hold a password, and elements omitted
+  due to nesting depth or the line limit are also treated as withheld. When
+  anything in a request is left out, a yellow note says so, and the PEM view
+  shows a yellow explanation instead of the encoding; `x` can still export the
+  request. Certificates and revocation lists are not redacted or withheld.
 - The PEM view shows a `CERTIFICATE` or `CERTIFICATE REQUEST` block of the
   stored bytes with 64-character lines, as exports write it.
