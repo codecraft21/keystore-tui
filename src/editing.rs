@@ -37,7 +37,7 @@ impl App {
     /// Asks for the selected entry's new alias, starting from its current one.
     pub(crate) fn ask_rename(&mut self) {
         if let Some(index) = self.selected_entry()
-            && self.changeable()
+            && self.editable()
         {
             self.alias_prompt = Some(AliasPrompt {
                 action: Action::Rename(index),
@@ -48,7 +48,7 @@ impl App {
 
     /// Opens the file browser to choose a certificate or key file to import.
     pub(crate) fn ask_import(&mut self) {
-        if self.changeable() {
+        if self.editable() {
             self.open_picker();
             self.importing = self.file_picker.is_some();
         }
@@ -90,7 +90,7 @@ impl App {
                         self.message = Some((error, true));
                         self.alias_prompt = Some(AliasPrompt { action, ..prompt });
                     }
-                    // Generated in the background; the keystore is read-only meanwhile.
+                    // Generated on a worker thread while a modal waits.
                     (Ok(()), Action::Generate(pending)) => {
                         self.start_generation(prompt.alias.to_lowercase(), pending);
                     }

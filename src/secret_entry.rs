@@ -60,7 +60,7 @@ fn is_hex_name(path: &Path) -> bool {
 impl App {
     /// Asks for the algorithm of a new secret key.
     pub(crate) fn ask_secret_key(&mut self) {
-        if !self.changeable() {
+        if !self.editable() {
             return;
         }
         let jks = |document: &save::Document| document.format() == save::Format::Jks;

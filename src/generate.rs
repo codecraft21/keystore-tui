@@ -21,7 +21,14 @@ use crown::{
     rsa::{RsaPrivateKey, der::rsa_private_key_der},
     x509::keys::encode_ec_private_key,
 };
-use ratatui::crossterm::event::KeyEvent;
+use ratatui::{
+    Frame,
+    crossterm::event::KeyEvent,
+    layout::Constraint,
+    style::{Color, Style},
+    text::Line,
+    widgets::{Block, Clear, Padding, Paragraph, Wrap},
+};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -198,7 +205,7 @@ impl Pending {
 impl App {
     /// Opens the form for a new key pair.
     pub(crate) fn ask_generate(&mut self) {
-        if self.changeable() {
+        if self.editable() {
             self.generating = Some(Form::default());
         }
     }
@@ -227,7 +234,7 @@ impl App {
     }
 
     /// Starts generating the key pair of a filled-in form, named `alias`,
-    /// on a background thread. The keystore is read-only until it is done.
+    /// on a worker thread. A modal waits for it.
     pub(crate) fn start_generation(&mut self, alias: String, pending: Box<Pending>) {
         let Pending {
             algorithm,
@@ -267,9 +274,17 @@ impl App {
         Ok(Some((key, chain)))
     }
 
-    /// The line the status bar keeps for a key pair being generated.
-    pub(crate) fn generation_status(&self) -> Option<String> {
-        self.generation.as_ref().map(Job::status)
+    /// Cancels the key pair being generated: its thread is left to finish,
+    /// and the key it makes is wiped when the result finds no receiver.
+    pub(crate) fn cancel_generation(&mut self) {
+        if let Some(job) = self.generation.take() {
+            let message = format!(
+                "Generating {} key pair '{}' was cancelled.",
+                job.algorithm.label(),
+                job.alias
+            );
+            self.message = Some((message, false));
+        }
     }
 
     /// Adds the generated key pair once its thread is done. Returns whether
@@ -354,8 +369,11 @@ fn generate(
     Ok((key, chain))
 }
 
-/// A key pair being generated on a background thread. Dropping it, as
-/// closing the keystore does, throws its result away.
+/// The keys that work while a key pair is generated.
+pub const SHORTCUTS: &str = "Esc Cancel | Ctrl+C Quit";
+
+/// A key pair being generated on a worker thread. Dropping it, as
+/// cancelling or closing the keystore does, throws its result away.
 pub struct Job {
     alias: String,
     algorithm: Algorithm,
@@ -374,7 +392,8 @@ impl Job {
     ) -> Self {
         let (sender, result) = mpsc::channel();
         thread::spawn(move || {
-            // The receiver is gone when the keystore was closed meanwhile.
+            // Without a receiver, as after cancelling, the result is handed
+            // back and dropped here, which wipes the key.
             let _ = sender.send(work());
         });
         Self {
@@ -393,13 +412,43 @@ impl Job {
         let elapsed = self.started.elapsed();
         let frame = SPINNER[(elapsed.as_millis() / 125 % 4) as usize];
         format!(
-            "{frame} Generating {} key pair '{}'... {}s (read-only until done)",
+            "{frame} Generating {} key pair '{}'... {}s",
             self.algorithm.label(),
             self.alias,
             elapsed.as_secs()
         )
     }
+
+    /// Draws the modal that waits for the key pair over the middle of the
+    /// main view.
+    pub(crate) fn draw(&self, frame: &mut Frame) {
+        let status = self.status();
+        let screen = frame.area();
+        let width = (status.chars().count().max(SHORTCUTS.len()) + 4) as u16;
+        let area = screen.centered(
+            Constraint::Length(width.min(screen.width)),
+            Constraint::Length(MODAL_HEIGHT.min(screen.height)),
+        );
+        let block = Block::bordered().title(" Generate key pair ");
+        let inner = block.inner(area);
+        frame.render_widget(Clear, area);
+        frame.render_widget(block, area);
+        let text = vec![
+            Line::styled(status, Style::default().fg(Color::Cyan)),
+            Line::default(),
+            Line::from(SHORTCUTS),
+        ];
+        frame.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .block(Block::new().padding(Padding::horizontal(1))),
+            inner,
+        );
+    }
 }
+
+/// The modal's height: its three lines inside the border.
+const MODAL_HEIGHT: u16 = 5;
 
 #[cfg(test)]
 mod tests {
