@@ -590,3 +590,103 @@ fn changing_the_password_is_written_on_save() {
         assert!(app.new_password.is_none() && !app.modified);
     }
 }
+
+#[test]
+fn private_keys_without_certificates_are_copied_into_every_format() {
+    use crate::test_support::{TestRng, ed25519_pkcs8};
+    let directory = TestDirectory::new();
+    let mut rng = TestRng(3);
+    let mut source = pkcs12::Writable::empty("srcpass");
+    for (alias, seed) in [("bare", 3), ("other", 4)] {
+        source
+            .insert_private_key(alias, &ed25519_pkcs8(seed), &[], &mut rng)
+            .unwrap();
+    }
+    fs::write(
+        directory.path().join("bare.p12"),
+        source.encode(&mut rng).unwrap(),
+    )
+    .unwrap();
+
+    for name in ["store.jks", "store.jceks", "store.p12"] {
+        let path = directory.path().join(name);
+        let data = if name.ends_with(".p12") {
+            pkcs12::Writable::empty("changeit")
+                .encode(&mut rng)
+                .unwrap()
+        } else {
+            keystore::Writable::empty(name.ends_with(".jceks")).encode("changeit")
+        };
+        fs::write(&path, data).unwrap();
+        let mut app = App::default();
+        app.open_file(path.clone());
+        type_password(&mut app, "changeit");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.document.is_some(), "{name}");
+
+        // Both keys are copied: neither panics, and in PKCS12 the second
+        // is not taken for the first, as neither has a certificate.
+        import(&mut app, "bare");
+        type_password(&mut app, "srcpass");
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            screen(&mut app, 120, 24).contains("[ ] other | Private key"),
+            "{name}"
+        );
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.message,
+            Some(("Imported 2 entries from 'bare.p12'.".into(), false)),
+            "{name}"
+        );
+        // A single one goes through the alias prompt.
+        import(&mut app, "bare");
+        type_password(&mut app, "srcpass");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        type_alias(&mut app, "copy");
+        assert!(
+            screen(&mut app, 120, 24).contains("Imported key pair as 'copy'."),
+            "{name}"
+        );
+        assert_eq!(shown_aliases(&app), ["bare", "copy", "other"], "{name}");
+        for entry in &app.entries {
+            assert_eq!(entry.kind(), Kind::PrivateKey.label(), "{name}");
+            assert!(entry.certificates().is_empty(), "{name}");
+            assert!(entry.certificate.is_none(), "{name}");
+        }
+
+        // The keys are saved without a chain and read back.
+        press(&mut app, KeyCode::Char('w'));
+        assert!(!app.modified, "{name}: {:?}", app.message);
+        let mut saved = Vec::new();
+        if name.ends_with(".p12") {
+            assert_eq!(app.entries, pkcs12_entries(&path, "changeit"), "{name}");
+            let (_, writable) = pkcs12::parse(&fs::read(&path).unwrap())
+                .unwrap()
+                .open("changeit")
+                .ok()
+                .unwrap();
+            let writable = writable.unwrap();
+            for index in 0..app.entries.len() {
+                saved.push(writable.private_key(index).unwrap().to_vec());
+            }
+        } else {
+            assert_eq!(
+                app.entries,
+                keystore::load_entries(&fs::read(&path).unwrap(), "changeit").unwrap(),
+                "{name}"
+            );
+            for index in 0..app.entries.len() {
+                saved.push(saved_key(&path, index, "changeit").unwrap());
+            }
+        }
+        let expected: Vec<Vec<u8>> = app
+            .entries
+            .iter()
+            .map(|entry| ed25519_pkcs8(if entry.alias == "other" { 4 } else { 3 }))
+            .collect();
+        assert_eq!(saved, expected, "{name}");
+    }
+}
