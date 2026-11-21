@@ -142,12 +142,7 @@ const MAX_DECIMAL_BYTES: usize = 64;
 pub(crate) const MAX_CHAIN_DEPTH: usize = 32;
 
 /// INTEGER content is signed two's complement and is not limited to machine integers.
-/// A positive serial number's magnitude in hex, such as `0x01A4`.
-pub fn serial_hex(magnitude: &[u8]) -> String {
-    serial_text(&[&[0], magnitude].concat(), true)
-}
-
-pub(super) fn serial_text(bytes: &[u8], hex: bool) -> String {
+pub(crate) fn serial_text(bytes: &[u8], hex: bool) -> String {
     let negative = bytes.first().is_some_and(|byte| byte & 0x80 != 0);
     let owned;
     let raw = if negative {
@@ -204,6 +199,7 @@ pub(super) fn serial_text(bytes: &[u8], hex: bool) -> String {
 pub(crate) fn signature_name(id: &ObjectIdentifier) -> String {
     let names: &[(&[u64], &str)] = &[
         (&[1, 2, 840, 113549, 1, 1, 2], "MD2 with RSA"),
+        (&[1, 2, 840, 113549, 1, 1, 3], "MD4 with RSA"),
         (&[1, 2, 840, 113549, 1, 1, 4], "MD5 with RSA"),
         (&[1, 2, 840, 113549, 1, 1, 5], "SHA-1 with RSA"),
         (&[1, 3, 14, 3, 2, 29], "SHA-1 with RSA"),
@@ -216,6 +212,7 @@ pub(crate) fn signature_name(id: &ObjectIdentifier) -> String {
         (&[1, 2, 840, 10045, 4, 3, 3], "SHA-384 with ECDSA"),
         (&[1, 2, 840, 10045, 4, 3, 4], "SHA-512 with ECDSA"),
         (&[1, 2, 840, 10040, 4, 3], "SHA-1 with DSA"),
+        (&[1, 3, 14, 3, 2, 27], "SHA-1 with DSA"),
         (&[2, 16, 840, 1, 101, 3, 4, 3, 2], "SHA-256 with DSA"),
         (&[1, 3, 101, 112], "Ed25519"),
         (&[1, 3, 101, 113], "Ed448"),

@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     certificate::{
-        Summary,
+        self, Summary,
         signature::{self, Signature},
     },
     certificate_request::Request,
@@ -48,7 +48,7 @@ impl RequestView {
         let label = self
             .request
             .as_ref()
-            .map(|request| request.subject.to_string())
+            .map(|request| certificate::name_text(&request.subject))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "Certificate request (unreadable or unnamed)".into());
         let weak = self
@@ -67,7 +67,7 @@ impl RequestView {
                 text,
                 "Version: {}\n\nSubject: {}\n\nPublic Key: {}\n\nSignature Algorithm: {}\n",
                 request.version,
-                request.subject,
+                certificate::name_text(&request.subject),
                 public_key_text(summary),
                 request.signature_algorithm,
             )

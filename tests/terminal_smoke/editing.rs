@@ -29,12 +29,13 @@ fn delete_save_and_quit_restores_terminal() {
     app.send(b"q");
     app.expect(&["Quit without saving the changes?"]);
     app.send(b"n");
+    app.expect(&["w Save | W Save as | p Password"]);
     assert_eq!(app.exited(), None);
     app.send(b"W");
     app.expect(&["Save keystore as:"]);
-    app.send(b"\x15"); // Ctrl+U clears the suggested absolute path.
-    app.expect(&["Save keystore as:"]);
-    app.send(b"copy.jks\r"); // Saved next to the opened file.
+    app.send(b"\x15copy.jks"); // Ctrl+U clears the suggested absolute path.
+    app.expect(&["Save keystore as: copy.jks "]);
+    app.send(b"\r"); // Saved next to the opened file.
     app.expect(&["Saved"]);
     assert_eq!(fs::read(&path).unwrap(), original);
     // An empty JKS keystore: header, no entries, digest.
@@ -476,11 +477,10 @@ fn edit_chain_save_and_ctrl_c_restores_terminal() {
     app.expect(&["Replaced the certificate chain of 'imported' with the 2 certificates"]);
     app.send(b"C");
     app.expect(&["Chain of 'imported': 2 certificates", "x Remove last"]);
-    // `q` does nothing here.
-    app.send(b"q");
-    assert_eq!(app.exited(), None);
-    app.send(b"x");
+    // `q` does nothing here; `x` following it proves the app stayed open.
+    app.send(b"qx");
     app.expect(&["Removed 'smoke ca' from the chain of 'imported'."]);
+    assert_eq!(app.exited(), None);
     app.send(b"C");
     app.expect(&["Chain of 'imported': 1 certificate"]);
     app.send(b"a");
@@ -520,6 +520,55 @@ fn export_private_key_and_quit_restores_terminal() {
     app.expect(&["Exported key 'server' to"]);
     let exported = fs::read_to_string(directory.join("q.key")).unwrap();
     assert!(exported.starts_with("-----BEGIN ENCRYPTED PRIVATE KEY-----"));
+    assert_eq!(fs::read(&path).unwrap(), original);
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Exporting private keys](../../docs/SPEC.md#exporting-private-keys),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn export_unencrypted_private_key_confirmation_and_quit_restores_terminal() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = TempDir::new();
+    let path = directory.join("keys.jks");
+    let original = key_keystore("");
+    fs::write(&path, &original).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("keys.jks")]);
+    app.expect(&["server", "e Export"]);
+
+    // Declining the confirmation writes nothing.
+    app.send(b"e");
+    app.expect(&["Export key to:", ".key .p8 Key only"]);
+    app.send(b"\x15plain.key\r");
+    app.expect(&["Password for the exported key: _", "Empty: unencrypted"]);
+    app.send(b"\r");
+    app.expect(&["Type the password again: _"]);
+    app.send(b"\r");
+    app.expect(&["Write the private key 'server' unencrypted?"]);
+    app.send(b"n");
+    app.expect(&["e Export"]);
+    assert!(!directory.join("plain.key").exists());
+
+    // Confirming with `y` writes the plain PKCS #8 key with 0600 permissions.
+    app.send(b"e");
+    app.expect(&["Export key to:"]);
+    app.send(b"\x15plain.key\r");
+    app.expect(&["Password for the exported key: _", "Empty: unencrypted"]);
+    app.send(b"\r");
+    app.expect(&["Type the password again: _"]);
+    app.send(b"\r");
+    app.expect(&["Write the private key 'server' unencrypted?"]);
+    app.send(b"y");
+    app.expect(&["Exported key 'server' to"]);
+    let exported_path = directory.join("plain.key");
+    let exported = fs::read_to_string(&exported_path).unwrap();
+    assert!(exported.starts_with("-----BEGIN PRIVATE KEY-----"));
+    assert_eq!(
+        fs::metadata(&exported_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     assert_eq!(fs::read(&path).unwrap(), original);
     app.send(b"q");
     app.assert_restored();
@@ -587,11 +636,10 @@ fn sign_request_and_key_pair_then_quit_restores_terminal() {
 
     app.send(b"S");
     app.expect(&["Sign with 'ca':", "r Request file | g New key pair"]);
-    // `q` is not a quit here, and does nothing.
-    app.send(b"q");
-    assert_eq!(app.exited(), None);
-    app.send(b"r");
+    // `q` is not a quit here, and does nothing; `r` following it proves the app stayed open.
+    app.send(b"qr");
     app.expect(&["Certificate request to sign with 'ca'", "device.csr"]);
+    assert_eq!(app.exited(), None);
     app.send(b"device\r");
     app.expect(&[
         "Sign request with 'ca'",

@@ -72,14 +72,13 @@ impl PathInput {
     /// reversed.
     pub fn spans(&self, width: usize) -> Vec<Span<'static>> {
         let width = width.max(1);
-        let columns = |text: &str| Span::raw(text).width();
         let under = self.text[self.cursor..].chars().next();
-        let cursor_width = under.map_or(1, |ch| columns(ch.encode_utf8(&mut [0; 4])).max(1));
+        let cursor_width = under.map_or(1, |ch| char_width(ch).max(1));
         // Start as far left as possible while the cursor still fits.
         let mut start = self.cursor;
         let mut used = cursor_width;
         for (index, ch) in self.text[..self.cursor].char_indices().rev() {
-            let w = columns(ch.encode_utf8(&mut [0; 4]));
+            let w = char_width(ch);
             if used + w > width {
                 break;
             }
@@ -90,7 +89,7 @@ impl PathInput {
         let after_start = self.cursor + under.map_or(0, char::len_utf8);
         let mut end = after_start;
         for ch in self.text[after_start..].chars() {
-            let w = columns(ch.encode_utf8(&mut [0; 4]));
+            let w = char_width(ch);
             if used + w > width {
                 break;
             }
@@ -104,6 +103,55 @@ impl PathInput {
             Span::raw(self.text[after_start..end].to_owned()),
         ]
     }
+}
+
+fn char_width(ch: char) -> usize {
+    Span::raw(&*ch.encode_utf8(&mut [0; 4])).width()
+}
+
+/// The longest prefix of `text` that fits in at most `max_width` terminal columns.
+pub fn head_fit(text: &str, max_width: usize) -> &str {
+    let mut end = 0;
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = char_width(ch);
+        if used + w > max_width {
+            break;
+        }
+        used += w;
+        end += ch.len_utf8();
+    }
+    &text[..end]
+}
+
+/// The longest suffix of `text` that fits in at most `max_width` terminal columns.
+pub fn tail_fit(text: &str, max_width: usize) -> &str {
+    let mut start = text.len();
+    let mut used = 0;
+    for (index, ch) in text.char_indices().rev() {
+        let w = char_width(ch);
+        if used + w > max_width {
+            break;
+        }
+        used += w;
+        start = index;
+    }
+    if start > 0 {
+        while let Some(ch) = text[start..].chars().next() {
+            if char_width(ch) == 0 {
+                start += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+    &text[start..]
+}
+
+/// Pads `text` on the right with spaces to at least `width` terminal columns.
+pub fn pad_to_width(text: &str, width: usize) -> String {
+    let pad = width.saturating_sub(Span::raw(text).width());
+    format!("{text}{}", " ".repeat(pad))
 }
 
 /// `label` followed by `input`, scrolled to fit in `width` columns.
@@ -244,5 +292,24 @@ mod tests {
         // Wide characters take two columns each.
         let input = PathInput::new("日本語".into());
         assert_eq!(shown(&input, 5), ("本語".into(), " ".into(), String::new()));
+    }
+
+    #[test]
+    fn width_helpers_respect_wide_and_combining_characters() {
+        assert_eq!(head_fit("日本語", 4), "日本");
+        assert_eq!(head_fit("日本語", 5), "日本");
+        assert_eq!(head_fit("a日本語", 5), "a日本");
+        assert_eq!(head_fit("e\u{0301}x", 1), "e\u{0301}");
+
+        assert_eq!(tail_fit("日本語", 4), "本語");
+        assert_eq!(tail_fit("日本語", 5), "本語");
+        assert_eq!(tail_fit("日本語a", 5), "本語a");
+        assert_eq!(tail_fit("abc", 0), "");
+        assert_eq!(tail_fit("e\u{0301}", 1), "e\u{0301}");
+        assert_eq!(tail_fit("日\u{0301}b", 2), "b");
+
+        assert_eq!(Span::raw(pad_to_width("日本", 6)).width(), 6);
+        assert_eq!(pad_to_width("日本", 6), "日本  ");
+        assert_eq!(pad_to_width("日本語", 4), "日本語");
     }
 }

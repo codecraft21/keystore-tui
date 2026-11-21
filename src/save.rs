@@ -996,8 +996,13 @@ impl SaveAsPrompt {
             })
             .find(|name| !directory.join(name).exists())
             .unwrap_or_else(|| format!("{stem}{extension}"));
+        let path = if directory.is_absolute() {
+            directory.join(name)
+        } else {
+            PathBuf::from(name)
+        };
         Self {
-            path: PathInput::new(directory.join(name).to_string_lossy().into_owned()),
+            path: PathInput::new(path.to_string_lossy().into_owned()),
             directory,
             creating,
         }
@@ -1487,5 +1492,53 @@ mod tests {
             original_aliases
         );
         assert!(doc.encode(&entries).is_ok());
+    }
+
+    #[test]
+    fn save_as_prompt_joins_a_relative_directory_once() {
+        let directory = TestDirectory::in_working_directory();
+        let relative = crate::test_support::relative_to_working_directory(directory.path());
+        assert!(relative.is_relative());
+        fs::write(relative.join("keystore.jks"), b"existing").unwrap();
+        let mut prompt = SaveAsPrompt::for_new(relative.clone());
+        assert_eq!(&*prompt.path, "keystore-2.jks");
+        let Outcome::Save(path) =
+            prompt.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        else {
+            panic!("expected a save");
+        };
+        assert_eq!(path, relative.join("keystore-2.jks"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_uses_owner_only_temp_file_and_preserves_target_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TestDirectory::new();
+        let path = directory.path().join("store.jks");
+        fs::write(&path, b"original").unwrap();
+
+        let (temp, file) = create_temp_file(
+            directory.path(),
+            std::ffi::OsStr::new("store.jks"),
+            random_u64,
+        )
+        .unwrap();
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        drop(file);
+        fs::remove_file(&temp).unwrap();
+
+        for mode in [0o600, 0o640] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            replace(&path, b"updated").unwrap();
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                mode,
+                "mode {mode:#o}"
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"updated");
+            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        }
     }
 }

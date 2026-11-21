@@ -4,7 +4,7 @@ use ratatui::{text::Text, widgets::Row};
 
 use super::{hierarchy_row, write_extensions, write_section};
 use crate::{
-    certificate::{details::time_text, extensions},
+    certificate::{self, details::time_text, extensions},
     revocation_list::List,
 };
 use std::fmt::Write as _;
@@ -29,7 +29,7 @@ impl CrlView {
         let label = self
             .list
             .as_ref()
-            .map(|list| list.issuer.to_string())
+            .map(|list| certificate::name_text(&list.issuer))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "Revocation list (unreadable or unnamed)".into());
         hierarchy_row(label, false, None)
@@ -46,7 +46,7 @@ impl CrlView {
             text,
             "Version: {}\n\nIssuer: {}\n\nThis Update: {}\n\nNext Update: {}\n\nSignature Algorithm: {}\nSignature: not checked (the issuer's certificate is not part of a revocation list).\n\n",
             list.version,
-            list.issuer,
+            certificate::name_text(&list.issuer),
             time_text(&list.this_update),
             list.next_update
                 .as_ref()

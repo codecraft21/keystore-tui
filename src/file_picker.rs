@@ -5,7 +5,7 @@ use std::{
 
 use ratatui::{
     Frame,
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    crossterm::event::{KeyCode, KeyEvent},
     layout::{Constraint, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -146,11 +146,7 @@ impl FilePicker {
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> Option<PathBuf> {
         let result = match key.code {
-            KeyCode::Char(c)
-                if !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
+            KeyCode::Char(c) if crate::is_text_input(key.modifiers) => {
                 self.filter.push(c);
                 self.refilter();
                 return None;
@@ -367,6 +363,7 @@ impl FilePicker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::crossterm::event::KeyModifiers;
 
     fn press(picker: &mut FilePicker, code: KeyCode) -> Option<PathBuf> {
         picker.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
@@ -475,6 +472,12 @@ mod tests {
             picker.handle_key(KeyEvent::new(KeyCode::Char('o'), modifiers));
             assert!(picker.filter.is_empty());
         }
+        picker.handle_key(KeyEvent::new(
+            KeyCode::Char('@'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(picker.filter, if cfg!(windows) { "@" } else { "" });
+        picker.clear_filter();
         picker.handle_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
         assert_eq!(picker.filter, "A");
     }

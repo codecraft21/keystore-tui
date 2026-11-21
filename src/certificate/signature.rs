@@ -30,9 +30,11 @@ struct Signed<'a> {
 fn signed(der: &[u8]) -> Option<Signed<'_>> {
     let mut reader = Reader::new(der);
     let mut certificate = reader.read_sequence().ok()?;
+    reader.expect_end().ok()?;
     let tbs = certificate.read_raw_tlv().ok()?;
     let outer_algorithm = certificate.read_raw_tlv().ok()?;
     let value = certificate.read_bit_string_bytes().ok()?;
+    certificate.expect_end().ok()?;
     let mut fields = Reader::new(tbs).read_sequence().ok()?;
     skip_version(&mut fields)?;
     fields.read_raw_tlv().ok()?; // Serial number.
@@ -47,11 +49,10 @@ fn signed(der: &[u8]) -> Option<Signed<'_>> {
 
 /// A certificate's SubjectPublicKeyInfo, byte for byte as stored.
 pub fn subject_public_key_info(der: &[u8]) -> Option<&[u8]> {
-    let mut fields = Reader::new(der)
-        .read_sequence()
-        .ok()?
-        .read_sequence()
-        .ok()?;
+    let mut reader = Reader::new(der);
+    let mut certificate = reader.read_sequence().ok()?;
+    reader.expect_end().ok()?;
+    let mut fields = certificate.read_sequence().ok()?;
     skip_version(&mut fields)?;
     for _ in [
         "serial number",
@@ -117,10 +118,13 @@ pub fn verify_request(request: &[u8]) -> Signature {
 
 /// A request's signed parts and its SubjectPublicKeyInfo.
 fn signed_request(request: &[u8]) -> Option<(Signed<'_>, &[u8])> {
-    let mut fields = Reader::new(request).read_sequence().ok()?;
+    let mut reader = Reader::new(request);
+    let mut fields = reader.read_sequence().ok()?;
+    reader.expect_end().ok()?;
     let tbs = fields.read_raw_tlv().ok()?;
     let outer_algorithm = fields.read_raw_tlv().ok()?;
     let value = fields.read_bit_string_bytes().ok()?;
+    fields.expect_end().ok()?;
     let mut info = Reader::new(tbs).read_sequence().ok()?;
     info.read_raw_tlv().ok()?; // Version.
     info.read_raw_tlv().ok()?; // Subject.
@@ -134,7 +138,11 @@ fn signed_request(request: &[u8]) -> Option<(Signed<'_>, &[u8])> {
 }
 
 fn parse_algorithm(identifier: &[u8]) -> Result<SignatureAlgorithm, &'static str> {
-    let identifier = AlgorithmIdentifier::parse(&mut Reader::new(identifier))
+    let mut reader = Reader::new(identifier);
+    let identifier = AlgorithmIdentifier::parse(&mut reader)
+        .map_err(|_| "the signature algorithm could not be decoded")?;
+    reader
+        .expect_end()
         .map_err(|_| "the signature algorithm could not be decoded")?;
     SignatureAlgorithm::from_identifier(&identifier)
         .map_err(|_| "the signature algorithm is not supported")
@@ -165,6 +173,9 @@ fn check(signed: &Signed<'_>, spki: &[u8]) -> Signature {
     }
     match algorithm.verify(&key, signed.tbs, signed.value) {
         Ok(true) => Signature::Verified,
+        Err(CryptoError::UnsupportedOperation(_)) => {
+            Signature::Unchecked("the signature algorithm or key is not supported")
+        }
         Ok(false) | Err(_) => Signature::Failed("the signature does not match"),
     }
 }
@@ -264,8 +275,72 @@ mod tests {
                 replace_algorithm(&root, 1, &unknown),
                 "the key type is not supported",
             ),
+            (
+                [leaf.as_slice(), &[0]].concat(),
+                root.clone(),
+                "the certificate could not be decoded",
+            ),
+            (
+                leaf.clone(),
+                [root.as_slice(), &[0]].concat(),
+                "the issuer certificate could not be decoded",
+            ),
         ] {
             assert_eq!(verify(&certificate, &issuer), Signature::Unchecked(reason));
         }
+
+        // Trailing bytes inside the outer SEQUENCE of a certificate or request.
+        let mut inner = Reader::new(&leaf).read_sequence().unwrap();
+        let tbs = inner.read_raw_tlv().unwrap();
+        let alg = inner.read_raw_tlv().unwrap();
+        let sig = inner.read_raw_tlv().unwrap();
+        let extra_cert = der::sequence(&[tbs, alg, sig, &der::null()].concat());
+        assert_eq!(
+            verify(&extra_cert, &root),
+            Signature::Unchecked("the certificate could not be decoded")
+        );
+
+        let request = crate::test_support::ed25519_request("device", &[]);
+        assert_eq!(
+            verify_request(&[request.as_slice(), &[0]].concat()),
+            Signature::Unchecked("the request could not be decoded")
+        );
+        let mut req_inner = Reader::new(&request).read_sequence().unwrap();
+        let req_tbs = req_inner.read_raw_tlv().unwrap();
+        let req_alg = req_inner.read_raw_tlv().unwrap();
+        let req_sig = req_inner.read_raw_tlv().unwrap();
+        let extra_req = der::sequence(&[req_tbs, req_alg, req_sig, &der::null()].concat());
+        assert_eq!(
+            verify_request(&extra_req),
+            Signature::Unchecked("the request could not be decoded")
+        );
+
+        // An algorithm/key pair that parses and is compatible, but whose verify()
+        // returns UnsupportedOperation (e.g. ECDSA with SHA-1 on a P-256 key,
+        // or a curve/hash combination crown does not implement verification for).
+        let ecdsa_sha1 = oid(&[1, 2, 840, 10045, 4, 1]);
+        let fixture = fixture_certificate_der();
+        let mut cert_reader = Reader::new(fixture).read_sequence().unwrap();
+        let mut tbs_reader = cert_reader.read_sequence().unwrap();
+        let mut fields = Vec::new();
+        while !tbs_reader.is_empty() {
+            fields.push(tbs_reader.read_raw_tlv().unwrap().to_vec());
+        }
+        fields[2] = ecdsa_sha1.clone();
+        let unsupported_verify = der::sequence(
+            &[
+                der::sequence(&fields.concat()),
+                ecdsa_sha1,
+                der::bit_string(0, &[0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]),
+            ]
+            .concat(),
+        );
+        let result = verify(&unsupported_verify, fixture);
+        // Verify that UnsupportedOperation (if returned by crown) is never
+        // misreported as Failed; if crown supports SHA-1 ECDSA, it fails match.
+        assert!(matches!(
+            result,
+            Signature::Unchecked(_) | Signature::Failed("the signature does not match")
+        ));
     }
 }

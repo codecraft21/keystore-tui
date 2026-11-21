@@ -102,6 +102,40 @@ impl Drop for RawMode {
     }
 }
 
+enum PasswordStep {
+    Continue,
+    Done,
+    Cancelled,
+}
+
+fn handle_password_key(
+    password: &mut Password,
+    key: ratatui::crossterm::event::KeyEvent,
+) -> PasswordStep {
+    if key.kind != KeyEventKind::Press {
+        return PasswordStep::Continue;
+    }
+    match key.code {
+        KeyCode::Enter => PasswordStep::Done,
+        KeyCode::Esc => PasswordStep::Cancelled,
+        KeyCode::Char('c' | 'd')
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            PasswordStep::Cancelled
+        }
+        KeyCode::Backspace => {
+            password.pop();
+            PasswordStep::Continue
+        }
+        KeyCode::Char(ch) if crate::is_text_input(key.modifiers) => {
+            password.push(ch);
+            PasswordStep::Continue
+        }
+        _ => PasswordStep::Continue,
+    }
+}
+
 pub(crate) fn password() -> io::Result<Password> {
     terminal::enable_raw_mode()?;
     let guard = RawMode;
@@ -113,18 +147,12 @@ pub(crate) fn password() -> io::Result<Password> {
             let Event::Key(key) = event::read()? else {
                 continue;
             };
-            if key.kind != KeyEventKind::Press {
-                continue;
-            }
-            match key.code {
-                KeyCode::Enter => return Ok(password),
-                KeyCode::Esc => return Err(io::Error::other("Password input cancelled")),
-                KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            match handle_password_key(&mut password, key) {
+                PasswordStep::Continue => {}
+                PasswordStep::Done => return Ok(password),
+                PasswordStep::Cancelled => {
                     return Err(io::Error::other("Password input cancelled"));
                 }
-                KeyCode::Backspace => password.pop(),
-                KeyCode::Char(ch) if crate::is_text_input(key.modifiers) => password.push(ch),
-                _ => {}
             }
         }
     })();
@@ -273,5 +301,64 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn password_prompt_handles_ctrl_cancel_and_altgr() {
+        use ratatui::crossterm::event::KeyEvent;
+
+        let mut pw = Password::default();
+        assert!(matches!(
+            handle_password_key(
+                &mut pw,
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)
+            ),
+            PasswordStep::Continue
+        ));
+        assert!(matches!(
+            handle_password_key(
+                &mut pw,
+                KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)
+            ),
+            PasswordStep::Continue
+        ));
+        assert!(matches!(
+            handle_password_key(
+                &mut pw,
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
+            ),
+            PasswordStep::Continue
+        ));
+        assert_eq!(&*pw.0, "a");
+
+        // Ctrl+Alt+c / Ctrl+Alt+d (Windows AltGr) must NOT cancel the prompt.
+        let altgr = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        for ch in ['c', 'd'] {
+            assert!(matches!(
+                handle_password_key(&mut pw, KeyEvent::new(KeyCode::Char(ch), altgr)),
+                PasswordStep::Continue
+            ));
+        }
+        if cfg!(windows) {
+            assert_eq!(&*pw.0, "acd");
+        } else {
+            assert_eq!(&*pw.0, "a");
+        }
+
+        // Plain Ctrl+C, Ctrl+D, and Esc cancel; Enter completes.
+        for key in [
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        ] {
+            assert!(matches!(
+                handle_password_key(&mut pw, key),
+                PasswordStep::Cancelled
+            ));
+        }
+        assert!(matches!(
+            handle_password_key(&mut pw, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            PasswordStep::Done
+        ));
     }
 }

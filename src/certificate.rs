@@ -46,6 +46,7 @@ impl Summary {
 }
 
 const OID_RSASSA_PSS: &[u64] = &[1, 2, 840, 113549, 1, 1, 10];
+const OID_SECP192R1: &[u64] = &[1, 2, 840, 10045, 3, 1, 1];
 const OID_SECP224R1: &[u64] = &[1, 3, 132, 0, 33];
 const OID_ML_DSA_44: &[u64] = &[2, 16, 840, 1, 101, 3, 4, 3, 17];
 const OID_ML_DSA_65: &[u64] = &[2, 16, 840, 1, 101, 3, 4, 3, 18];
@@ -55,20 +56,23 @@ const OID_ML_DSA_87: &[u64] = &[2, 16, 840, 1, 101, 3, 4, 3, 19];
 /// that is not a well-formed certificate, so unusual certificates still list.
 pub fn summarize(der: &[u8]) -> Option<Summary> {
     let mut reader = Reader::new(der);
-    let mut tbs = reader.read_sequence().ok()?.read_sequence().ok()?;
+    let mut certificate = reader.read_sequence().ok()?;
+    reader.expect_end().ok()?;
+    let mut tbs = certificate.read_sequence().ok()?;
     let tag = tbs.peek_tag().ok()?;
     if tag.class == Class::ContextSpecific && tag.number == 0 {
         tbs.read_raw_tlv().ok()?; // Version.
     }
     tbs.read_raw_tlv().ok()?; // Serial number, possibly negative.
-    let signature = tbs.read_sequence().ok()?.read_oid().ok()?;
+    tbs.read_sequence().ok()?.read_oid().ok()?; // Inner signature algorithm.
     let issuer = tbs.read_raw_tlv().ok()?;
     let mut validity = tbs.read_sequence().ok()?;
     validity.read_time().ok()?;
     let not_after = validity.read_time().ok()?;
     let subject = tbs.read_raw_tlv().ok()?;
     let (name, key_size) = public_key(tbs.read_raw_tlv().ok()?)?;
-    let weaknesses = security::weaknesses(&name, key_size, &signature, issuer == subject);
+    let outer_signature = certificate.read_raw_tlv().ok()?;
+    let weaknesses = security::weaknesses(&name, key_size, outer_signature, issuer == subject);
     Some(Summary {
         // Unusual names must not hide the entry, so decode failures leave it empty.
         subject: subject_text(subject),
@@ -79,18 +83,24 @@ pub fn summarize(der: &[u8]) -> Option<Summary> {
     })
 }
 
+/// A distinguished name formatted for display, with control characters escaped.
+pub fn name_text(name: &Name) -> String {
+    extensions::printable(&name.to_string())
+}
+
 /// The common name, else the whole name, if either is non-empty: how
 /// certificates and requests without a stored alias are named.
 pub fn name_alias(name: &Name) -> Option<String> {
     name.common_name()
         .or_else(|| Some(name.to_string()))
         .filter(|name| !name.is_empty())
+        .map(|name| extensions::printable(&name))
 }
 
 /// The decoded distinguished name, or empty when it cannot be decoded.
 pub fn subject_text(name: &[u8]) -> String {
     Name::parse(&mut Reader::new(name))
-        .map(|name| name.to_string())
+        .map(|name| name_text(&name))
         .unwrap_or_default()
 }
 
@@ -122,6 +132,7 @@ pub fn public_key(spki: &[u8]) -> Option<(String, Option<u32>)> {
                 (oid::OID_SECP521R1, 521),
                 (oid::OID_SECP256K1, 256),
                 (OID_SECP224R1, 224),
+                (OID_SECP192R1, 192),
             ]
             .into_iter()
             .find_map(|(arcs, size)| curve.matches(arcs).then_some(size))
@@ -294,5 +305,78 @@ mod tests {
         for end in 0..der.len() {
             assert!(summarize(&der[..end]).is_none(), "prefix {end}");
         }
+    }
+
+    #[test]
+    fn flags_secp192r1_and_checks_outer_signature_algorithm() {
+        let expiry = Asn1Time::new(2051, 2, 3, 4, 5, 6, false).unwrap();
+        let curve = der::oid(&ObjectIdentifier::new(OID_SECP192R1).unwrap());
+        let summary = summarize(&certificate(
+            algorithm(oid::OID_EC_PUBLIC_KEY, Some(&curve)),
+            &[4],
+            &expiry,
+        ))
+        .unwrap();
+        assert_eq!(summary.algorithm, "EC");
+        assert_eq!(summary.key_size, Some(192));
+        assert_eq!(
+            summary.weaknesses,
+            [security::Weakness::ShortKey {
+                algorithm: "EC".into(),
+                bits: 192,
+                minimum: 256,
+            }]
+        );
+
+        // Outer signature is weak (SHA-1) while inner TBS signature is SHA-256:
+        // summarize checks the outer signature consistently with Details.
+        let not_before = Asn1Time::new(2020, 1, 1, 0, 0, 0, true).unwrap();
+        let inner_sig = algorithm(oid::OID_ECDSA_WITH_SHA256, None);
+        let outer_sig = algorithm(&[1, 2, 840, 113549, 1, 1, 5], Some(&der::null()));
+        let tbs = [
+            der::explicit(0, &der::integer_i64(2)),
+            der::integer_i64(1),
+            inner_sig,
+            Name::from_common_name("issuer").encode(),
+            der::sequence(&[der::time(&not_before), der::time(&expiry)].concat()),
+            Name::from_common_name("leaf").encode(),
+            der::sequence(
+                &[
+                    algorithm(oid::OID_ED25519, None),
+                    der::bit_string(0, &[0; 32]),
+                ]
+                .concat(),
+            ),
+        ]
+        .concat();
+        let mismatched = der::sequence(
+            &[
+                der::sequence(&tbs),
+                outer_sig,
+                der::bit_string(0, &[1, 2, 3]),
+            ]
+            .concat(),
+        );
+        assert_eq!(
+            summarize(&mismatched).unwrap().weaknesses,
+            [security::Weakness::WeakSignature("SHA-1")]
+        );
+    }
+
+    #[test]
+    fn escapes_control_characters_in_distinguished_names() {
+        let evil = Name::from_common_name("good\nIssuer: CN=Trusted\r\x1b[31m");
+        assert_eq!(
+            name_alias(&evil).as_deref(),
+            Some("good\\u{a}Issuer: CN=Trusted\\u{d}\\u{1b}[31m")
+        );
+        assert_eq!(
+            subject_text(&evil.encode()),
+            "CN=good\\u{a}Issuer: CN=Trusted\\u{d}\\u{1b}[31m"
+        );
+        assert_eq!(
+            name_text(&evil),
+            "CN=good\\u{a}Issuer: CN=Trusted\\u{d}\\u{1b}[31m"
+        );
     }
 }

@@ -4,7 +4,6 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use crate::fixtures::{ROOT, TempDir, empty_password_fixture, fixture};
 use crate::pty::{PtyApp, binary};
@@ -44,7 +43,7 @@ fn startup_password_failure() {
         app.expect(&["Keystore password:"]);
         app.send(keys);
         assert_eq!(app.wait(), 1, "{keys:?}");
-        app.read(Duration::from_millis(100));
+        app.drain();
         assert!(!contains(app.output(), b"wrong-secret"), "{keys:?}");
         assert!(!contains(app.output(), b"\x1b[?1049h"), "{keys:?}");
         app.assert_modes_restored();

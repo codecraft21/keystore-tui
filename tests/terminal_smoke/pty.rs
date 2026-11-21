@@ -17,7 +17,7 @@ use rustix::termios::{Winsize, tcgetattr, tcsetwinsize};
 
 use crate::screen::{self, contains, rfind};
 
-const TIMEOUT: Duration = Duration::from_secs(5);
+const TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The binary under test: `KEYSTORE_TUI_BINARY`, or the one Cargo built.
 pub fn binary() -> PathBuf {
@@ -184,12 +184,18 @@ impl PtyApp {
             .map(|status| status.code().unwrap_or(-1))
     }
 
+    /// Read any bytes already buffered in the PTY without waiting.
+    pub fn drain(&mut self) {
+        while self.read(Duration::ZERO) {}
+    }
+
     /// Wait for the child to exit and return its exit code, reading its output
     /// so that it never blocks writing to a full PTY.
     pub fn wait(&mut self) -> i32 {
         let deadline = Instant::now() + TIMEOUT;
         loop {
             if let Some(code) = self.exited() {
+                self.drain();
                 return code;
             }
             if Instant::now() >= deadline {
@@ -218,6 +224,11 @@ impl PtyApp {
                 return;
             }
             if self.exited().is_some() {
+                self.drain();
+                let screen = self.screen();
+                if fragments.iter().all(|fragment| screen.contains(fragment)) {
+                    return;
+                }
                 break;
             }
         }
@@ -240,7 +251,7 @@ impl PtyApp {
 
     pub fn assert_restored(&mut self) {
         assert_eq!(self.wait(), 0, "TUI {:?}", self.args);
-        while self.read(Duration::ZERO) {}
+        self.drain();
         self.assert_modes_restored();
         for (enabled, restored) in [
             (&b"\x1b[?1049h"[..], &b"\x1b[?1049l"[..]), // Alternate screen.

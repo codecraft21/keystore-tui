@@ -3,8 +3,9 @@
 use std::ffi::OsStr;
 use std::fs;
 
-use crate::fixtures::{TempDir, empty_password_fixture};
+use crate::fixtures::{TempDir, empty_password_fixture, fixture};
 use crate::pty::PtyApp;
+use crate::screen::contains;
 
 /// SPEC: [File selection](../../docs/SPEC.md#file-selection).
 #[test]
@@ -61,6 +62,31 @@ fn browser_navigation_and_cancelling_keep_the_open_store() {
     // Widen the terminal so a long temporary directory doesn't clip the name.
     app.resize(250, 30);
     app.expect(&["Path:", "entry.jks'"]);
+    app.send(b"q");
+    app.assert_restored();
+}
+
+/// SPEC: [Password prompt](../../docs/SPEC.md#password-prompt),
+/// [File selection](../../docs/SPEC.md#file-selection),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn interactive_password_retry_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    fs::copy(fixture("trusted-cert.jks"), directory.join("protected.jks")).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[]);
+    app.open_from_picker("protected.jks");
+    app.expect(&["Enter Verify | Backspace Delete | Esc Cancel | Ctrl+C Quit"]);
+    // `q` is typed into the masked password, not a quit; Backspace deletes one character.
+    app.send(b"qwrong\x7f");
+    app.expect(&["*****"]);
+    app.send(b"\r");
+    app.expect(&["Incorrect password or keystore integrity check failed. Try again or press Esc."]);
+    assert_eq!(app.exited(), None);
+    assert!(!contains(app.output(), b"qwron"));
+    // Retry with the correct password in the same prompt.
+    app.send(b"changeit\r");
+    app.expect(&["root-cert", "1 entries | Sort: alias"]);
+    assert!(!contains(app.output(), b"changeit"));
     app.send(b"q");
     app.assert_restored();
 }

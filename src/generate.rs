@@ -833,4 +833,30 @@ mod tests {
         drop(scalar);
         drop(ZeroizingBn(Bn::zero()));
     }
+
+    #[test]
+    fn offered_rsa_sizes_produce_valid_keys_of_the_requested_size() {
+        for bits in [2048, 3072, 4096] {
+            let algorithm = Algorithm::Rsa(bits);
+            let mut rng = Mixed(7);
+            let key = key_pair(algorithm, &mut rng).unwrap();
+            let der = signing::self_signed(&key, &request(), 0, &mut rng).unwrap();
+            let parsed = Certificate::parse(&der).unwrap();
+            assert_eq!(
+                parsed.verify_signature(parsed.public_key()),
+                Ok(true),
+                "{}",
+                algorithm.label()
+            );
+            let summary = crate::certificate::summarize(&der).unwrap();
+            assert_eq!(
+                (summary.algorithm.as_str(), summary.key_size),
+                ("RSA", Some(bits as u32)),
+                "{}",
+                algorithm.label()
+            );
+            let chains = [vec![der]];
+            assert_eq!(matching_chain(&key, &chains), Ok(Some(chains[0].clone())));
+        }
+    }
 }
