@@ -2,6 +2,8 @@
 //! PKCS#10 certificate requests, and certificate revocation lists. Each
 //! certificate, request, or list becomes one entry; a certificate's chain is assembled from the other certificates in
 //! the same file by matching issuer and subject names.
+use std::collections::HashMap;
+
 use crown::{
     asn1::{Reader, der, oid, pem},
     error::CryptoError,
@@ -10,7 +12,10 @@ use crown::{
 };
 
 use crate::{
-    certificate::{self, details::Details},
+    certificate::{
+        self,
+        details::{Details, MAX_CHAIN_DEPTH},
+    },
     certificate_request,
     keystore::{Content, KeystoreEntry, Kind},
     revocation_list,
@@ -173,6 +178,15 @@ fn entries(items: Vec<Item>) -> Vec<KeystoreEntry> {
             Item::Request(_) | Item::Crl(_) => None,
         })
         .collect();
+    let mut by_subject: HashMap<&[u8], Vec<usize>> = HashMap::new();
+    for (index, entry) in names.iter().enumerate() {
+        if let Some((_, subject)) = entry {
+            by_subject
+                .entry(subject.as_slice())
+                .or_default()
+                .push(index);
+        }
+    }
     let der = |index: usize| match &items[index] {
         Item::Certificate(der) | Item::Request(der) | Item::Crl(der) => der,
     };
@@ -184,17 +198,20 @@ fn entries(items: Vec<Item>) -> Vec<KeystoreEntry> {
                 return None;
             };
             // Follow issuers through the file, stopping at a self-issued
-            // certificate, a missing issuer, or a certificate already used.
+            // certificate, a missing issuer, a certificate already used, or
+            // MAX_CHAIN_DEPTH.
             let mut chain = vec![index];
+            let mut chain_warning = None;
             while let Some((issuer, subject)) = &names[chain[chain.len() - 1]]
                 && issuer != subject
-                && let Some(next) = (0..names.len()).find(|candidate| {
-                    !chain.contains(candidate)
-                        && names[*candidate]
-                            .as_ref()
-                            .is_some_and(|(_, subject)| subject == issuer)
-                })
+                && let Some(next) = by_subject
+                    .get(issuer.as_slice())
+                    .and_then(|candidates| candidates.iter().copied().find(|c| !chain.contains(c)))
             {
+                if chain.len() >= MAX_CHAIN_DEPTH {
+                    chain_warning = Some("Certificate chain exceeds the maximum depth.");
+                    break;
+                }
                 chain.push(next);
             }
             Some(KeystoreEntry {
@@ -204,7 +221,7 @@ fn entries(items: Vec<Item>) -> Vec<KeystoreEntry> {
                     kind: Kind::Certificate,
                     certificates: chain.iter().map(|&i| der(i).clone()).collect(),
                 },
-                chain_warning: None,
+                chain_warning,
             })
         })
         .collect();
@@ -427,5 +444,35 @@ mod tests {
         let mut trailing = fixture_certificate_der().to_vec();
         trailing.push(0);
         assert!(parse(&trailing).is_err());
+    }
+
+    #[test]
+    fn caps_deep_chains_at_max_depth() {
+        let total = MAX_CHAIN_DEPTH + 4;
+        let certs: Vec<Vec<u8>> = (0..total)
+            .map(|i| {
+                let subject = format!("c{i}");
+                let issuer = if i + 1 == total {
+                    subject.clone()
+                } else {
+                    format!("c{}", i + 1)
+                };
+                metadata_certificate(&subject, &issuer, &[(i + 1) as u8], &[])
+            })
+            .collect();
+        let text: String = certs
+            .iter()
+            .map(|der| pem::encode("CERTIFICATE", der))
+            .collect();
+        let file = parse(text.as_bytes()).unwrap();
+        assert_eq!(file.entries.len(), total);
+        assert_eq!(file.entries[0].certificates().len(), MAX_CHAIN_DEPTH);
+        assert_eq!(
+            file.entries[0].chain_warning,
+            Some("Certificate chain exceeds the maximum depth.")
+        );
+        let exact = &file.entries[total - MAX_CHAIN_DEPTH];
+        assert_eq!(exact.certificates().len(), MAX_CHAIN_DEPTH);
+        assert_eq!(exact.chain_warning, None);
     }
 }

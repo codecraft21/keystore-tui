@@ -33,13 +33,15 @@ pub enum Error {
 
 /// A class layout. `super_class` is `None` until the descriptor is complete,
 /// which also stops a class from (indirectly) extending itself.
-struct ClassDesc {
-    name: Vec<u8>,
+struct ClassDesc<'a> {
+    name: &'a [u8],
     flags: u8,
     /// The type code and the name of each serializable field, in stream
     /// order.
-    fields: Vec<(u8, Vec<u8>)>,
+    fields: Vec<(u8, &'a [u8])>,
     super_class: Option<Option<usize>>,
+    /// Number of classes in this class's hierarchy (1 when it has no superclass).
+    hierarchy_depth: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -52,17 +54,17 @@ enum Handle<'a> {
 
 struct Stream<'a> {
     remaining: &'a [u8],
-    classes: Vec<ClassDesc>,
+    classes: Vec<ClassDesc<'a>>,
     handles: Vec<Handle<'a>>,
 }
 
 /// A top-level object, as far as its layout tells.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Object<'a> {
-    pub class: Vec<u8>,
+    pub class: &'a [u8],
     /// The fields holding a byte array or a string, by name, with their
     /// content as stored.
-    pub fields: Vec<(Vec<u8>, &'a [u8])>,
+    pub fields: Vec<(&'a [u8], &'a [u8])>,
     /// The data after the stream.
     pub rest: &'a [u8],
 }
@@ -72,27 +74,18 @@ impl<'a> Object<'a> {
     pub fn field(&self, name: &str) -> Option<&'a [u8]> {
         self.fields
             .iter()
-            .find(|(field, _)| field == name.as_bytes())
+            .find(|(field, _)| *field == name.as_bytes())
             .map(|(_, content)| *content)
     }
 }
 
 /// Reads one serialization stream holding a single top-level object.
 pub fn read_object(data: &[u8]) -> Result<Object<'_>, Error> {
-    let mut stream = Stream {
-        remaining: data,
-        classes: Vec::new(),
-        handles: Vec::new(),
-    };
-    if stream.take(2)? != STREAM_MAGIC || stream.take(2)? != STREAM_VERSION {
-        return Err(Error::Invalid);
-    }
-    if stream.u8()? != TC_OBJECT {
-        return Err(Error::Unsupported);
-    }
-    let (class, fields) = stream.object(0)?;
+    let mut stream = Stream::open(data)?;
+    let mut fields = Vec::new();
+    let class = stream.object(0, Some(&mut fields))?;
     Ok(Object {
-        class: std::mem::take(&mut stream.classes[class].name),
+        class: stream.classes[class].name,
         fields,
         rest: stream.remaining,
     })
@@ -100,11 +93,27 @@ pub fn read_object(data: &[u8]) -> Result<Object<'_>, Error> {
 
 /// Skips one serialization stream holding a single top-level object, returning
 /// that object's class name and the data after the stream.
-pub fn skip_object(data: &[u8]) -> Result<(Vec<u8>, &[u8]), Error> {
-    read_object(data).map(|object| (object.class, object.rest))
+pub fn skip_object(data: &[u8]) -> Result<(&[u8], &[u8]), Error> {
+    let mut stream = Stream::open(data)?;
+    let class = stream.object(0, None)?;
+    Ok((stream.classes[class].name, stream.remaining))
 }
 
 impl<'a> Stream<'a> {
+    fn open(data: &'a [u8]) -> Result<Self, Error> {
+        let mut stream = Self {
+            remaining: data,
+            classes: Vec::new(),
+            handles: Vec::new(),
+        };
+        if stream.take(2)? != STREAM_MAGIC || stream.take(2)? != STREAM_VERSION {
+            return Err(Error::Invalid);
+        }
+        if stream.u8()? != TC_OBJECT {
+            return Err(Error::Unsupported);
+        }
+        Ok(stream)
+    }
     fn take(&mut self, len: usize) -> Result<&'a [u8], Error> {
         if len > self.remaining.len() {
             return Err(Error::Truncated);
@@ -169,7 +178,7 @@ impl<'a> Stream<'a> {
                 self.new_class(depth)?;
             }
             TC_OBJECT => {
-                self.object(depth)?;
+                self.object(depth, None)?;
             }
             TC_ARRAY => return self.array(depth),
             TC_BLOCKDATA => {
@@ -208,7 +217,7 @@ impl<'a> Stream<'a> {
         if depth > MAX_DEPTH {
             return Err(Error::Unsupported);
         }
-        let name = self.utf()?.to_vec();
+        let name = self.utf()?;
         self.take(8)?; // serialVersionUID.
         let index = self.classes.len();
         self.handles.push(Handle::Class(index));
@@ -217,7 +226,7 @@ impl<'a> Stream<'a> {
         let mut fields = Vec::new();
         for _ in 0..count {
             let code = self.u8()?;
-            let field = self.utf()?.to_vec();
+            let field = self.utf()?;
             if matches!(code, b'[' | b'L') {
                 // The field's class name, as a string or a reference to one.
                 let code = self.u8()?;
@@ -235,10 +244,17 @@ impl<'a> Stream<'a> {
             flags,
             fields,
             super_class: None,
+            hierarchy_depth: 0,
         });
         self.annotation(depth)?;
         let super_class = self.class_desc(depth + 1)?;
+        let hierarchy_depth =
+            1 + super_class.map_or(0, |parent| self.classes[parent].hierarchy_depth);
+        if hierarchy_depth > MAX_DEPTH {
+            return Err(Error::Unsupported);
+        }
         self.classes[index].super_class = Some(super_class);
+        self.classes[index].hierarchy_depth = hierarchy_depth;
         Ok(index)
     }
 
@@ -254,19 +270,22 @@ impl<'a> Stream<'a> {
         }
     }
 
-    /// An object's class and field values. Returns its class, and the
-    /// content of its byte array and string fields by name.
-    #[allow(clippy::type_complexity)]
-    fn object(&mut self, depth: usize) -> Result<(usize, Vec<(Vec<u8>, &'a [u8])>), Error> {
+    /// An object's class and field values. When `collect` is `Some`, appends
+    /// the name and content of each byte array or string field.
+    fn object(
+        &mut self,
+        depth: usize,
+        mut collect: Option<&mut Vec<(&'a [u8], &'a [u8])>>,
+    ) -> Result<usize, Error> {
         let class = self.class_desc(depth + 1)?.ok_or(Error::Invalid)?;
         self.handles.push(Handle::Other);
         // Superclass data comes first. Complete descriptors only point to
-        // earlier complete ones, so this walk ends.
-        let mut hierarchy = vec![class];
+        // earlier complete ones, and hierarchy_depth <= MAX_DEPTH.
+        let mut hierarchy = Vec::with_capacity(self.classes[class].hierarchy_depth);
+        hierarchy.push(class);
         while let Some(Some(parent)) = self.classes[hierarchy[hierarchy.len() - 1]].super_class {
             hierarchy.push(parent);
         }
-        let mut contents = Vec::new();
         for &index in hierarchy.iter().rev() {
             let flags = self.classes[index].flags;
             if flags & SC_EXTERNALIZABLE != 0 {
@@ -276,16 +295,18 @@ impl<'a> Stream<'a> {
                 continue;
             }
             for field in 0..self.classes[index].fields.len() {
-                let code = self.classes[index].fields[field].0;
-                if let Some(content) = self.value(code, depth + 1)? {
-                    contents.push((self.classes[index].fields[field].1.clone(), content));
+                let (code, name) = self.classes[index].fields[field];
+                if let Some(content) = self.value(code, depth + 1)?
+                    && let Some(contents) = collect.as_deref_mut()
+                {
+                    contents.push((name, content));
                 }
             }
             if flags & SC_WRITE_METHOD != 0 {
                 self.annotation(depth)?;
             }
         }
-        Ok((class, contents))
+        Ok(class)
     }
 
     /// An array. Returns the content of a byte array.
@@ -293,7 +314,7 @@ impl<'a> Stream<'a> {
         let class = self.class_desc(depth + 1)?.ok_or(Error::Invalid)?;
         let handle = self.handles.len();
         self.handles.push(Handle::Other);
-        let element = match self.classes[class].name.as_slice() {
+        let element = match self.classes[class].name {
             [b'[', code, ..] => *code,
             _ => return Err(Error::Invalid),
         };
@@ -444,11 +465,96 @@ mod tests {
             }
             data.push(TC_NULL);
             if depth <= MAX_DEPTH {
-                assert_eq!(skip_object(&data), Ok((b"A".to_vec(), &[][..])));
+                assert_eq!(skip_object(&data), Ok((&b"A"[..], &[][..])));
             } else {
                 assert_eq!(skip_object(&data), Err(Error::Unsupported));
             }
         }
+    }
+
+    #[test]
+    fn bounds_superclass_chains_built_through_references() {
+        for chain_len in [1, MAX_DEPTH, MAX_DEPTH + 1, 200] {
+            let mut data = vec![0xac, 0xed, 0, 5, TC_OBJECT];
+            // Top-level Holder class (handle 0) with custom writeObject annotation,
+            // no fields, and no superclass.
+            data.extend_from_slice(&[TC_CLASSDESC, 0, 1, b'H']);
+            data.extend_from_slice(&[0; 8]);
+            data.extend_from_slice(&[
+                SC_SERIALIZABLE | SC_WRITE_METHOD,
+                0,
+                0,
+                TC_ENDBLOCKDATA,
+                TC_NULL,
+            ]);
+            // Handle 1 is the Holder instance itself.
+            // Inside Holder's annotation, define chain_len classes at flat depth 1,
+            // each referencing the previous class as its superclass via TC_REFERENCE.
+            for i in 0..chain_len {
+                data.extend_from_slice(&[TC_CLASSDESC, 0, 1, b'C']);
+                data.extend_from_slice(&[0; 8]);
+                data.extend_from_slice(&[SC_SERIALIZABLE, 0, 0, TC_ENDBLOCKDATA]);
+                if i == 0 {
+                    data.push(TC_NULL);
+                } else {
+                    let prev_handle = BASE_HANDLE + 2 + (i as u32 - 1);
+                    data.push(TC_REFERENCE);
+                    data.extend_from_slice(&prev_handle.to_be_bytes());
+                }
+            }
+            data.push(TC_ENDBLOCKDATA);
+            if chain_len <= MAX_DEPTH {
+                assert_eq!(
+                    skip_object(&data),
+                    Ok((&b"H"[..], &[][..])),
+                    "chain_len {chain_len}"
+                );
+            } else {
+                assert_eq!(
+                    skip_object(&data),
+                    Err(Error::Unsupported),
+                    "chain_len {chain_len}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nested_object_fields_are_skipped_without_leaking_to_top_level() {
+        let mut data = vec![0xac, 0xed, 0, 5, TC_OBJECT];
+        // Outer class with two fields: an object `nested` and a string `outer`.
+        data.extend_from_slice(&[TC_CLASSDESC, 0, 5]);
+        data.extend_from_slice(b"Outer");
+        data.extend_from_slice(&[0; 8]);
+        data.extend_from_slice(&[SC_SERIALIZABLE, 0, 2]);
+        // Field 1: L nested "Ljava/lang/Object;"
+        data.extend_from_slice(&[b'L', 0, 6]);
+        data.extend_from_slice(b"nested");
+        data.extend_from_slice(&[TC_STRING, 0, 1, b'X']);
+        // Field 2: L outer "Ljava/lang/String;"
+        data.extend_from_slice(&[b'L', 0, 5]);
+        data.extend_from_slice(b"outer");
+        data.extend_from_slice(&[TC_STRING, 0, 1, b'S']);
+        data.extend_from_slice(&[TC_ENDBLOCKDATA, TC_NULL]);
+        // Value of `nested`: a TC_OBJECT with its own string field `secret`.
+        data.extend_from_slice(&[TC_OBJECT, TC_CLASSDESC, 0, 5]);
+        data.extend_from_slice(b"Inner");
+        data.extend_from_slice(&[0; 8]);
+        data.extend_from_slice(&[SC_SERIALIZABLE, 0, 1, b'L', 0, 6]);
+        data.extend_from_slice(b"secret");
+        data.extend_from_slice(&[TC_STRING, 0, 1, b'S', TC_ENDBLOCKDATA, TC_NULL]);
+        data.extend_from_slice(&[TC_STRING, 0, 4]);
+        data.extend_from_slice(b"hide");
+        // Value of `outer`: string "keep".
+        data.extend_from_slice(&[TC_STRING, 0, 4]);
+        data.extend_from_slice(b"keep");
+
+        let object = read_object(&data).unwrap();
+        assert_eq!(object.class, b"Outer");
+        assert_eq!(object.field("outer"), Some(&b"keep"[..]));
+        assert_eq!(object.field("secret"), None);
+        assert_eq!(object.fields.len(), 1);
+        assert_eq!(skip_object(&data), Ok((&b"Outer"[..], &[][..])));
     }
 
     #[test]

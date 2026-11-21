@@ -13,11 +13,7 @@ use crown::{
         cbc::{CbcDecryptor, CbcEncryptor},
     },
     rng::Rng,
-    x509::{
-        algorithm::AlgorithmIdentifier,
-        keys::EncryptedPrivateKeyInfo,
-        pbe::{pkcs7_pad, pkcs7_unpad},
-    },
+    x509::{algorithm::AlgorithmIdentifier, keys::EncryptedPrivateKeyInfo, pbe::pkcs7_unpad},
 };
 use sha1::{Digest, Sha1};
 use zeroize::{Zeroize, Zeroizing};
@@ -96,8 +92,11 @@ pub(crate) fn jceks_encrypt(
     let mut salt = [0; 8];
     rng.fill_bytes(&mut salt);
     let (cipher_key, iv) = jceks_key(password, salt, JCEKS_ITERATIONS)?;
-    let mut data = pkcs7_pad(plain, 8);
     let cipher = TripleDes::new(&cipher_key[..]).map_err(|_| Error::Unsupported)?;
+    let pad = 8 - (plain.len() % 8);
+    let mut data = Zeroizing::new(Vec::with_capacity(plain.len() + pad));
+    data.extend_from_slice(plain);
+    data.resize(plain.len() + pad, pad as u8);
     cipher.to_cbc_enc(&iv).encrypt(&mut data);
     let parameters = der::sequence(
         &[
@@ -106,7 +105,7 @@ pub(crate) fn jceks_encrypt(
         ]
         .concat(),
     );
-    Ok((parameters, data))
+    Ok((parameters, std::mem::take(&mut *data)))
 }
 
 fn object_id(arcs: &[u64]) -> ObjectIdentifier {
@@ -344,6 +343,26 @@ mod tests {
         assert_eq!(
             recover(&not_a_key.unwrap(), "changeit"),
             Err(Error::Password)
+        );
+    }
+
+    #[test]
+    fn jceks_encrypt_pads_and_round_trips_across_block_boundaries() {
+        for length in [0, 1, 7, 8, 9, 16] {
+            let plain: Vec<u8> = (0..length)
+                .map(|index| (index as u8).wrapping_mul(13))
+                .collect();
+            let (parameters, encrypted) =
+                jceks_encrypt(&plain, "changeit", &mut TestRng(length as u8)).unwrap();
+            assert_eq!(encrypted.len(), plain.len() + (8 - (plain.len() % 8)));
+            assert_eq!(
+                *jceks_decrypt(&parameters, &encrypted, "changeit").unwrap(),
+                plain
+            );
+        }
+        assert_eq!(
+            jceks_encrypt(b"secret", "pä", &mut TestRng(0)),
+            Err(Error::PasswordNotAscii)
         );
     }
 

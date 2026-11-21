@@ -100,6 +100,27 @@ fn pkcs8(algorithm: &[u8], key: &[u8]) -> Key {
     Zeroizing::new(der::sequence(&content))
 }
 
+/// A `crown::bn::Bn` whose limbs are shifted down to zero on drop, since
+/// `crown::bn::Bn` does not implement `Zeroize`.
+struct ZeroizingBn(Bn);
+
+impl std::ops::Deref for ZeroizingBn {
+    type Target = Bn;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for ZeroizingBn {
+    fn drop(&mut self) {
+        while !self.0.is_zero() {
+            self.0.shr1();
+        }
+        std::hint::black_box(&self.0);
+    }
+}
+
 fn elliptic(curve: CurveId, rng: &mut impl Rng) -> CryptoResult<Key> {
     let arcs = match curve {
         CurveId::P256 => oid::OID_SECP256R1,
@@ -107,6 +128,7 @@ fn elliptic(curve: CurveId, rng: &mut impl Rng) -> CryptoResult<Key> {
         CurveId::P521 => oid::OID_SECP521R1,
     };
     let (scalar, public) = ecdh::generate(curve, rng)?;
+    let scalar = ZeroizingBn(scalar);
     let public = public.to_bytes_with(&ec::curve(curve));
     let key = Zeroizing::new(encode_ec_private_key(arcs, &scalar, Some(&public))?);
     let algorithm = [
@@ -161,18 +183,21 @@ fn rsa(bits: usize, rng: &mut impl Rng) -> CryptoResult<Key> {
     };
     let key = RsaPrivateKey::generate(bits, EXPONENT, &mut recorder)?;
     let modulus = Bn::from_be_bytes(&key.public().n());
-    let found = factor(&modulus, &recorder.draws)
-        .ok_or(CryptoError::StrError("the generated primes were not found"))?;
+    let found = ZeroizingBn(
+        factor(&modulus, &recorder.draws)
+            .ok_or(CryptoError::StrError("the generated primes were not found"))?,
+    );
     let (other, _) = modulus.divrem(&found)?;
+    let other = ZeroizingBn(other);
     let (p, q) = if found.lt(&other) {
         (other, found)
     } else {
         (found, other)
     };
     let one = Bn::one();
-    let (p1, q1) = (p.sub(&one)?, q.sub(&one)?);
+    let (p1, q1) = (ZeroizingBn(p.sub(&one)?), ZeroizingBn(q.sub(&one)?));
     let exponent = Bn::from_u64(EXPONENT);
-    let d = exponent.mod_inverse(&p1.mul(&q1))?;
+    let d = ZeroizingBn(exponent.mod_inverse(&ZeroizingBn(p1.mul(&q1)))?);
     let bytes = |number: &Bn| Zeroizing::new(number.to_be_bytes());
     let key = Zeroizing::new(rsa_private_key_der(
         &modulus.to_be_bytes(),
@@ -180,9 +205,9 @@ fn rsa(bits: usize, rng: &mut impl Rng) -> CryptoResult<Key> {
         &bytes(&d),
         &bytes(&p),
         &bytes(&q),
-        &bytes(&d.modulus(&p1)),
-        &bytes(&d.modulus(&q1)),
-        &bytes(&q.mod_inverse(&p)?),
+        &bytes(&ZeroizingBn(d.modulus(&p1))),
+        &bytes(&ZeroizingBn(d.modulus(&q1))),
+        &bytes(&ZeroizingBn(q.mod_inverse(&p)?)),
     ));
     let algorithm = [der::oid(&object(oid::OID_RSA_ENCRYPTION)), der::null()].concat();
     Ok(pkcs8(&algorithm, &key))
@@ -554,5 +579,17 @@ mod tests {
         assert!(factor(&Bn::from_u64(15), &[Zeroizing::new(Vec::new())]).is_none());
         let seven = [Zeroizing::new(vec![0x07])];
         assert!(factor(&Bn::from_u64(15), &seven).is_none());
+    }
+
+    #[test]
+    fn zeroizing_bn_shifts_multi_limb_values_to_zero() {
+        let mut scalar = ZeroizingBn(Bn::from_be_bytes(&[0xff; 66]));
+        assert!(!scalar.is_zero());
+        while !scalar.0.is_zero() {
+            scalar.0.shr1();
+        }
+        assert!(scalar.is_zero());
+        drop(scalar);
+        drop(ZeroizingBn(Bn::zero()));
     }
 }

@@ -475,7 +475,7 @@ impl EntryDetails {
                 let text = self.cache.pem.get_or_init(|| {
                     if self.asn1().1 {
                         Text::from(Line::from(
-                            "The PEM encoding is not shown, because the request holds a challenge password or data that could not be decoded. Press x to export it to a file.",
+                            "The PEM encoding is not shown, because the request holds a challenge password or data that could not be fully inspected. Press x to export it to a file.",
                         ).yellow())
                     } else if let Some((der, label, _)) = self.encoding() {
                         Text::from(pem::encode(label, der))
@@ -551,7 +551,7 @@ impl EntryDetails {
             ))];
             if dump.withheld {
                 lines.push(Line::from(
-                    "Challenge password values, and any bytes that could not be decoded, are not shown.",
+                    "Challenge password values, and any bytes that could not be decoded or fully inspected, are not shown.",
                 ).yellow());
             }
             lines.push(Line::from(""));
@@ -1036,6 +1036,58 @@ mod tests {
             assert!(!text.contains("synthetic-secret"));
             assert!(!text.contains("BEGIN CERTIFICATE REQUEST"));
         }
+
+        // Deeply nested request attributes also withhold PEM.
+        let mut deep_password = der::sequence(
+            &[
+                der::oid(&ObjectIdentifier::new(&[1, 2, 840, 113549, 1, 9, 7]).unwrap()),
+                der::set(&der::utf8_string("deep-secret")),
+            ]
+            .concat(),
+        );
+        for _ in 0..50 {
+            deep_password = der::sequence(&deep_password);
+        }
+        let deep_request = KeystoreEntry {
+            content: Content::Request(ed25519_request("device", &[deep_password])),
+            ..entry(vec![])
+        };
+        let mut view = EntryDetails::new(&deep_request, Path::new(""));
+        view.handle_key(KeyCode::Char('p'));
+        let text = view.text(0).to_string();
+        assert!(text.starts_with("The PEM encoding is not shown"));
+        assert!(!text.contains("BEGIN CERTIFICATE REQUEST"));
+        view.handle_key(KeyCode::Char('a'));
+        let text = view.text(0).to_string();
+        assert!(text.contains("SEQUENCE (nested too deeply; not shown)"));
+        assert!(!text.contains("deep-secret"));
+
+        // Certificates and CRLs containing the challengePassword OID must not withhold PEM.
+        let cert_with_oid = der::sequence(
+            &[
+                der::oid(&ObjectIdentifier::new(&[1, 2, 840, 113549, 1, 9, 7]).unwrap()),
+                der::set(&der::utf8_string("not-a-request")),
+            ]
+            .concat(),
+        );
+        let cert_entry = entry(vec![cert_with_oid.clone()]);
+        let mut view = EntryDetails::new(&cert_entry, Path::new(""));
+        view.handle_key(KeyCode::Char('p'));
+        assert_eq!(
+            view.text(0).to_string(),
+            pem::encode("CERTIFICATE", &cert_with_oid).trim_end()
+        );
+
+        let crl_entry = KeystoreEntry {
+            content: Content::Crl(cert_with_oid.clone()),
+            ..entry(vec![])
+        };
+        let mut view = EntryDetails::new(&crl_entry, Path::new(""));
+        view.handle_key(KeyCode::Char('p'));
+        assert_eq!(
+            view.text(0).to_string(),
+            pem::encode("X509 CRL", &cert_with_oid).trim_end()
+        );
     }
 
     #[test]

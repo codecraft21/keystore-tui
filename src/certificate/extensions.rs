@@ -292,18 +292,60 @@ fn authority_key_id(value: &[u8]) -> CryptoResult<Vec<String>> {
     Ok(lines)
 }
 
+/// Maximum unknown Key Usage bits listed individually before summarizing.
+const MAX_UNKNOWN_KEY_USAGE_BITS: usize = 16;
+
 fn key_usage(value: &[u8]) -> CryptoResult<Vec<String>> {
     let mut reader = Reader::new(value);
     let (unused, bits) = reader.read_bit_string()?;
     reader.expect_end()?;
-    let names: Vec<String> = (0..bits.len() * 8 - usize::from(unused))
-        .filter(|bit| bits[bit / 8] & (0x80 >> (bit % 8)) != 0)
-        .map(|bit| {
-            KEY_USAGES
-                .get(bit)
-                .map_or_else(|| format!("Bit {bit}"), |name| (*name).into())
-        })
-        .collect();
+    if unused > 7 {
+        return Err(invalid());
+    }
+    let bit_count = bits
+        .len()
+        .checked_mul(8)
+        .and_then(|total| total.checked_sub(usize::from(unused)))
+        .ok_or_else(invalid)?;
+    let mut names = Vec::new();
+    let mut unknown_shown = 0usize;
+    let mut extra_unknown = 0usize;
+    for (byte_index, &byte) in bits.iter().enumerate() {
+        let remaining_bits = bit_count - byte_index * 8;
+        let masked = if remaining_bits < 8 {
+            byte & (0xffu8 << (8 - remaining_bits))
+        } else {
+            byte
+        };
+        if masked == 0 {
+            continue;
+        }
+        if byte_index * 8 >= KEY_USAGES.len() && unknown_shown >= MAX_UNKNOWN_KEY_USAGE_BITS {
+            extra_unknown += masked.count_ones() as usize;
+            continue;
+        }
+        let limit = remaining_bits.min(8);
+        for offset in 0..limit {
+            if masked & (0x80 >> offset) == 0 {
+                continue;
+            }
+            let bit = byte_index * 8 + offset;
+            if let Some(&name) = KEY_USAGES.get(bit) {
+                names.push(name.to_string());
+            } else if unknown_shown < MAX_UNKNOWN_KEY_USAGE_BITS {
+                names.push(format!("Bit {bit}"));
+                unknown_shown += 1;
+            } else {
+                extra_unknown += 1;
+            }
+        }
+    }
+    if extra_unknown > 0 {
+        names.push(format!(
+            "and {extra_unknown} more unknown {}",
+            if extra_unknown == 1 { "bit" } else { "bits" }
+        ));
+    }
     Ok(if names.is_empty() {
         Vec::new()
     } else {
@@ -582,6 +624,40 @@ mod tests {
         assert!(key_usage(&der::bit_string(0, &[])).unwrap().is_empty());
         assert_truncations_fail(key_usage, &value);
         assert!(key_usage(&[3, 2, 8, 0]).is_err()); // More than 7 unused bits.
+        // Empty bit string with nonzero unused-bits count must not underflow.
+        assert!(key_usage(&[3, 1, 1]).is_err());
+        assert_eq!(
+            Extension::parse(&extension(&[2, 5, 29, 15], &[3, 1, 1])).lines,
+            ["Could not decode; value: 03:01:01"]
+        );
+    }
+
+    #[test]
+    fn key_usage_summarizes_excess_unknown_bits() {
+        // 1024 bytes of 0xff with 3 unused bits => 8189 set bits:
+        // 9 known + 16 shown unknown (Bit 9..Bit 24) + 8164 summarized.
+        let large = der::bit_string(3, &vec![0xff; 1024]);
+        let lines = key_usage(&large).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].starts_with("Digital Signature, "));
+        assert!(lines[0].contains("Decipher Only, Bit 9, "));
+        assert!(lines[0].ends_with("Bit 24, and 8164 more unknown bits"));
+
+        // Exactly 1 extra unknown bit uses singular "bit":
+        // 9 known + 17 unknown = 26 bits => 4 bytes with 6 unused bits.
+        let one_extra = der::bit_string(6, &[0xff, 0xff, 0xff, 0xc0]);
+        let lines = key_usage(&one_extra).unwrap();
+        assert!(lines[0].ends_with("Bit 24, and 1 more unknown bit"));
+    }
+
+    #[test]
+    fn oversized_crl_number_falls_back_to_hex() {
+        let mut oversized = vec![0x01];
+        oversized.resize(128, 0xaa);
+        let lines = crl_number(&der::integer(&oversized)).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].starts_with("0x01AA"));
+        assert_eq!(lines[0].len(), 2 + 128 * 2);
     }
 
     #[test]

@@ -17,6 +17,24 @@ All notable changes to keystore-tui are listed here. Versions follow
   (losing unsaved changes) when the open keystore is JKS or JCEKS, and no
   longer fails in a PKCS12 keystore that already holds such a key with "the
   keystore already holds this key pair". The key is copied without a chain.
+- Wipe plaintext private and secret keys more thoroughly in memory: avoid an
+  unwiped heap copy during JCEKS encryption, drop pending decrypted keys when
+  reading a certificate file fails during key import (preventing stale key
+  import state from affecting subsequent file browser flows), and wipe
+  generated EC and RSA big-integer key material on drop.
+- Harden untrusted-input parsing and formatting against CPU and memory
+  amplification: cap Java serialization superclass chains built through
+  `TC_REFERENCE` and skip collecting nested/skipped object fields, fall back to
+  hexadecimal when formatting serial or CRL numbers wider than 64 bytes, reject
+  malformed `Key Usage` bit strings with nonzero unused bits on empty content
+  and summarize unknown bits beyond 16, and cap assembled certificate chains at
+  32 certificates in PKCS12 and certificate files.
+- Fix challenge-password redaction and PEM withholding in CSR/ASN.1 rendering:
+  withhold PEM on CSRs that exceed the ASN.1 nesting depth or line limit,
+  redact elements following a `challengePassword` OID even after a preceding
+  element, withhold raw hex for malformed CSR attributes, and stop falsely
+  withholding PEM on certificates or CRLs that contain the `challengePassword`
+  OID.
 
 - Refresh the README screenshots for the current app and show them in a compact
   row with links to the full-size images.
