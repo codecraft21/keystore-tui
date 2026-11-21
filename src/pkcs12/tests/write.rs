@@ -452,6 +452,33 @@ fn recognizes_the_shape_of_a_private_key() {
 }
 
 #[test]
+fn empty_password_encodings_refuse_new_keys_without_changing_the_store() {
+    let key = synthetic_pkcs8(b"synthetic key");
+    for data in [EMPTY_PASSWORD, NUL_PASSWORD] {
+        let (entries, mut writable) = open(data, "");
+        let mut rng = TestRng(0);
+        let message =
+            "a key needs a keystore password that is not empty; change the password first (p)";
+        assert_eq!(
+            writable.insert_private_key("private", &key, &[], &mut rng),
+            Err(message)
+        );
+        assert_eq!(
+            writable.insert_secret_key("secret", &key, 0, &mut rng),
+            Err(message)
+        );
+        assert_eq!(open(&writable.encode(&mut rng).unwrap(), "").0, entries);
+        writable.set_password("changeit", &mut rng).unwrap();
+        writable
+            .insert_private_key("private", &key, &[], &mut rng)
+            .unwrap();
+        writable
+            .insert_secret_key("secret", &key, 0, &mut rng)
+            .unwrap();
+    }
+}
+
+#[test]
 fn inserted_secret_keys_are_stored_as_java_stores_them() {
     let wrapped = synthetic_pkcs8(b"synthetic secret");
     let mut writable = Writable::empty("changeit");

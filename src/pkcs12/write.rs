@@ -173,6 +173,16 @@ impl Writable {
         Ok(())
     }
 
+    fn encrypt_new_key(&self, key: &[u8], rng: &mut impl Rng) -> Result<Vec<u8>, WriteError> {
+        // Java can encode an empty store password as a NUL character.
+        if self.password().trim_end_matches('\0').is_empty() {
+            return Err(
+                "a key needs a keystore password that is not empty; change the password first (p)",
+            );
+        }
+        encrypt_key(key, &self.password, rng)
+    }
+
     /// Adds a private key, given as its PKCS #8 encoding, with its
     /// certificate chain, leaf first, and returns the new listing. The key is
     /// encrypted with the store's password, as Java expects, in a safe that
@@ -185,7 +195,7 @@ impl Writable {
         chain: &[Vec<u8>],
         rng: &mut impl Rng,
     ) -> Result<Vec<KeystoreEntry>, WriteError> {
-        let encrypted = encrypt_key(key, &self.password, rng)?;
+        let encrypted = self.encrypt_new_key(key, rng)?;
         let mut attributes = vec![friendly_name_attribute(alias)];
         if let Some((leaf, issuers)) = chain.split_first() {
             let id: [u8; 20] = Sha1::digest(leaf).into();
@@ -289,7 +299,7 @@ impl Writable {
         created: u64,
         rng: &mut impl Rng,
     ) -> Result<Vec<KeystoreEntry>, WriteError> {
-        let encrypted = encrypt_key(key, &self.password, rng)?;
+        let encrypted = self.encrypt_new_key(key, rng)?;
         let id = format!("Time {created}");
         let attributes = vec![
             friendly_name_attribute(alias),

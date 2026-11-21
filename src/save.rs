@@ -317,12 +317,6 @@ impl Document {
                         held.alias
                     )));
                 }
-                if writable.password().is_empty() {
-                    return Err(failed(
-                        "a key needs a keystore password that is not empty; change the password first (p)"
-                            .into(),
-                    ));
-                }
                 let listed = writable
                     .insert_private_key(&alias, key, chain, &mut rng)
                     .map_err(|error| failed(error.to_owned()))?;
@@ -373,12 +367,6 @@ impl Document {
                 Ok(to)
             }
             Self::Pkcs12(writable) => {
-                if writable.password().is_empty() {
-                    return Err(failed(
-                        "a key needs a keystore password that is not empty; change the password first (p)"
-                            .into(),
-                    ));
-                }
                 let wrapped = secret_key::to_pkcs8(key).ok_or_else(|| {
                     failed(format!(
                         "PKCS12 has no name for the algorithm '{}'",

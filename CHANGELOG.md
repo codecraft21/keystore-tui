@@ -11,6 +11,8 @@ All notable changes to keystore-tui are listed here. Versions follow
   read-only mode, in which an export, certificate request, or signing started
   meanwhile could act on the wrong key once the new entry was added, and a
   second generation from `S`, `g` lost the first key pair.
+- Refuse to add private or secret keys to PKCS12 stores that use Java's NUL
+  encoding for an empty password.
 
 - Refresh the README screenshots for the current app and show them in a compact
   row with links to the full-size images.
