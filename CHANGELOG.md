@@ -13,6 +13,10 @@ All notable changes to keystore-tui are listed here. Versions follow
   second generation from `S`, `g` lost the first key pair.
 - Refuse to add private or secret keys to PKCS12 stores that use Java's NUL
   encoding for an empty password.
+- Copying a private key that has no certificate no longer crashes the app
+  (losing unsaved changes) when the open keystore is JKS or JCEKS, and no
+  longer fails in a PKCS12 keystore that already holds such a key with "the
+  keystore already holds this key pair". The key is copied without a chain.
 
 - Refresh the README screenshots for the current app and show them in a compact
   row with links to the full-size images.

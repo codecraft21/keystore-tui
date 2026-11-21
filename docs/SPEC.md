@@ -458,7 +458,7 @@ any existing incomplete-entry warnings.
   for this, and a PKCS12 keystore a password that is not empty.
 - A PKCS12 keystore refuses a key pair whose certificate already belongs to
   one of its private keys, because the key and certificate are paired by the
-  certificate's digest.
+  certificate's digest. A key without a certificate pairs with none.
 - Whether the certificates are trusted or valid is not checked.
 
 ### Generating key pairs
@@ -866,6 +866,11 @@ any existing incomplete-entry warnings.
 - A certificate is added as a trusted certificate, and a private key with its
   certificate chain, protected with the open keystore's password, under the
   same rules as the two imports above. Creation dates are not copied.
+- A private key stored without a certificate, as Java allows, is copied
+  without one into any format: JKS and JCEKS store it with an empty chain,
+  which Java reads, and PKCS12 stores it without a local key ID. It is never
+  taken for a key pair the PKCS12 keystore already holds, including another
+  key without a certificate.
 
 ### Exporting private keys
 

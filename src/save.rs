@@ -295,7 +295,8 @@ impl Document {
                     to,
                     KeystoreEntry {
                         alias,
-                        certificate: certificate::summarize(&chain[0]),
+                        // Like Java, a key may be stored without a chain.
+                        certificate: chain.first().and_then(|leaf| certificate::summarize(leaf)),
                         content: Content::Certificates {
                             kind: Kind::PrivateKey,
                             certificates: chain.to_vec(),
@@ -307,10 +308,13 @@ impl Document {
             }
             Self::Pkcs12(writable) => {
                 // The key and its certificate are paired by the
-                // certificate's digest, which must not pair two keys.
-                if let Some(held) = entries.iter().find(|entry| {
-                    entry.kind() == Kind::PrivateKey.label()
-                        && entry.certificates().first() == chain.first()
+                // certificate's digest, which must not pair two keys. A key
+                // without a certificate is paired with none.
+                if let Some(held) = chain.first().and_then(|leaf| {
+                    entries.iter().find(|entry| {
+                        entry.kind() == Kind::PrivateKey.label()
+                            && entry.certificates().first() == Some(leaf)
+                    })
                 }) {
                     return Err(failed(format!(
                         "the keystore already holds this key pair as '{}'",

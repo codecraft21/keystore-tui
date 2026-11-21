@@ -228,7 +228,8 @@ empty password, press `p` to set a password.
   and those whose alias already exists are skipped; a single entry lets you
   edit its alias. Private keys are stored under the open keystore's password.
   Secret keys are copied into JCEKS and PKCS12 keystores. Keys with a
-  password of their own are not copied.
+  password of their own are not copied. A private key without a certificate
+  is copied without one into any format.
 - **Generate a secret key:** in a JCEKS or PKCS12 keystore, press `G`, choose
   the algorithm with `Left` / `Right` (AES with 128, 192, or 256 bits, or
   HMAC with SHA-1, SHA-256, SHA-384, or SHA-512), press `Enter`, and confirm
