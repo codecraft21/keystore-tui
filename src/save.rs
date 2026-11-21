@@ -953,6 +953,12 @@ fn replace_with(
     }
 }
 
+/// Whether a directory entry already exists at `path`, including a dangling
+/// symbolic link that `Path::exists` would report as missing.
+pub(crate) fn path_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
 pub enum Outcome {
     Editing,
     Cancelled,
@@ -994,7 +1000,7 @@ impl SaveAsPrompt {
                 1 => format!("{stem}{extension}"),
                 n => format!("{stem}-{n}{extension}"),
             })
-            .find(|name| !directory.join(name).exists())
+            .find(|name| !path_exists(&directory.join(name)))
             .unwrap_or_else(|| format!("{stem}{extension}"));
         let path = if directory.is_absolute() {
             directory.join(name)
@@ -1540,5 +1546,42 @@ mod tests {
             assert_eq!(fs::read(&path).unwrap(), b"updated");
             assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_exists_detects_dangling_symlinks_for_save_and_export_suggestions() {
+        let directory = TestDirectory::new();
+        let dangling_store = directory.path().join("keystore.jks");
+        std::os::unix::fs::symlink(directory.path().join("missing-target"), &dangling_store)
+            .unwrap();
+        assert!(!dangling_store.exists());
+        assert!(path_exists(&dangling_store));
+        let prompt = SaveAsPrompt::for_new(directory.path().to_path_buf());
+        assert_eq!(
+            &*prompt.path,
+            directory
+                .path()
+                .join("keystore-2.jks")
+                .to_string_lossy()
+                .as_ref()
+        );
+
+        let dangling_export = directory.path().join("leaf.pem");
+        std::os::unix::fs::symlink(directory.path().join("missing-export"), &dangling_export)
+            .unwrap();
+        let export = crate::export::ExportPrompt::new(
+            crate::export::Scope::Certificate,
+            directory.path(),
+            "leaf",
+        );
+        assert_eq!(
+            &*export.path,
+            directory
+                .path()
+                .join("leaf-2.pem")
+                .to_string_lossy()
+                .as_ref()
+        );
     }
 }

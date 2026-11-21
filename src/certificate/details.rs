@@ -96,25 +96,32 @@ impl Details {
     }
 
     fn read_authority(&mut self, value: &[u8]) -> CryptoResult<()> {
-        let mut sequence = Reader::new(value).read_sequence()?;
+        let mut reader = Reader::new(value);
+        let mut sequence = reader.read_sequence()?;
+        reader.expect_end()?;
+        let mut key_id = None;
+        let mut serial = None;
+        let mut issuers = Vec::new();
         while !sequence.is_empty() {
             let (tag, value) = sequence.read_tlv()?;
             if tag == der::Tag::context(0) {
-                self.authority_key_id = Some(value.to_vec());
+                key_id = Some(value.to_vec());
             } else if tag == der::Tag::context(2) {
-                self.authority_serial = Some(value.to_vec());
+                serial = Some(value.to_vec());
             } else if tag == der::Tag::context_constructed(1) {
                 let mut names = Reader::new(value);
                 while !names.is_empty() {
                     if names.peek_tag()? == der::Tag::context_constructed(4) {
-                        self.authority_issuers
-                            .push(Name::parse(&mut names.read_explicit(4)?)?);
+                        issuers.push(Name::parse(&mut names.read_explicit(4)?)?);
                     } else {
                         names.read_raw_tlv()?;
                     }
                 }
             }
         }
+        self.authority_key_id = key_id;
+        self.authority_serial = serial;
+        self.authority_issuers = issuers;
         Ok(())
     }
 }
@@ -593,5 +600,39 @@ mod tests {
         let (exact, warning) = pool.chain(&certs[total - MAX_CHAIN_DEPTH]);
         assert_eq!(exact.len(), MAX_CHAIN_DEPTH);
         assert_eq!(warning, None);
+    }
+
+    #[test]
+    fn malformed_authority_key_identifier_leaves_no_partial_state() {
+        // Valid [0] keyIdentifier followed by a malformed [1] authorityCertIssuer.
+        let bad_aki = der::sequence(
+            &[
+                der::implicit(0, false, &[7, 8, 9]),
+                der::implicit(1, true, &[0xa4, 0x05, 0x30]),
+            ]
+            .concat(),
+        );
+        let cert = metadata_certificate(
+            "leaf",
+            "issuer",
+            &[1],
+            &[extension(&[2, 5, 29, 35], &bad_aki)],
+        );
+        let info = Details::parse(&cert).unwrap();
+        assert_eq!(info.authority_key_id, None);
+        assert_eq!(info.authority_serial, None);
+        assert!(info.authority_issuers.is_empty());
+
+        // Trailing bytes after the SEQUENCE also fail cleanly without leaking state.
+        let mut trailing_aki = der::sequence(&der::implicit(0, false, &[7, 8, 9]));
+        trailing_aki.push(0x00);
+        let cert = metadata_certificate(
+            "leaf",
+            "issuer",
+            &[1],
+            &[extension(&[2, 5, 29, 35], &trailing_aki)],
+        );
+        let info = Details::parse(&cert).unwrap();
+        assert_eq!(info.authority_key_id, None);
     }
 }

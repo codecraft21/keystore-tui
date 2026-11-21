@@ -329,3 +329,39 @@ fn alias_prompt_scrolls_long_and_wide_unicode_aliases() {
     // Each 2-column glyph occupies two buffer cells ("日" + " ").
     assert!(rendered.contains("日 end_"), "{rendered}");
 }
+
+#[test]
+fn deleting_the_last_entry_clears_the_filter() {
+    let directory = TestDirectory::new();
+    let (mut app, _) = editing(&directory);
+    while app.entries.len() > 1 {
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('y'));
+    }
+    assert_eq!(app.entries.len(), 1);
+    let alias = app.entries[0].alias.clone();
+    press(&mut app, KeyCode::Char('/'));
+    type_password(&mut app, &alias);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.filter, alias);
+
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('y'));
+    assert!(app.entries.is_empty());
+    assert!(app.filter.is_empty());
+    assert!(!app.editing_filter);
+}
+
+#[test]
+fn confirm_prompt_ignores_modified_y_keys() {
+    let directory = TestDirectory::new();
+    let (mut app, _) = editing(&directory);
+    let initial = app.entries.len();
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        press(&mut app, KeyCode::Char('d'));
+        assert!(app.confirm.is_some());
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), modifiers));
+        assert!(app.confirm.is_none());
+        assert_eq!(app.entries.len(), initial, "modifiers {modifiers:?}");
+    }
+}

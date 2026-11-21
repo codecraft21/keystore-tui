@@ -40,7 +40,10 @@ impl PathInput {
                 let end = self.next();
                 self.text.replace_range(self.cursor..end, "");
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('u')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 self.text.clear();
                 self.cursor = 0;
             }
@@ -248,6 +251,11 @@ mod tests {
         press(&mut input, KeyCode::Home);
         press(&mut input, KeyCode::Left);
         press(&mut input, KeyCode::Backspace);
+        assert_eq!(&*input, "ab");
+        assert!(!input.handle_key(KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        )));
         assert_eq!(&*input, "ab");
         assert!(input.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)));
         assert_eq!(&*input, "");

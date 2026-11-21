@@ -49,7 +49,7 @@ use std::{
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Cell, Paragraph, Row, Table, TableState, Wrap},
@@ -269,7 +269,9 @@ impl App {
         }
         self.message = None;
         if let Some(confirm) = self.confirm.take() {
-            return key.code == KeyCode::Char('y') && self.confirmed(confirm);
+            return key.code == KeyCode::Char('y')
+                && is_text_input(key.modifiers)
+                && self.confirmed(confirm);
         }
         if key.code == KeyCode::Char('q') && !self.typing() {
             return self.quit();
@@ -419,6 +421,10 @@ impl App {
                 document.remove(&mut self.entries, index);
                 self.modified = true;
                 self.message = Some((message, false));
+                if self.entries.is_empty() {
+                    self.filter.clear();
+                    self.editing_filter = false;
+                }
                 // Indices after the deleted entry shifted, so keep the
                 // selection at the same row instead of following an entry.
                 let position = self.entries_state.selected();
@@ -685,6 +691,7 @@ impl App {
         self.entries_state =
             TableState::default().with_selected((!self.visible.is_empty()).then_some(0));
         self.entry_details = None;
+        self.startup_warning = None;
         self.error = None;
         self.warning = None;
         // Dropping the previous document wipes its password.
@@ -961,13 +968,25 @@ impl App {
             .map(|request| &request.form))
         {
             frame.render_widget(Paragraph::new(shortcuts), help);
-            form.draw(frame);
+            let form_area = Rect {
+                height: frame.area().height.saturating_sub(help.height),
+                ..frame.area()
+            };
+            form.draw(frame, form_area);
         } else if let Some(signing) = self.signing.as_ref().filter(|s| s.naming.is_none()) {
             frame.render_widget(Paragraph::new(shortcuts), help);
-            signing.form.draw(frame);
+            let form_area = Rect {
+                height: frame.area().height.saturating_sub(help.height),
+                ..frame.area()
+            };
+            signing.form.draw(frame, form_area);
         } else if let Some(revoking) = self.revoking.as_ref().filter(|r| r.naming.is_none()) {
             frame.render_widget(Paragraph::new(shortcuts), help);
-            revoking.form.draw(frame);
+            let form_area = Rect {
+                height: frame.area().height.saturating_sub(help.height),
+                ..frame.area()
+            };
+            revoking.form.draw(frame, form_area);
         } else {
             frame.render_widget(Paragraph::new(shortcuts), help);
         }

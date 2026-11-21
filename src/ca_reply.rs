@@ -27,9 +27,14 @@ pub fn issued_chain(
     // from where they end.
     let reply: Vec<&[u8]> = chains.iter().flatten().map(Vec::as_slice).collect();
     let (mut chain, _) = details::chain(&leaf, &reply);
-    if let Some(last) = chain.pop() {
-        let (rest, _) = details::chain(&last, held);
-        chain.extend(rest);
+    if let Some(last) = chain.last() {
+        let (rest, _) = details::chain(last, held);
+        for certificate in rest.into_iter().skip(1) {
+            if chain.len() >= details::MAX_CHAIN_DEPTH || chain.contains(&certificate) {
+                break;
+            }
+            chain.push(certificate);
+        }
     }
     Ok(Some(chain))
 }
@@ -149,5 +154,15 @@ mod tests {
         // A reply for another key, and a key that cannot be matched.
         assert_eq!(issued(&[vec![other.clone()]], &[&root]), Ok(None));
         assert!(issued_chain(&synthetic_pkcs8(&[1]), &[vec![other]], &[]).is_err());
+
+        // A 3-certificate cycle spanning the reply and held certificates does
+        // not duplicate certificates already in the chain.
+        let a = ed25519_certificate("a", "b", 7, 8);
+        let b = ed25519_certificate("b", "c", 8, 9);
+        let c = ed25519_certificate("c", "a", 9, 7);
+        assert_eq!(
+            issued(&[vec![a.clone(), b.clone()]], &[&c, &a]),
+            Ok(Some(vec![a, b, c]))
+        );
     }
 }

@@ -196,8 +196,8 @@ pub fn alternative_names(text: &str) -> Result<Vec<GeneralName>, String> {
                     IpAddr::V4(address) => address.octets().to_vec(),
                     IpAddr::V6(address) => address.octets().to_vec(),
                 }))
-            } else if !name.is_ascii() || name.contains(char::is_whitespace) {
-                // DNS names and email addresses are stored as ASCII.
+            } else if !name.bytes().all(|byte| byte.is_ascii_graphic()) {
+                // DNS names and email addresses are stored as printable ASCII.
                 Err(format!(
                     "'{name}' is not a plain ASCII name; write international names in punycode."
                 ))
@@ -253,8 +253,9 @@ pub struct Issuer<'a> {
 }
 
 /// Why what the certificate signs may be rejected: it is not marked as a
-/// certificate authority, or its key usage leaves certificate signing out.
-/// `None` for a CA certificate, and for one that cannot be read.
+/// certificate authority, or its key usage leaves certificate or CRL signing
+/// out. `None` for a CA certificate that allows both, and for one that cannot
+/// be read.
 pub fn ca_warning(certificate: &[u8]) -> Option<&'static str> {
     let certificate = Certificate::parse(certificate).ok()?;
     let tbs = certificate.tbs();
@@ -263,8 +264,15 @@ pub fn ca_warning(certificate: &[u8]) -> Option<&'static str> {
         .is_some_and(|constraints| constraints.ca)
     {
         Some("its certificate is not a CA certificate")
-    } else if tbs.key_usage().is_some_and(|usage| !usage.key_cert_sign) {
-        Some("its key usage does not allow signing certificates")
+    } else if let Some(usage) = tbs.key_usage() {
+        match (usage.key_cert_sign, usage.crl_sign) {
+            (false, false) => {
+                Some("its key usage does not allow signing certificates or revocation lists")
+            }
+            (false, true) => Some("its key usage does not allow signing certificates"),
+            (true, false) => Some("its key usage does not allow signing revocation lists"),
+            (true, true) => None,
+        }
     } else {
         None
     }
@@ -618,6 +626,12 @@ mod tests {
                 .unwrap_err()
                 .contains("ASCII")
         );
+        for bad in ["bad\0host", "bad\x07host", "bad\x1bhost", "bad\x7fhost"] {
+            assert!(
+                alternative_names(bad).unwrap_err().contains("ASCII"),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]
@@ -923,39 +937,57 @@ mod tests {
             ca_warning(&ed25519_certificate("bare", "bare", 9, 9)),
             Some("its certificate is not a CA certificate")
         );
-        // A CA whose key usage leaves certificate signing out.
+        // A CA whose key usage leaves certificate signing and/or CRL signing out.
         let decoded = decode(&key).unwrap();
-        let content = Content {
-            subject: Name::from_common_name("limited"),
-            public: public_key(&decoded).unwrap(),
-            serial: vec![1],
-            days: 1,
-            extensions: vec![
-                Extension::new(
-                    object(oid::OID_BASIC_CONSTRAINTS),
-                    true,
-                    BasicConstraints {
-                        ca: true,
-                        path_len: None,
-                    }
-                    .encode(),
-                ),
-                Extension::new(
-                    object(oid::OID_KEY_USAGE),
-                    true,
-                    KeyUsage {
-                        crl_sign: true,
-                        ..KeyUsage::default()
-                    }
-                    .encode(),
-                ),
-            ],
+        let ca_with_usage = |usage: KeyUsage| {
+            let content = Content {
+                subject: Name::from_common_name("limited"),
+                public: public_key(&decoded).unwrap(),
+                serial: vec![1],
+                days: 1,
+                extensions: vec![
+                    Extension::new(
+                        object(oid::OID_BASIC_CONSTRAINTS),
+                        true,
+                        BasicConstraints {
+                            ca: true,
+                            path_len: None,
+                        }
+                        .encode(),
+                    ),
+                    Extension::new(object(oid::OID_KEY_USAGE), true, usage.encode()),
+                ],
+            };
+            super::certificate(content, Some(&decoded), None, NOW, &mut TestRng(0)).unwrap()
         };
-        let limited =
-            super::certificate(content, Some(&decoded), None, NOW, &mut TestRng(0)).unwrap();
         assert_eq!(
-            ca_warning(&limited),
+            ca_warning(&ca_with_usage(KeyUsage {
+                crl_sign: true,
+                ..KeyUsage::default()
+            })),
             Some("its key usage does not allow signing certificates")
+        );
+        assert_eq!(
+            ca_warning(&ca_with_usage(KeyUsage {
+                key_cert_sign: true,
+                ..KeyUsage::default()
+            })),
+            Some("its key usage does not allow signing revocation lists")
+        );
+        assert_eq!(
+            ca_warning(&ca_with_usage(KeyUsage {
+                digital_signature: true,
+                ..KeyUsage::default()
+            })),
+            Some("its key usage does not allow signing certificates or revocation lists")
+        );
+        assert_eq!(
+            ca_warning(&ca_with_usage(KeyUsage {
+                key_cert_sign: true,
+                crl_sign: true,
+                ..KeyUsage::default()
+            })),
+            None
         );
         assert_eq!(ca_warning(&[0x30, 0]), None);
     }

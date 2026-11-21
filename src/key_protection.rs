@@ -144,6 +144,18 @@ fn jks_keystream(password: &[u8], salt: &[u8], data: &mut [u8]) {
     }
 }
 
+/// Constant-time equality for fixed-length MACs and integrity digests.
+pub(crate) fn ct_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&a, &b) in left.iter().zip(right.iter()) {
+        diff |= std::hint::black_box(a ^ b);
+    }
+    std::hint::black_box(diff) == 0
+}
+
 fn jks_digest(password: &[u8], key: &[u8]) -> [u8; SHA1_SIZE] {
     Sha1::new()
         .chain_update(password)
@@ -162,7 +174,7 @@ fn recover_jks(data: &[u8], password: &str) -> Result<Zeroizing<Vec<u8>>, Error>
     let password = jks_password(password);
     let mut key = Zeroizing::new(encrypted.to_vec());
     jks_keystream(&password, salt, &mut key);
-    if jks_digest(&password, &key)[..] == *digest {
+    if ct_eq(&jks_digest(&password, &key), digest) {
         Ok(key)
     } else {
         Err(Error::Password)
@@ -421,6 +433,15 @@ mod tests {
             assert_eq!(*encoded, expected);
             assert_eq!(encoded.capacity(), expected.len());
         }
+    }
+
+    #[test]
+    fn constant_time_equality_checks_length_and_every_byte() {
+        assert!(ct_eq(&[], &[]));
+        assert!(ct_eq(&[1, 2, 3, 4], &[1, 2, 3, 4]));
+        assert!(!ct_eq(&[1, 2, 3, 4], &[0, 2, 3, 4]));
+        assert!(!ct_eq(&[1, 2, 3, 4], &[1, 2, 3, 5]));
+        assert!(!ct_eq(&[1, 2, 3], &[1, 2, 3, 4]));
     }
 
     #[test]

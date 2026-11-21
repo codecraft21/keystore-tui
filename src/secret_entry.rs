@@ -195,7 +195,7 @@ impl App {
         match export.prompt.handle_key(key) {
             Outcome::Editing => {}
             Outcome::Cancelled => self.secret_export = None,
-            Outcome::Save(path) if path.exists() => {
+            Outcome::Save(path) if save::path_exists(&path) => {
                 self.message = Some((
                     format!("'{}' already exists; choose another name.", path.display()),
                     true,

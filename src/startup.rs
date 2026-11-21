@@ -16,7 +16,7 @@ pub(crate) const USAGE: &str = "Usage: keystore-tui [path]";
 pub(crate) fn help() -> String {
     format!(
         "keystore-tui {}\n\
-         Inspect JKS, JCEKS, and PKCS12 keystores, certificate files, and certificate requests.\n\
+         Inspect and edit JKS, JCEKS, and PKCS12 keystores, and inspect certificates, requests, and revocation lists.\n\
          \n\
          {USAGE}\n\
          \n\
@@ -64,6 +64,7 @@ pub(crate) fn prepare(
     let store = match load(&path) {
         Ok(Loaded::Store(store)) => store,
         Ok(Loaded::Certificates(file)) => {
+            let path = crate::canonical_path::canonicalize(&path).unwrap_or(path);
             app.show_certificate_file(path, file);
             return Ok(app);
         }
@@ -72,6 +73,7 @@ pub(crate) fn prepare(
             return Ok(app);
         }
     };
+    let path = crate::canonical_path::canonicalize(&path).unwrap_or(path);
     let result = match store.verify("") {
         Ok(verified) => {
             app.show_verified(path, verified);
@@ -282,7 +284,11 @@ mod tests {
             panic!("unexpected prompt")
         })
         .unwrap();
-        assert!(app.keystore_path.is_some());
+        assert!(
+            app.keystore_path
+                .as_deref()
+                .is_some_and(std::path::Path::is_absolute)
+        );
         for ext in ["jks", "jceks", "p12"] {
             for (password, success) in [("changeit", true), ("wrong", false)] {
                 let result = prepare(
@@ -297,7 +303,11 @@ mod tests {
                 );
                 assert_eq!(result.is_ok(), success);
                 if let Ok(app) = result {
-                    assert!(app.keystore_path.is_some());
+                    assert!(
+                        app.keystore_path
+                            .as_deref()
+                            .is_some_and(std::path::Path::is_absolute)
+                    );
                 }
             }
         }

@@ -18,7 +18,7 @@ fn chain_diagnostics_navigation() {
         "Chain diagnostics",
         "Trust: not checked",
         "Revocation: not checked",
-        "certificate.der'",
+        "Path: '",
     ]);
     app.resize(60, 24);
     app.send(b"\x1b[F");

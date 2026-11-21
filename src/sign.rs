@@ -35,6 +35,19 @@ pub struct Signing {
     pub naming: Option<(signing::Terms, bool, ExportPrompt)>,
 }
 
+#[cfg(test)]
+impl Signing {
+    pub(crate) fn for_test(form: SignForm) -> Self {
+        Self {
+            signer: 0,
+            file: String::new(),
+            request: Vec::new(),
+            form,
+            naming: None,
+        }
+    }
+}
+
 /// A certificate revocation list being signed with the private key at
 /// `signer` of the app's entries.
 pub struct Revoking {

@@ -9,7 +9,7 @@ use crown::{
 use ratatui::{
     Frame,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Clear, Paragraph, Wrap},
@@ -233,7 +233,10 @@ impl Form {
             (KeyCode::Backspace, None) => {
                 text.pop();
             }
-            (KeyCode::Char('u'), None) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            (KeyCode::Char('u'), None)
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 text.clear();
             }
             (KeyCode::Char(ch), None) if crate::is_text_input(key.modifiers) => text.push(ch),
@@ -303,10 +306,11 @@ impl Form {
         }
     }
 
-    /// Draws the form over the middle of the main view.
-    pub fn draw(&self, frame: &mut Frame) {
-        let screen = frame.area();
-        if screen.width < WIDTH || screen.height < HEIGHT {
+    /// Draws the form centered within `bounds` (the area above the bottom help
+    /// bar).
+    pub fn draw(&self, frame: &mut Frame, bounds: Rect) {
+        if bounds.width < WIDTH || bounds.height < HEIGHT {
+            let screen = frame.area();
             frame.render_widget(Clear, screen);
             frame.render_widget(
                 Paragraph::new("Resize terminal for the key pair form. Esc Cancel | Ctrl+C Quit")
@@ -315,7 +319,7 @@ impl Form {
             );
             return;
         }
-        let area = screen.centered(Constraint::Length(WIDTH), Constraint::Length(HEIGHT));
+        let area = bounds.centered(Constraint::Length(WIDTH), Constraint::Length(HEIGHT));
         let block = Block::bordered().title(self.title.as_str());
         let inner = block.inner(area);
         frame.render_widget(Clear, area);
@@ -385,7 +389,9 @@ mod tests {
 
     fn screen(form: &Form, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| form.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| form.draw(frame, frame.area()))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
         buffer
             .content

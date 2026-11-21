@@ -100,7 +100,10 @@ impl App {
             KeyCode::Backspace => {
                 prompt.alias.pop();
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('u')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 prompt.alias.clear();
             }
             KeyCode::Char(ch) if crate::is_text_input(key.modifiers) => prompt.alias.push(ch),

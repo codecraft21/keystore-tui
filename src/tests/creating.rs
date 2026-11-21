@@ -225,3 +225,73 @@ fn an_incompletely_read_pkcs12_keystore_cannot_be_changed() {
     }
     assert_eq!(fs::read(&path).unwrap(), data);
 }
+
+#[test]
+fn creating_a_keystore_clears_a_startup_warning() {
+    let directory = TestDirectory::in_working_directory();
+    let mut app =
+        crate::startup::prepare(Some("missing.jks".into()), || panic!("unexpected prompt"))
+            .unwrap();
+    assert!(app.startup_warning.is_some());
+
+    press(&mut app, KeyCode::Char('n'));
+    let path = directory.path().join("fresh.jks");
+    type_alias(&mut app, &path.to_string_lossy());
+    type_new_password(&mut app, "secret", "secret");
+    assert!(app.startup_warning.is_none());
+    assert!(app.keystore_path.is_some());
+}
+
+#[test]
+fn centered_forms_do_not_overlap_bottom_help_bar_on_short_terminals() {
+    let directory = TestDirectory::new();
+    let path = directory.path().join("store.jks");
+    fs::write(
+        &path,
+        include_bytes!("../../tests/fixtures/trusted-cert.jks"),
+    )
+    .unwrap();
+    let mut app = App::default();
+    app.open_file(path);
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+
+    // Open the generate key pair form (certificate_form::Form, HEIGHT = 16).
+    press(&mut app, KeyCode::Char('g'));
+    assert!(app.generating.is_some());
+    // At height 16 (15 rows above the 1-line help bar), the resize notice is shown.
+    let short = screen(&mut app, 80, 16);
+    assert!(short.contains("Resize terminal for the key pair form."));
+    // At heights 17..=20, the form fits above the help bar without covering it.
+    for height in 17..=20 {
+        let rendered = screen(&mut app, 80, height);
+        let last_line = rendered.lines().last().unwrap();
+        assert!(
+            last_line.contains("Up/Down Tab Field"),
+            "help bar overlapped at height {height}:\n{rendered}"
+        );
+        assert!(rendered.contains("Generate key pair"), "height {height}");
+    }
+    press(&mut app, KeyCode::Esc);
+
+    // Open the signing form (sign_form::SignForm, HEIGHT = 16) via App state.
+    app.signing = Some(crate::sign::Signing::for_test(
+        crate::sign_form::SignForm::new(
+            " Sign request ".into(),
+            "CN=leaf".into(),
+            "Ed25519".into(),
+            &[],
+        ),
+    ));
+    let short = screen(&mut app, 80, 16);
+    assert!(short.contains("Resize terminal for the signing form."));
+    for height in 17..=20 {
+        let rendered = screen(&mut app, 80, height);
+        let last_line = rendered.lines().last().unwrap();
+        assert!(
+            last_line.contains("Up/Down Tab Field"),
+            "help bar overlapped at height {height}:\n{rendered}"
+        );
+        assert!(rendered.contains("Sign request"), "height {height}");
+    }
+}

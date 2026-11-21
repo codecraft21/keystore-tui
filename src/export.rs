@@ -121,7 +121,7 @@ impl ExportPrompt {
                 1 => PathBuf::from(format!("{stem}.{extension}")),
                 n => PathBuf::from(format!("{stem}-{n}.{extension}")),
             })
-            .find(|name| !directory.join(name).exists())
+            .find(|name| !crate::save::path_exists(&directory.join(name)))
             .unwrap_or_else(|| PathBuf::from(format!("{stem}.{extension}")));
         let path = if directory.is_absolute() {
             directory.join(name)

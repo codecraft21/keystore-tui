@@ -332,6 +332,7 @@ impl EntryDetails {
         self.message = None;
         match key.code {
             KeyCode::Esc => return true,
+            KeyCode::Char(_) if !crate::is_text_input(key.modifiers) => {}
             KeyCode::Char(letter @ ('x' | 'X')) => {
                 if let Some(scope) = self.export_scope(letter == 'X') {
                     self.ask_export(scope);
@@ -1576,5 +1577,22 @@ mod tests {
         assert!(text.contains("Issuer: CN=evil\\u{a}Issuer: CN=Trusted\\u{1b}[31m"));
         assert!(!text.contains("\nIssuer: CN=Trusted"));
         assert!(!text.contains('\x1b'));
+    }
+
+    #[test]
+    fn detail_shortcuts_ignore_control_and_alt_modifiers() {
+        use ratatui::crossterm::event::KeyModifiers;
+        let mut view = EntryDetails::new(
+            &entry(vec![metadata_certificate("leaf", "issuer", &[1], &[])]),
+            Path::new(""),
+        );
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            for letter in ['x', 'X', 'K', 'a', 'p', 'd', 'f'] {
+                assert!(!view.handle_event(KeyEvent::new(KeyCode::Char(letter), modifiers)));
+                assert!(view.export.is_none(), "{modifiers:?} + {letter}");
+                assert_eq!(view.pane, Pane::Details, "{modifiers:?} + {letter}");
+                assert!(!view.sha1, "{modifiers:?} + {letter}");
+            }
+        }
     }
 }

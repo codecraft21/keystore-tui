@@ -42,6 +42,7 @@ document and the usage reference, and also the README if its overview changes.
   - [Weak cryptography](#weak-cryptography)
   - [Extensions](#extensions)
   - [Certificate hierarchy](#certificate-hierarchy)
+  - [Signature checks](#signature-checks)
   - [Exporting](#exporting)
   - [Small terminals](#small-terminals)
 - [Visual style](#visual-style)
@@ -111,16 +112,18 @@ an incorrect password or failed integrity check exits with code 1. Escape,
 Ctrl+C, Ctrl+D, or an input error also exits non-zero. Password buffers are wiped
 and terminal settings restored after input.
 
-Standalone certificate files (PEM, DER, and PKCS#7) and PKCS#10 requests use
+Standalone certificate files (PEM, DER, and PKCS#7), PKCS#10 requests, and
+certificate revocation lists use
 the same loader as the file browser and open without prompting for a password.
-A file with exactly one certificate or request opens its detail screen
+A file with exactly one certificate, request, or revocation list opens its detail screen
 directly, as described in [Certificate files](#certificate-files). Skipped-PEM
 block warnings are retained for display on the entry list.
 
 Missing paths, directories, unreadable files, malformed files, and unsupported
 files open the empty TUI with
 a yellow message in the bottom status area. Structural errors discovered after
-password verification behave the same way. Opening another file clears this
+password verification behave the same way. Opening another file or creating a
+new keystore clears this
 message; interactive errors retain their existing red styling. A normal quit
 after a startup warning exits successfully. Successfully opened stores retain
 any existing incomplete-entry warnings.
@@ -294,7 +297,7 @@ any existing incomplete-entry warnings.
 - Every entry is listed, even when several entries share an alias. Entries are
   sorted by alias by default; entries sharing an alias keep their stored order.
 - Columns: Alias, Type, Algorithm, Key size, Expires, Crypto. The meaning of
-  each column is in the README.
+  each column is in [`REFERENCE.md`](REFERENCE.md#entry-list).
 - For a private-key entry, the certificate used for the columns is the first one
   in its chain. In PKCS12, that is the certificate that shares the key's local
   key ID.
@@ -654,9 +657,11 @@ any existing incomplete-entry warnings.
 - Signing is not refused when the signer's certificate is not a certificate
   authority's, but the first line then ends with a yellow warning: `Warning:
   its certificate is not a CA certificate.` when its basic constraints are
-  missing or do not mark a CA, or else `Warning: its key usage does not
-  allow signing certificates.` when it has a key usage without certificate
-  signing.
+  missing or do not mark a CA, `Warning: its key usage does not allow signing
+  certificates.` when its key usage omits certificate signing, `Warning: its
+  key usage does not allow signing revocation lists.` when its key usage omits
+  CRL signing, or `Warning: its key usage does not allow signing certificates
+  or revocation lists.` when it omits both.
 - Every certificate signed this way is version 3. Its issuer is the signer's
   subject, and it is signed with the algorithm a [generated key
   pair](#generating-key-pairs)'s certificate uses for the signer's type of
