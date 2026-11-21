@@ -13,12 +13,11 @@ use crown::{
         der,
         oid::{self, ObjectIdentifier},
     },
-    bn::Bn,
+    bn::{Bn, Montgomery},
     ec::{self, CurveId},
     ecdh,
-    error::{CryptoError, CryptoResult},
     rng::Rng,
-    rsa::{RsaPrivateKey, der::rsa_private_key_der},
+    rsa::der::rsa_private_key_der,
     x509::keys::encode_ec_private_key,
 };
 use ratatui::{
@@ -72,19 +71,62 @@ impl Algorithm {
 
 const NOT_GENERATED: &str = "The key pair could not be generated.";
 
+/// A source of random bytes whose requests can fail.
+trait TryRng {
+    fn try_fill_bytes(&mut self, out: &mut [u8]) -> Result<(), String>;
+}
+
+impl TryRng for OsRng {
+    fn try_fill_bytes(&mut self, out: &mut [u8]) -> Result<(), String> {
+        OsRng::try_fill_bytes(self, out)
+    }
+}
+
+#[cfg(test)]
+struct InfallibleRng<'a, R>(&'a mut R);
+
+#[cfg(test)]
+impl<R: Rng> TryRng for InfallibleRng<'_, R> {
+    fn try_fill_bytes(&mut self, out: &mut [u8]) -> Result<(), String> {
+        self.0.fill_bytes(out);
+        Ok(())
+    }
+}
+
+/// Adapts a [`TryRng`] to `crown`'s infallible [`Rng`], recording the first
+/// error and skipping further draws once it has failed.
+struct TryRngAdapter<'a, R> {
+    rng: &'a mut R,
+    error: Option<String>,
+}
+
+impl<R: TryRng> Rng for TryRngAdapter<'_, R> {
+    fn fill_bytes(&mut self, out: &mut [u8]) {
+        if self.error.is_none()
+            && let Err(error) = self.rng.try_fill_bytes(out)
+        {
+            self.error = Some(error);
+        }
+    }
+}
+
 /// A new private key of this algorithm, as PKCS #8.
+#[cfg(test)]
 pub fn key_pair(algorithm: Algorithm, rng: &mut impl Rng) -> Result<Key, String> {
+    try_key_pair(algorithm, &mut InfallibleRng(rng))
+}
+
+fn try_key_pair(algorithm: Algorithm, rng: &mut impl TryRng) -> Result<Key, String> {
     match algorithm {
         Algorithm::Rsa(bits) => rsa(bits, rng),
         Algorithm::Ec(curve) => elliptic(curve, rng),
         Algorithm::Ed25519 => {
             let mut seed = Zeroizing::new([0; 32]);
-            rng.fill_bytes(&mut *seed);
+            rng.try_fill_bytes(&mut *seed)?;
             let key = Zeroizing::new(der::octet_string(&*seed));
             Ok(pkcs8(&der::oid(&object(oid::OID_ED25519)), &key))
         }
     }
-    .map_err(|_| NOT_GENERATED.into())
 }
 
 fn object(arcs: &[u64]) -> ObjectIdentifier {
@@ -121,16 +163,24 @@ impl Drop for ZeroizingBn {
     }
 }
 
-fn elliptic(curve: CurveId, rng: &mut impl Rng) -> CryptoResult<Key> {
+fn elliptic(curve: CurveId, rng: &mut impl TryRng) -> Result<Key, String> {
     let arcs = match curve {
         CurveId::P256 => oid::OID_SECP256R1,
         CurveId::P384 => oid::OID_SECP384R1,
         CurveId::P521 => oid::OID_SECP521R1,
     };
-    let (scalar, public) = ecdh::generate(curve, rng)?;
+    let mut adapter = TryRngAdapter { rng, error: None };
+    let result = ecdh::generate(curve, &mut adapter);
+    if let Some(error) = adapter.error {
+        return Err(error);
+    }
+    let (scalar, public) = result.map_err(|_| NOT_GENERATED.to_owned())?;
     let scalar = ZeroizingBn(scalar);
     let public = public.to_bytes_with(&ec::curve(curve));
-    let key = Zeroizing::new(encode_ec_private_key(arcs, &scalar, Some(&public))?);
+    let key = Zeroizing::new(
+        encode_ec_private_key(arcs, &scalar, Some(&public))
+            .map_err(|_| NOT_GENERATED.to_owned())?,
+    );
     let algorithm = [
         der::oid(&object(oid::OID_EC_PUBLIC_KEY)),
         der::oid(&object(arcs)),
@@ -139,65 +189,161 @@ fn elliptic(curve: CurveId, rng: &mut impl Rng) -> CryptoResult<Key> {
     Ok(pkcs8(&algorithm, &key))
 }
 
-/// Passes random bytes on, keeping every request of one length: the
-/// candidates the RSA primes are chosen from.
-struct Recorder<'a, R> {
-    rng: &'a mut R,
-    length: usize,
-    draws: Vec<Zeroizing<Vec<u8>>>,
+/// Upper bound on prime candidates tested per prime, preventing an infinite
+/// loop even if an infallible RNG produces degenerate output.
+const MAX_PRIME_CANDIDATES: usize = 100_000;
+
+/// Miller-Rabin rounds per OpenSSL's `bn_mr_min_checks`.
+fn mr_rounds(bits: usize) -> usize {
+    if bits > 2048 { 128 } else { 64 }
 }
 
-impl<R: Rng> Rng for Recorder<'_, R> {
-    fn fill_bytes(&mut self, out: &mut [u8]) {
-        self.rng.fill_bytes(out);
-        if out.len() == self.length {
-            self.draws.push(Zeroizing::new(out.to_vec()));
+/// All primes below 17864 (OpenSSL's trial-division table size).
+fn small_primes() -> Vec<u64> {
+    const LIMIT: usize = 17864;
+    let mut sieve = vec![true; LIMIT];
+    let mut out = Vec::with_capacity(2262);
+    for i in 2..LIMIT {
+        if sieve[i] {
+            out.push(i as u64);
+            let mut j = i * i;
+            while j < LIMIT {
+                sieve[j] = false;
+                j += i;
+            }
         }
     }
+    out
 }
 
-/// The prime among the recorded candidates that divides `modulus`.
-/// The generator sets a candidate's two highest bits and its lowest one.
-fn factor(modulus: &Bn, draws: &[Zeroizing<Vec<u8>>]) -> Option<Bn> {
-    draws.iter().find_map(|draw| {
-        let mut bytes = draw.clone();
-        *bytes.first_mut()? |= 0xc0;
-        *bytes.last_mut()? |= 1;
-        let candidate = Bn::from_be_bytes(&bytes);
-        let (_, rest) = modulus.divrem(&candidate).ok()?;
-        rest.is_zero().then_some(candidate)
-    })
+/// Miller-Rabin probabilistic primality test (FIPS 186-4 C.3.1), aborting
+/// immediately if `rng` fails.
+fn is_probable_prime(n: &Bn, rounds: usize, rng: &mut impl TryRng) -> Result<bool, String> {
+    if n.lt(&Bn::from_u64(3)) || n.is_even() {
+        return Ok(false);
+    }
+
+    let one = Bn::one();
+    let two = Bn::from_u64(2);
+    let n1 = ZeroizingBn(n.sub(&one).map_err(|_| NOT_GENERATED.to_owned())?);
+    let mut s = 0usize;
+    let mut d = ZeroizingBn((*n1).clone());
+    while d.is_even() {
+        d.0.shr1();
+        s += 1;
+    }
+    // Witness range: [2, n - 2].
+    let range = ZeroizingBn(
+        n1.sub(&one)
+            .and_then(|v| v.sub(&one))
+            .map_err(|_| NOT_GENERATED.to_owned())?,
+    );
+
+    let mont = Montgomery::new(n).map_err(|_| NOT_GENERATED.to_owned())?;
+    let one_m = mont.to_mont(&one);
+    let n1_m = mont.to_mont(&n1);
+
+    let mut buf = vec![0u8; n.byte_len() + 8];
+    'rounds: for _ in 0..rounds {
+        rng.try_fill_bytes(&mut buf)?;
+        let witness = Bn::from_be_bytes(&buf).modulus(&range).add(&two);
+
+        let mut x = mont.pow(&mont.to_mont(&witness), &d);
+        if x == one_m || x == n1_m {
+            continue;
+        }
+        for _ in 0..s.saturating_sub(1) {
+            x = mont.mul(&x, &x);
+            if x == n1_m {
+                continue 'rounds;
+            }
+            if x == one_m {
+                return Ok(false);
+            }
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Generates a `bits`-bit probable prime with its top two bits set, odd, and
+/// coprime to `e`, aborting immediately if `rng` fails.
+fn generate_prime(
+    bits: usize,
+    e: u64,
+    primes: &[u64],
+    rng: &mut impl TryRng,
+) -> Result<ZeroizingBn, String> {
+    let one = Bn::one();
+    let mut bytes = Zeroizing::new(vec![0u8; bits.div_ceil(8)]);
+    let extra = bytes.len() * 8 - bits;
+    for _ in 0..MAX_PRIME_CANDIDATES {
+        rng.try_fill_bytes(&mut bytes)?;
+        if extra > 0 {
+            bytes[0] &= 0xff >> extra;
+        }
+        bytes[0] |= 0xc0 >> extra;
+        *bytes.last_mut().unwrap() |= 1;
+        let cand = Bn::from_be_bytes(&bytes);
+
+        let cand1 = cand.sub(&one).map_err(|_| NOT_GENERATED.to_owned())?;
+        if cand1.rem_small(e) == 0 {
+            continue;
+        }
+
+        if primes.iter().any(|&p| cand.rem_small(p) == 0) {
+            continue;
+        }
+
+        if is_probable_prime(&cand, mr_rounds(bits), rng)? {
+            return Ok(ZeroizingBn(cand));
+        }
+    }
+    Err(NOT_GENERATED.into())
 }
 
 /// An RSA key of `bits` bits with the public exponent 65537.
 ///
-/// The library generates the key but does not give out its private parts,
-/// so they are worked out again from the modulus and the prime found among
-/// the random candidates the generator drew.
-fn rsa(bits: usize, rng: &mut impl Rng) -> CryptoResult<Key> {
+/// Primes are generated directly with `crown::bn` so RNG failures abort
+/// immediately and secret big-integer values are wiped on drop.
+fn rsa(bits: usize, rng: &mut impl TryRng) -> Result<Key, String> {
     const EXPONENT: u64 = 65537;
-    let mut recorder = Recorder {
-        rng,
-        length: bits / 16,
-        draws: Vec::new(),
-    };
-    let key = RsaPrivateKey::generate(bits, EXPONENT, &mut recorder)?;
-    let modulus = Bn::from_be_bytes(&key.public().n());
-    let found = ZeroizingBn(
-        factor(&modulus, &recorder.draws)
-            .ok_or(CryptoError::StrError("the generated primes were not found"))?,
-    );
-    let (other, _) = modulus.divrem(&found)?;
-    let other = ZeroizingBn(other);
-    let (p, q) = if found.lt(&other) {
-        (other, found)
-    } else {
-        (found, other)
-    };
+    if bits < 512 || !bits.is_multiple_of(2) {
+        return Err(NOT_GENERATED.into());
+    }
+    let half = bits / 2;
+    let primes = small_primes();
+    let p = generate_prime(half, EXPONENT, &primes, rng)?;
+    // FIPS 186-4 B.3.3: |p - q| must be large.
+    let mut q = None;
+    for _ in 0..16 {
+        let candidate = generate_prime(half, EXPONENT, &primes, rng)?;
+        let (lo, hi) = if p.lt(&candidate) {
+            (&*p, &*candidate)
+        } else {
+            (&*candidate, &*p)
+        };
+        let diff = hi.sub(lo).map_err(|_| NOT_GENERATED.to_owned())?;
+        if diff.bit_len() >= half - 100 {
+            q = Some(candidate);
+            break;
+        }
+    }
+    let q = q.ok_or_else(|| NOT_GENERATED.to_owned())?;
+    let (p, q) = if p.lt(&q) { (q, p) } else { (p, q) };
+
+    let modulus = p.mul(&q);
     let one = Bn::one();
-    let (p1, q1) = (ZeroizingBn(p.sub(&one)?), ZeroizingBn(q.sub(&one)?));
+    let p1 = ZeroizingBn(p.sub(&one).map_err(|_| NOT_GENERATED.to_owned())?);
+    let q1 = ZeroizingBn(q.sub(&one).map_err(|_| NOT_GENERATED.to_owned())?);
     let exponent = Bn::from_u64(EXPONENT);
-    let d = ZeroizingBn(exponent.mod_inverse(&ZeroizingBn(p1.mul(&q1)))?);
+    let phi = ZeroizingBn(p1.mul(&q1));
+    let d = ZeroizingBn(
+        exponent
+            .mod_inverse(&phi)
+            .map_err(|_| NOT_GENERATED.to_owned())?,
+    );
+    let qinv = ZeroizingBn(q.mod_inverse(&p).map_err(|_| NOT_GENERATED.to_owned())?);
     let bytes = |number: &Bn| Zeroizing::new(number.to_be_bytes());
     let key = Zeroizing::new(rsa_private_key_der(
         &modulus.to_be_bytes(),
@@ -207,7 +353,7 @@ fn rsa(bits: usize, rng: &mut impl Rng) -> CryptoResult<Key> {
         &bytes(&q),
         &bytes(&ZeroizingBn(d.modulus(&p1))),
         &bytes(&ZeroizingBn(d.modulus(&q1))),
-        &bytes(&ZeroizingBn(q.mod_inverse(&p)?)),
+        &bytes(&qinv),
     ));
     let algorithm = [der::oid(&object(oid::OID_RSA_ENCRYPTION)), der::null()].concat();
     Ok(pkcs8(&algorithm, &key))
@@ -383,7 +529,7 @@ fn generate(
     // Without random numbers the search for primes would never end.
     OsRng::default().check()?;
     let mut rng = OsRng::default();
-    let key = key_pair(algorithm, &mut rng)?;
+    let key = try_key_pair(algorithm, &mut rng)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs() as i64);
@@ -569,16 +715,111 @@ mod tests {
 
     #[test]
     fn a_key_that_cannot_be_generated_is_reported() {
-        // The library refuses an RSA key this small.
+        // Keys smaller than 512 bits or with an odd bit length are refused.
         assert_eq!(
             key_pair(Algorithm::Rsa(128), &mut Mixed(1)),
             Err(NOT_GENERATED.into())
         );
-        // Without the recorded candidates, the primes are not found.
-        assert!(factor(&Bn::from_u64(15), &[]).is_none());
-        assert!(factor(&Bn::from_u64(15), &[Zeroizing::new(Vec::new())]).is_none());
-        let seven = [Zeroizing::new(vec![0x07])];
-        assert!(factor(&Bn::from_u64(15), &seven).is_none());
+        assert_eq!(
+            key_pair(Algorithm::Rsa(1025), &mut Mixed(1)),
+            Err(NOT_GENERATED.into())
+        );
+    }
+
+    struct FailingRng {
+        inner: Mixed,
+        fail_after: usize,
+        calls: usize,
+    }
+
+    impl FailingRng {
+        fn new(seed: u64, fail_after: usize) -> Self {
+            Self {
+                inner: Mixed(seed),
+                fail_after,
+                calls: 0,
+            }
+        }
+    }
+
+    impl TryRng for FailingRng {
+        fn try_fill_bytes(&mut self, out: &mut [u8]) -> Result<(), String> {
+            let call = self.calls;
+            self.calls += 1;
+            if call >= self.fail_after {
+                return Err("rng failed".into());
+            }
+            self.inner.fill_bytes(out);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn rsa_generation_aborts_immediately_on_mid_generation_rng_failure() {
+        for algorithm in [Algorithm::Rsa(2048), Algorithm::Rsa(3072)] {
+            for fail_after in [0, 1, 2, 5, 10] {
+                let mut rng = FailingRng::new(7, fail_after);
+                assert_eq!(
+                    try_key_pair(algorithm, &mut rng),
+                    Err("rng failed".into()),
+                    "{} failing after {fail_after} draws",
+                    algorithm.label()
+                );
+                assert_eq!(
+                    rng.calls,
+                    fail_after + 1,
+                    "{} should stop on the failing draw",
+                    algorithm.label()
+                );
+            }
+        }
+
+        // Count how many draws a complete RSA-1024 generation needs, then fail
+        // at several points across both primes and their Miller-Rabin rounds.
+        let mut counter = FailingRng::new(7, usize::MAX);
+        try_key_pair(Algorithm::Rsa(1024), &mut counter).unwrap();
+        let total_draws = counter.calls;
+        assert!(total_draws > 128);
+        for fail_after in [0, 1, 2, total_draws / 4, total_draws / 2, total_draws - 1] {
+            let mut rng = FailingRng::new(7, fail_after);
+            assert_eq!(
+                try_key_pair(Algorithm::Rsa(1024), &mut rng),
+                Err("rng failed".into()),
+                "RSA 1024 failing after {fail_after} of {total_draws} draws"
+            );
+            assert_eq!(rng.calls, fail_after + 1);
+        }
+    }
+
+    #[test]
+    fn ec_and_ed25519_generation_propagate_rng_failure() {
+        for algorithm in [Algorithm::Ec(CurveId::P256), Algorithm::Ed25519] {
+            let mut rng = FailingRng::new(7, 0);
+            assert_eq!(
+                try_key_pair(algorithm, &mut rng),
+                Err("rng failed".into()),
+                "{}",
+                algorithm.label()
+            );
+            assert_eq!(rng.calls, 1);
+        }
+    }
+
+    #[test]
+    fn rsa_generation_terminates_when_infallible_rng_returns_zeros() {
+        struct ZeroRng;
+        impl Rng for ZeroRng {
+            fn fill_bytes(&mut self, _: &mut [u8]) {}
+        }
+
+        for algorithm in [Algorithm::Rsa(2048), Algorithm::Rsa(3072)] {
+            assert_eq!(
+                key_pair(algorithm, &mut ZeroRng),
+                Err(NOT_GENERATED.into()),
+                "{}",
+                algorithm.label()
+            );
+        }
     }
 
     #[test]

@@ -5,6 +5,24 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- Harden PKCS12 reading, writing, bag ownership, and KDF handling:
+  - Stage PKCS12 password changes and key imports on a clone before verifying OS
+    RNG success so a mid-operation RNG failure leaves the in-memory keystore
+    unchanged.
+  - Prevent dual-claimed `localKeyId` / `TRUSTED_KEY_USAGE` certificate bags and
+    first-match `localKeyId` hijacking, keep standalone named `Certificate`
+    entries visible (and never orphan-delete them) when they appear in a private
+    key's chain, and make `set_chain` and key/certificate insertions atomic on
+    error.
+  - Accept BER-constructed `[0]` (`0xA0`, definite or indefinite length)
+    `encryptedContent` when decrypting PKCS12 safes.
+  - Enforce a cumulative KDF iteration budget across the MAC and encrypted safes
+    when opening a PKCS12 store, and preserve higher KDF iteration counts on
+    save, password change, and new key insertion instead of downgrading to
+    10,000.
+- Abort RSA (and EC/Ed25519) key generation immediately on mid-generation OS RNG
+  failure instead of spinning in the prime-search loop and growing candidate
+  buffers unboundedly, and bound prime-candidate searches for infallible RNGs.
 - Fix keystore conversion between PKCS12 and JKS/JCEKS failing when a
   certificate entry's issuer is also present in the store, by comparing only the
   entry's own certificate for certificate-only entries while still verifying

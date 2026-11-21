@@ -371,9 +371,14 @@ fn openssl_aes_fixture_has_a_wrong_password_with_valid_padding() {
     let mut reader = Reader::new(&safe);
     let mut safes = reader.read_sequence().unwrap();
     let info = ContentInfo::parse_reader(&mut safes).unwrap();
-    let plaintext = decrypt_safe(&info.content, VALID_PADDING_PASSWORD.as_bytes())
-        .ok()
-        .unwrap();
+    let mut budget = MAX_TOTAL_ITERATIONS;
+    let (plaintext, _) = decrypt_safe(
+        &info.content,
+        VALID_PADDING_PASSWORD.as_bytes(),
+        &mut budget,
+    )
+    .ok()
+    .unwrap();
     assert!(!is_safe_contents(&plaintext));
 }
 
@@ -691,4 +696,262 @@ fn malformed_and_negative_serial_certificates_remain_inspectable() {
             .serial_decimal,
         "-1"
     );
+}
+
+#[test]
+fn decrypts_ber_constructed_encrypted_content_definite_and_indefinite() {
+    let plaintext = encode_safe_contents(&[secret_bag()]);
+    let aes = pbes2(Pbes2Cipher::Aes256Cbc { iv: vec![3; 16] });
+    let ciphertext = aes.encrypt(&plaintext, b"changeit").unwrap();
+    let (first, second) = ciphertext.split_at(ciphertext.len() / 2);
+    let data_oid = ObjectIdentifier::new(oid::OID_PKCS7_DATA).unwrap();
+
+    let build_store = |encrypted_content_tlv: Vec<u8>| {
+        let encrypted_data = der::sequence(
+            &[
+                der::integer(&[0]),
+                der::sequence(
+                    &[
+                        der::oid(&data_oid),
+                        aes.to_algorithm().encode(),
+                        encrypted_content_tlv,
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+        );
+        let safe = ContentInfo {
+            content_type: ObjectIdentifier::new(oid::OID_PKCS7_ENCRYPTED_DATA).unwrap(),
+            content: encrypted_data,
+        };
+        Pfx {
+            version: 3,
+            auth_safe: ContentInfo {
+                content_type: data_oid.clone(),
+                content: der::octet_string(&der::sequence(&safe.encode())),
+            },
+            mac: None,
+        }
+        .encode()
+    };
+
+    // Definite-length BER constructed [0] (0xA0) holding two OCTET STRING chunks.
+    let chunks = [der::octet_string(first), der::octet_string(second)].concat();
+    let definite = der::implicit(0, true, &chunks);
+    assert_eq!(definite[0], 0xA0);
+
+    // Indefinite-length BER constructed [0] (0xA0 0x80 ... 0x00 0x00), with a
+    // nested constructed OCTET STRING (0x24 0x80 ... 0x00 0x00) for the second chunk.
+    let mut nested = vec![0x24, 0x80];
+    nested.extend(der::octet_string(second));
+    nested.extend([0x00, 0x00]);
+    let mut indefinite = vec![0xA0, 0x80];
+    indefinite.extend(der::octet_string(first));
+    indefinite.extend(nested);
+    indefinite.extend([0x00, 0x00]);
+
+    for tlv in [definite, indefinite] {
+        let store = parse(&build_store(tlv)).unwrap();
+        let verified = store.verify("changeit").unwrap();
+        assert!(!verified.incomplete);
+        assert_eq!(verified.entries.len(), 1);
+        assert_eq!(verified.entries[0].alias, "secret");
+        assert!(matches!(store.verify("wrong"), Err(VerifyError::Password)));
+    }
+
+    // Non-OCTET-STRING inside constructed [0] is rejected as unreadable/incomplete.
+    let bad = der::implicit(0, true, &der::integer(&[1]));
+    let verified = parse(&build_store(bad))
+        .unwrap()
+        .verify("changeit")
+        .unwrap();
+    assert!(verified.entries.is_empty());
+    assert!(verified.incomplete);
+}
+
+#[test]
+fn cumulative_kdf_iteration_budget_stops_excessive_multi_safe_stores() {
+    let data_oid = ObjectIdentifier::new(oid::OID_PKCS7_DATA).unwrap();
+    let enc_oid = ObjectIdentifier::new(oid::OID_PKCS7_ENCRYPTED_DATA).unwrap();
+
+    let make_safe = |alias: &str, iterations: u32| {
+        let mut bag = secret_bag();
+        bag.attributes = vec![friendly_name(alias)];
+        let plaintext = encode_safe_contents(&[bag]);
+        let pbe = Pbes2 {
+            salt: vec![7; 8],
+            iterations,
+            key_length: None,
+            prf: Hash::Sha256,
+            cipher: Pbes2Cipher::Aes256Cbc { iv: vec![1; 16] },
+        };
+        let ciphertext = pbe.encrypt(&plaintext, b"changeit").unwrap();
+        let encrypted = der::sequence(
+            &[
+                der::integer(&[0]),
+                der::sequence(
+                    &[
+                        der::oid(&data_oid),
+                        pbe.to_algorithm().encode(),
+                        der::implicit(0, false, &ciphertext),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+        );
+        ContentInfo {
+            content_type: enc_oid.clone(),
+            content: encrypted,
+        }
+        .encode()
+    };
+
+    // Build a store with a 100-iteration MAC and 3 encrypted safes of 100 iterations each.
+    let safes_der = der::sequence(
+        &[
+            make_safe("safe-1", 100),
+            make_safe("safe-2", 100),
+            make_safe("safe-3", 100),
+        ]
+        .concat(),
+    );
+    let salt = vec![5u8; 20];
+    let mac_pw = pkcs12_password(b"changeit");
+    let mac_key = pkcs12kdf::derive(Hash::Sha256.factory(), &mac_pw, &salt, 3, 100, 32).unwrap();
+    let mut hmac = EvpHash::new_sha256_hmac(&mac_key).unwrap();
+    hmac.write_all(&safes_der).unwrap();
+    let pfx = Pfx {
+        version: 3,
+        auth_safe: ContentInfo::data(&safes_der),
+        mac: Some(MacData {
+            digest_algorithm: AlgorithmIdentifier::with_null(object_id(Hash::Sha256.oid())),
+            digest: hmac.sum(),
+            salt,
+            iterations: 100,
+        }),
+    };
+    let store = parse(&pfx.encode()).unwrap();
+
+    // Budget of 400 covers MAC (100) + 3 safes (300): complete and writable.
+    let (verified, writable) = store.open_with_budget("changeit", 400).unwrap();
+    assert!(!verified.incomplete);
+    assert!(writable.is_some());
+    assert_eq!(verified.entries.len(), 3);
+
+    // Budget of 250 covers MAC (100) + safe-1 (100), leaving 50: safe-2 and safe-3
+    // exceed remaining budget and are skipped without running their KDFs.
+    let (verified, writable) = store.open_with_budget("changeit", 250).unwrap();
+    assert!(verified.incomplete);
+    assert!(writable.is_none());
+    assert_eq!(verified.entries.len(), 1);
+    assert_eq!(verified.entries[0].alias, "safe-1");
+}
+
+#[test]
+fn trusted_cert_with_local_key_id_and_named_chain_certs_have_clean_ownership() {
+    use crate::test_support::metadata_certificate;
+    use crown::x509::attribute::Attribute;
+
+    let leaf = metadata_certificate("leaf", "ca", &[1], &[]);
+    let other_leaf = metadata_certificate("other-leaf", "ca", &[2], &[]);
+    let ca = metadata_certificate("ca", "ca", &[3], &[]);
+    let trusted_attr = || {
+        Attribute::new(
+            ObjectIdentifier::new(TRUSTED_KEY_USAGE).unwrap(),
+            vec![der::oid(
+                &ObjectIdentifier::new(ANY_EXTENDED_KEY_USAGE).unwrap(),
+            )],
+        )
+    };
+    let key_bag = |alias: &str, id: &[u8]| SafeBag {
+        bag: Bag::ShroudedKey(EncryptedPrivateKeyInfo {
+            algorithm: AlgorithmIdentifier::with_null(
+                ObjectIdentifier::new(oid::OID_PBES2).unwrap(),
+            ),
+            encrypted_data: vec![1, 2, 3],
+        }),
+        attributes: vec![friendly_name(alias), local_key_id(id)],
+    };
+
+    // 1. A trusted certificate sharing a key's localKeyId must NOT be claimed
+    //    as the key's leaf; the key claims its own non-trusted leaf instead.
+    let data = synthetic(vec![
+        raw_certificate(
+            &other_leaf,
+            vec![
+                friendly_name("trusted-cert"),
+                local_key_id(&[1]),
+                trusted_attr(),
+            ],
+        ),
+        raw_certificate(&leaf, vec![friendly_name("my-key"), local_key_id(&[1])]),
+        raw_certificate(&ca, vec![friendly_name("named-ca")]),
+        key_bag("my-key", &[1]),
+    ]);
+    let verified = parse(&data).unwrap().verify("changeit").unwrap();
+    assert!(!verified.incomplete);
+    let by_alias = |name: &str| verified.entries.iter().find(|e| e.alias == name).unwrap();
+    assert_eq!(verified.entries.len(), 3);
+    assert_eq!(by_alias("my-key").kind(), "Private key");
+    assert_eq!(
+        by_alias("my-key").certificates(),
+        &[leaf.clone(), ca.clone()]
+    );
+    assert_eq!(by_alias("trusted-cert").kind(), "Trusted certificate");
+    assert_eq!(
+        by_alias("trusted-cert").certificates(),
+        &[other_leaf.clone(), ca.clone()]
+    );
+    // Standalone named Certificate stays visible even though it appears in my-key's chain.
+    assert_eq!(by_alias("named-ca").kind(), "Certificate");
+    assert_eq!(
+        by_alias("named-ca").certificates(),
+        std::slice::from_ref(&ca)
+    );
+
+    // 2. First-match localKeyId hijacking: two keys sharing the same localKeyId
+    //    match their own friendlyName cert rather than both grabbing the first cert.
+    let data = synthetic(vec![
+        raw_certificate(
+            &other_leaf,
+            vec![friendly_name("key-b"), local_key_id(&[9])],
+        ),
+        raw_certificate(&leaf, vec![friendly_name("key-a"), local_key_id(&[9])]),
+        key_bag("key-a", &[9]),
+        key_bag("key-b", &[9]),
+    ]);
+    let verified = parse(&data).unwrap().verify("changeit").unwrap();
+    assert!(!verified.incomplete);
+    assert_eq!(verified.entries.len(), 2);
+    assert_eq!(verified.entries[0].alias, "key-a");
+    assert_eq!(
+        verified.entries[0].certificates(),
+        std::slice::from_ref(&leaf)
+    );
+    assert_eq!(verified.entries[1].alias, "key-b");
+    assert_eq!(
+        verified.entries[1].certificates(),
+        std::slice::from_ref(&other_leaf)
+    );
+
+    // 3. Two keys sharing the same localKeyId with only one cert bag: the cert
+    //    is claimed by at most one key (no dual ownership).
+    let data = synthetic(vec![
+        raw_certificate(&leaf, vec![local_key_id(&[9])]),
+        key_bag("key-a", &[9]),
+        key_bag("key-b", &[9]),
+    ]);
+    let (verified, writable) = parse(&data).unwrap().open("changeit").unwrap();
+    assert!(!verified.incomplete);
+    assert_eq!(verified.entries.len(), 2);
+    assert_eq!(
+        verified.entries[0].certificates(),
+        std::slice::from_ref(&leaf)
+    );
+    assert!(verified.entries[1].certificates().is_empty());
+    let writable = writable.unwrap();
+    assert_eq!(writable.sources[0].len(), 2);
+    assert_eq!(writable.sources[1].len(), 1);
 }

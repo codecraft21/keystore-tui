@@ -25,6 +25,9 @@ updates:
     exclude-paths:
       - ".github/workflows/release.yml"
     groups:
-      actions:
+      actions-minor-patch:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch

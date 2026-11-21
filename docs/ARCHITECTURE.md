@@ -56,7 +56,7 @@ Module responsibilities and dependencies for keystore-tui. See
 | `.github/workflows/tag-release.yml` | Tags a new `Cargo.toml` version on `main`, which starts `release.yml` |
 | `.github/workflows/rust.yml` | CI checks (format, lint, build, tests), a minimum-supported-Rust build, macOS tests, including the PTY smoke tests, Windows unit tests, and test coverage, uploaded to Codecov, for pushes to `main` and PRs; docs-only changes skip these jobs, and the `ci-ok` job is the single required check |
 | `.github/dependabot.yml` | Monthly grouped Cargo and GitHub Actions updates, leaving out the generated `release.yml` |
-| `.github/workflows/dependabot-auto-merge.yml` | Turns on auto-merge for Dependabot PRs, which merge once the required checks pass |
+| `.github/workflows/dependabot-auto-merge.yml` | Turns on auto-merge for minor and patch Dependabot PRs that don't touch release workflows, which merge once the required checks pass |
 
 Dependencies are deliberately few:
 

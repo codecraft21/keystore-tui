@@ -26,6 +26,7 @@ use crate::{
 };
 
 const MAX_ITERATIONS: u32 = 1_000_000;
+const MAX_TOTAL_ITERATIONS: u64 = 2_000_000;
 const MAX_SALT_SIZE: usize = 64;
 const TRUSTED_KEY_USAGE: &[u64] = &[2, 16, 840, 1, 113894, 746875, 1, 1];
 // RFC 7292, appendix C. Crown 0.31 swaps these two OIDs.
