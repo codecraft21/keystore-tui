@@ -490,26 +490,21 @@ any existing incomplete-entry warnings.
   common name in lower case. It follows the same rules as the [rename
   prompt](#renaming-entries), except that `Esc` returns to the form as it was
   filled in.
-- Once the alias is accepted, the key pair is made on a background thread.
-  RSA 4096 can take several seconds. Meanwhile:
-  - The first line of the status area shows, in cyan, an activity indicator,
-    `Generating <algorithm> key pair '<alias>'...`, the elapsed seconds, and
-    `(read-only until done)`. The screen redraws at least every 100 ms, so
-    the indicator moves and resizes are followed; there is no percentage,
-    since the library reports no progress.
-  - The keystore is read-only. Navigation, filtering, sorting, entry details,
-    exports, certificate requests, and signing to files still work. Every
-    command that changes the keystore or saves it (`g`, `G`, `i`, `d`,
-    `Delete`, `r`, `p`, `P`, `C`, `R`, `w`, `W`) is refused with the red
-    message `The keystore is read-only until the key pair is generated.`
-    and queues nothing. The shortcut lines read `Read-only until the key
-    pair is generated: editing and saving are unavailable` and `Keystore:
-    n New | o Open | Entry: e Export | c Request | S Sign`, above the list
-    shortcuts.
-  - `q`, `Esc`, `o`, and `n` ask first, as with unsaved changes, since the
-    key pair would be lost; `Ctrl+C` quits at once. Closing or replacing the
-    keystore discards the generation, and its result is never added to
-    another keystore.
+- Once the alias is accepted, the key pair is made on a worker thread while a
+  modal waits for it. RSA 4096 can take several seconds. Meanwhile:
+  - A bordered box titled `Generate key pair` is drawn over the middle of the
+    list. Its first line shows, in cyan, an activity indicator,
+    `Generating <algorithm> key pair '<alias>'...`, and the elapsed seconds;
+    below it, `Esc Cancel | Ctrl+C Quit`, which the shortcut line repeats.
+    The screen redraws at least every 100 ms, so the indicator moves and
+    resizes are followed; there is no percentage, since the library reports
+    no progress.
+  - `Esc` cancels: no entry is added, and a green message says
+    `Generating <algorithm> key pair '<alias>' was cancelled.` The thread is
+    left to finish, and the key it makes is wiped without being added.
+  - `Ctrl+C` quits at once. Every other key, including `q`, is ignored.
+- When the key pair is ready or fails, the modal closes and the result is
+  shown on the entry list, as described below.
 - A signing key is read when the generation starts; if it cannot be, a red
   message says why and nothing is generated.
 - The certificate is version 3 and signed with the new key: RSA with SHA-256,
@@ -542,8 +537,7 @@ any existing incomplete-entry warnings.
 - When the key pair cannot be generated or added, for example to a PKCS12
   keystore with an empty password, a red message says why, no entry is
   added, and the generated key is discarded.
-- On success or failure the status line goes away and editing works again.
-  Generation never saves the keystore.
+- Generation never saves the keystore.
 - In a terminal smaller than the form, a resize hint is shown instead; `Esc`
   and `Ctrl+C` still work.
 

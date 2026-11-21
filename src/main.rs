@@ -144,8 +144,8 @@ struct App {
     key_import: Option<key_import::KeyImport>,
     /// The form for a new key pair, while it is filled in.
     generating: Option<certificate_form::Form>,
-    /// The key pair being generated in the background; the keystore is
-    /// read-only meanwhile.
+    /// The key pair being generated on a worker thread. A modal waits for
+    /// it, and every key but `Esc` and `Ctrl+C` is ignored meanwhile.
     generation: Option<generate::Job>,
     /// The private key, by its index in `entries`, whose chain is asked
     /// about, and the one the file browser chooses a certificate to append
@@ -190,7 +190,6 @@ enum Confirm {
     ExportSecret(PathBuf, usize),
 }
 
-const BUSY: &str = "The keystore is read-only until the key pair is generated.";
 const NOT_EDITABLE: &str = "Only keystores can be changed, not certificate files.";
 const INCOMPLETE_NOT_EDITABLE: &str =
     "This PKCS12 keystore was not read completely, so it cannot be changed.";
@@ -254,7 +253,6 @@ impl App {
             return false;
         }
 
-        self.message = None;
         // Ctrl+C quits at once, even with unsaved changes.
         if key.code == KeyCode::Char('c')
             && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -262,6 +260,14 @@ impl App {
         {
             return true;
         }
+        // While a key pair is generated, only Esc does anything: it cancels.
+        if self.generation.is_some() {
+            if key.code == KeyCode::Esc {
+                self.cancel_generation();
+            }
+            return false;
+        }
+        self.message = None;
         if let Some(confirm) = self.confirm.take() {
             return key.code == KeyCode::Char('y') && self.confirmed(confirm);
         }
@@ -341,7 +347,7 @@ impl App {
         } else {
             match key.code {
                 KeyCode::Enter => self.show_selected_details(),
-                KeyCode::Char('o') if self.unsaved() => self.confirm = Some(Confirm::Open),
+                KeyCode::Char('o') if self.modified => self.confirm = Some(Confirm::Open),
                 KeyCode::Char('o') => self.open_picker(),
                 KeyCode::Delete => self.ask_delete(),
                 KeyCode::Char('d') if is_text_input(key.modifiers) => self.ask_delete(),
@@ -359,7 +365,7 @@ impl App {
                 KeyCode::Char('e') if is_text_input(key.modifiers) => self.ask_key_export(),
                 KeyCode::Char('w') if is_text_input(key.modifiers) => self.save(),
                 KeyCode::Char('W') if is_text_input(key.modifiers) => {
-                    if self.changeable()
+                    if self.editable()
                         && let Some(path) = &self.keystore_path
                     {
                         self.save_as = Some(save::SaveAsPrompt::new(path));
@@ -383,7 +389,7 @@ impl App {
     /// Asks whether to delete the selected entry.
     fn ask_delete(&mut self) {
         if let Some(index) = self.selected_entry()
-            && self.changeable()
+            && self.editable()
         {
             self.confirm = Some(Confirm::Delete(index));
         }
@@ -391,11 +397,10 @@ impl App {
 
     /// Quits, or asks first when there are unsaved changes.
     fn quit(&mut self) -> bool {
-        let unsaved = self.unsaved();
-        if unsaved {
+        if self.modified {
             self.confirm = Some(Confirm::Quit);
         }
-        !unsaved
+        !self.modified
     }
 
     /// Carries out a confirmed question. Returns whether to quit.
@@ -429,22 +434,6 @@ impl App {
         false
     }
 
-    /// Whether the open keystore can be changed now: not while a key pair is
-    /// generated. Explains why not.
-    fn changeable(&mut self) -> bool {
-        if self.generation.is_some() {
-            self.message = Some((BUSY.into(), true));
-            return false;
-        }
-        self.editable()
-    }
-
-    /// Whether quitting or replacing the keystore loses work: unsaved
-    /// changes or a key pair being generated.
-    fn unsaved(&self) -> bool {
-        self.modified || self.generation.is_some()
-    }
-
     /// Whether the loaded file can be changed and saved; explains when a
     /// loaded file cannot.
     fn editable(&mut self) -> bool {
@@ -461,7 +450,7 @@ impl App {
 
     /// Replaces the opened file with the modified keystore.
     fn save(&mut self) {
-        if !self.changeable() {
+        if !self.editable() {
             return;
         }
         let (Some(document), Some(path)) = (&self.document, &self.keystore_path) else {
@@ -900,19 +889,6 @@ impl App {
                 content,
             );
         }
-        // Part of the status bar is kept for a key pair being generated.
-        let status = match self.generation_status() {
-            Some(line) => {
-                let [busy, rest] =
-                    Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(status);
-                frame.render_widget(
-                    Paragraph::new(line).style(Style::default().fg(Color::Cyan)),
-                    busy,
-                );
-                rest
-            }
-            None => status,
-        };
         if let Some(question) = self.question() {
             frame.render_widget(
                 Paragraph::new(question)
@@ -995,12 +971,17 @@ impl App {
         } else {
             frame.render_widget(Paragraph::new(shortcuts), help);
         }
+        if let Some(job) = &self.generation {
+            job.draw(frame);
+        }
     }
 
     /// The bottom lines: the shortcuts, or the "save as" name being typed.
     fn shortcuts(&self, width: u16) -> Vec<Line<'static>> {
         const LIST: &str = "o Open file | Enter Details | Up/Down j/k Scroll | / Filter | s Sort | q / Esc / Ctrl+C Quit";
-        if self.password_prompt.is_some() {
+        if self.generation.is_some() {
+            vec![generate::SHORTCUTS.into()]
+        } else if self.password_prompt.is_some() {
             vec!["Enter Verify | Backspace Delete | Esc Cancel | Ctrl+C Quit".into()]
         } else if let Some(prompt) = &self.save_as {
             vec![
@@ -1157,13 +1138,6 @@ impl App {
             ]
         } else if self.editing_filter {
             vec!["Type to filter | Enter Apply | Esc Clear | Up/Down Scroll | Ctrl+C Quit".into()]
-        } else if self.generation.is_some() && self.file_picker.is_none() {
-            vec![
-                "Read-only until the key pair is generated: editing and saving are unavailable"
-                    .into(),
-                "Keystore: n New | o Open | Entry: e Export | c Request | S Sign".into(),
-                LIST.into(),
-            ]
         } else if self.document.is_some() && self.file_picker.is_none() {
             vec![
                 "Keystore: n New | g Generate | G Secret key | i Import | w Save | W Save as | p Password".into(),
@@ -1359,7 +1333,7 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> io::Result<()> {
 
         // Periodically redraw so a missed resize notification cannot leave
         // the layout stale until the next key press, and more often while
-        // a key pair is generated, to animate its status.
+        // a key pair is generated, to animate its modal.
         let wait = if app.generation.is_some() { 100 } else { 250 };
         if event::poll(std::time::Duration::from_millis(wait))?
             && let Event::Key(key) = event::read()?

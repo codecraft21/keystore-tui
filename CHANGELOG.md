@@ -5,6 +5,13 @@ All notable changes to keystore-tui are listed here. Versions follow
 
 ## Unreleased
 
+- While a key pair is generated, a box now waits for it, showing the
+  algorithm, an activity indicator, and the elapsed time. `Esc` cancels and
+  adds nothing, `Ctrl+C` quits, and other keys are ignored. This replaces the
+  read-only mode, in which an export, certificate request, or signing started
+  meanwhile could act on the wrong key once the new entry was added, and a
+  second generation from `S`, `g` lost the first key pair.
+
 - Refresh the README screenshots for the current app and show them in a compact
   row with links to the full-size images.
 
