@@ -178,7 +178,8 @@ any existing incomplete-entry warnings.
 - A keystore with an empty password opens without a prompt. For PKCS12, an
   empty password is also tried in Java's encoding as a single NUL character,
   both for the integrity MAC and, in a store without a MAC, for decrypting its
-  contents. One encoding must work for the whole store.
+  contents. One encoding must work for the whole store. Both empty-password
+  encodings prevent adding private or secret keys until the password is changed.
 - An invalid file, an unreadable file, or a failed integrity check produces a red
   error message in the TUI.
 

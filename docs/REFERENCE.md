@@ -148,6 +148,9 @@ JKS, JCEKS, and PKCS12 keystores can be changed; certificate files cannot,
 and neither can a PKCS12 keystore whose entry list is incomplete. Every change appears in the list at once and puts `[modified]`
 next to the app name, but nothing changes on disk until you save.
 
+Before adding a private or secret key to a PKCS12 keystore opened with an
+empty password, press `p` to set a password.
+
 - **Delete:** press `d` or `Delete` on an entry, then `y` to confirm; any other
   key cancels. In PKCS12, a private key goes with its certificate and the
   chain certificates no other entry uses.
