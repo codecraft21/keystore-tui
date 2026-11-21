@@ -79,7 +79,7 @@ impl App {
 
     /// Checks the typed name, then asks for the new keystore's password.
     pub(crate) fn password_new_keystore(&mut self, path: PathBuf) {
-        if path.exists() {
+        if save::path_exists(&path) {
             self.message = Some((
                 format!("'{}' already exists; choose another name.", path.display()),
                 true,

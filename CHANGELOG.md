@@ -16,6 +16,23 @@ All notable changes to keystore-tui are listed here. Versions follow
   - Avoid double-joining relative directories in `SaveAsPrompt::suggesting`.
   - Scroll certificate, signing, and CRL form fields and the alias prompt by
     Unicode display width so wide characters and long aliases stay visible.
+  - Clear stale startup warnings after creating a new keystore (`n`), clear
+    stale invisible filters after deleting the last entry, guard confirmation
+    (`y`), entry-detail shortcuts, and `Ctrl+U` against unexpected `Ctrl`/`Alt`
+    modifiers, keep centered forms above the bottom help bar on short terminals
+    (heights 16–20), and prevent duplicate certificates from 3+-cert cycles in
+    CA reply chains.
+  - Treat dangling symbolic links as existing in save/export pre-checks and
+    default name suggestions, absolutize command-line startup paths in the
+    status bar, use Modified UTF-8 with length bounds when serializing JCEKS
+    secret keys, compare JKS/JCEKS integrity digests in constant time, avoid
+    partial `AuthorityKeyIdentifier` state on malformed extensions, reject
+    non-printable ASCII control characters in subject alternative names, and
+    check `cRLSign` alongside `keyCertSign` in CA signing warnings.
+  - Refresh package/CLI descriptions, fix documentation table-of-contents and
+    column-reference drift in `docs/SPEC.md` and `docs/REFERENCE.md`, and update
+    the crates.io publish workflow runner from `ubuntu-22.04` to
+    `ubuntu-latest`.
 - Fix X.509, CSR, and CRL parsing, verification, weak-algorithm detection, and
   display issues:
   - Escape control characters in rendered Subject and Issuer distinguished names

@@ -106,8 +106,16 @@ fn startup_certificate_details() {
         ("request.csr", "keytool-request.csr", "Request details"),
     ] {
         fs::copy(fixture(source), directory.join(name)).unwrap();
+        let expected_path = format!(
+            "Path: '{}'",
+            fs::canonicalize(directory.join(name)).unwrap().display()
+        );
         let mut app = PtyApp::spawn(directory.path(), &[OsStr::new(name)]);
-        app.expect(&[heading, "[verified]", &format!("{name}'")]);
+        app.expect(&[
+            heading,
+            "[verified]",
+            &expected_path[..expected_path.len().min(100)],
+        ]);
         assert!(!contains(app.output(), b"Keystore password:"), "{name}");
         app.send(b"\x1b");
         app.expect(&["1 entries | Sort: alias"]);

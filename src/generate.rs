@@ -283,6 +283,9 @@ fn generate_prime(
             bytes[0] &= 0xff >> extra;
         }
         bytes[0] |= 0xc0 >> extra;
+        if extra == 7 {
+            bytes[1] |= 0x80;
+        }
         *bytes.last_mut().unwrap() |= 1;
         let cand = Bn::from_be_bytes(&bytes);
 

@@ -456,7 +456,7 @@ impl Keystore {
     /// another attempt if it does not.
     pub fn open(self, password: &str) -> Result<(Vec<KeystoreEntry>, Writable), Self> {
         let (body, digest) = self.data.split_at(self.body_len);
-        if digest_of(password, body)[..] != *digest {
+        if !crate::key_protection::ct_eq(&digest_of(password, body), digest) {
             return Err(self);
         }
         let writable = Writable {
@@ -519,8 +519,9 @@ fn sealed_key_start(entry: &[u8]) -> Option<usize> {
 
 /// A string as Java's `DataOutput.writeUTF` writes it: a two-byte length,
 /// then each UTF-16 unit in modified UTF-8, where NUL takes two bytes and a
-/// supplementary character is two three-byte surrogates.
-fn encode_string(text: &str) -> Result<Vec<u8>, Error> {
+/// supplementary character is two three-byte surrogates. Returns `None` when
+/// the encoded bytes exceed `u16::MAX`.
+pub(crate) fn encode_modified_utf8(text: &str) -> Option<Vec<u8>> {
     let mut bytes = vec![0, 0];
     for unit in text.encode_utf16() {
         match unit {
@@ -535,10 +536,13 @@ fn encode_string(text: &str) -> Result<Vec<u8>, Error> {
             ]),
         }
     }
-    let length = u16::try_from(bytes.len() - 2)
-        .map_err(|_| Error::Invalid("the alias is too long for a keystore"))?;
+    let length = u16::try_from(bytes.len() - 2).ok()?;
     bytes[..2].copy_from_slice(&length.to_be_bytes());
-    Ok(bytes)
+    Some(bytes)
+}
+
+fn encode_string(text: &str) -> Result<Vec<u8>, Error> {
+    encode_modified_utf8(text).ok_or(Error::Invalid("the alias is too long for a keystore"))
 }
 
 struct Reader<'a> {

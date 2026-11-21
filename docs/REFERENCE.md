@@ -11,6 +11,7 @@
 - [Entry details](#entry-details)
 - [Offline chain diagnostics](#offline-chain-diagnostics)
 - [ASN.1 and PEM views](#asn1-and-pem-views)
+- [Revocation lists](#revocation-lists)
 - [Certificate requests](#certificate-requests)
 - [Exporting certificates](#exporting-certificates)
 - [Quitting](#quitting)
@@ -35,8 +36,10 @@ the hidden terminal prompt.
 There is one attempt: an incorrect password exits with code 1. `Esc`, `Ctrl+C`,
 or `Ctrl+D` cancels and exits non-zero.
 
-Standalone certificates (PEM, DER, or PKCS#7) and certificate requests open
-without a password. A file holding a single certificate or request opens
+Standalone certificates (PEM, DER, or PKCS#7), certificate requests, and
+certificate revocation lists open
+without a password. A file holding a single certificate, request, or revocation
+list opens
 directly in the detail screen, both from the command line and from the file
 browser; press `Esc` to return to the entry list. Files with several entries
 open on the entry list. Keystores always open on the entry list, even with a
@@ -55,9 +58,9 @@ app.
 Press `o` (or `Ctrl+O`) to open the file browser. It starts in the working
 directory, or in the current file's directory when you open another file. It
 shows directories first, then keystores (`.jks`, `.jceks`, `.p12`, `.pfx`),
-certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`), and
-certificate requests (`.csr`, `.p10`), and certificate revocation lists
-(`.crl`). Java truststores named `cacerts` or
+certificate files (`.pem`, `.crt`, `.cer`, `.der`, `.p7b`, `.p7c`),
+certificate requests (`.csr`, `.p10`), certificate revocation lists (`.crl`),
+and private key files (`.key`, `.p8`, for importing key pairs). Java truststores named `cacerts` or
 `jssecacerts` also appear without a file extension. The first directory or
 file is selected when a directory opens.
 

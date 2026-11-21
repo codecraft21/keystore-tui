@@ -97,12 +97,13 @@ pub fn fitting(length: usize) -> Vec<Choice> {
         .collect()
 }
 
-fn utf(text: &str) -> Vec<u8> {
-    [&(text.len() as u16).to_be_bytes()[..], text.as_bytes()].concat()
+fn utf(text: &str) -> Result<Vec<u8>, Error> {
+    crate::keystore::encode_modified_utf8(text).ok_or(Error::Unsupported)
 }
 
-fn byte_array(bytes: &[u8]) -> Zeroizing<Vec<u8>> {
-    Zeroizing::new([&(bytes.len() as u32).to_be_bytes()[..], bytes].concat())
+fn byte_array(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
+    let length = i32::try_from(bytes.len()).map_err(|_| Error::Unsupported)?;
+    Ok(Zeroizing::new([&length.to_be_bytes()[..], bytes].concat()))
 }
 
 /// A new `byte[]` object's start, up to its length: its class description
@@ -113,69 +114,69 @@ const NEW_BYTE_ARRAY: [u8; 19] = [
 ];
 
 /// The key as the serialized `SecretKeySpec` Java seals.
-fn serialized(key: &SecretKey) -> Zeroizing<Vec<u8>> {
-    Zeroizing::new(
+fn serialized(key: &SecretKey) -> Result<Zeroizing<Vec<u8>>, Error> {
+    Ok(Zeroizing::new(
         [
             &STREAM_HEADER[..],
             &[0x73, 0x72],
-            &utf(KEY_CLASS),
+            &utf(KEY_CLASS)?,
             // The serial version, the flags, and the two fields.
             &[
                 0x5b, 0x47, 0x0b, 0x66, 0xe2, 0x30, 0x61, 0x4d, 0x02, 0x00, 0x02, b'L',
             ],
-            &utf("algorithm"),
+            &utf("algorithm")?,
             &[0x74],
-            &utf("Ljava/lang/String;"),
+            &utf("Ljava/lang/String;")?,
             b"[",
-            &utf("key"),
+            &utf("key")?,
             &[0x74],
-            &utf("[B"),
+            &utf("[B")?,
             &[0x78, 0x70, 0x74],
-            &utf(&key.algorithm),
+            &utf(&key.algorithm)?,
             &NEW_BYTE_ARRAY,
-            &byte_array(&key.key),
+            &byte_array(&key.key)?,
         ]
         .concat(),
-    )
+    ))
 }
 
 /// The serialized `SealedObject` Java stores a JCEKS secret key as: the key
 /// encrypted under `password`, with a fresh salt from `rng`.
 pub fn seal(key: &SecretKey, password: &str, rng: &mut impl Rng) -> Result<Vec<u8>, Error> {
-    let (parameters, encrypted) = key_protection::jceks_encrypt(&serialized(key), password, rng)?;
+    let (parameters, encrypted) = key_protection::jceks_encrypt(&serialized(key)?, password, rng)?;
     Ok([
         &STREAM_HEADER[..],
         &[0x73, 0x72],
-        &utf(std::str::from_utf8(SEALED_CLASS).expect("an ASCII class name")),
+        &utf(std::str::from_utf8(SEALED_CLASS).expect("an ASCII class name"))?,
         &[
             0xcd, 0x57, 0xca, 0x59, 0xe7, 0x30, 0xbb, 0x53, 0x02, 0x00, 0x00, 0x78, 0x72,
         ],
-        &utf("javax.crypto.SealedObject"),
+        &utf("javax.crypto.SealedObject")?,
         &[
             0x3e, 0x36, 0x3d, 0xa6, 0xc3, 0xb7, 0x54, 0x70, 0x02, 0x00, 0x04, b'[',
         ],
-        &utf("encodedParams"),
+        &utf("encodedParams")?,
         &[0x74],
-        &utf("[B"),
+        &utf("[B")?,
         b"[",
-        &utf("encryptedContent"),
+        &utf("encryptedContent")?,
         // The class name again, by reference.
         &[0x71, 0x00, 0x7e, 0x00, 0x02, b'L'],
-        &utf("paramsAlg"),
+        &utf("paramsAlg")?,
         &[0x74],
-        &utf("Ljava/lang/String;"),
+        &utf("Ljava/lang/String;")?,
         b"L",
-        &utf("sealAlg"),
+        &utf("sealAlg")?,
         &[0x71, 0x00, 0x7e, 0x00, 0x03, 0x78, 0x70],
         &NEW_BYTE_ARRAY,
-        &byte_array(&parameters),
+        &byte_array(&parameters)?,
         // A second array, of the class described for the first.
         &[0x75, 0x71, 0x00, 0x7e, 0x00, 0x05],
-        &byte_array(&encrypted),
+        &byte_array(&encrypted)?,
         &[0x74],
-        &utf(SEAL_ALGORITHM),
+        &utf(SEAL_ALGORITHM)?,
         &[0x74],
-        &utf(SEAL_ALGORITHM),
+        &utf(SEAL_ALGORITHM)?,
     ]
     .concat())
 }
@@ -369,17 +370,17 @@ mod tests {
             [
                 &sealed[..start],
                 &NEW_BYTE_ARRAY,
-                &byte_array(&parameters),
+                &byte_array(&parameters).unwrap(),
                 &[0x75, 0x71, 0x00, 0x7e, 0x00, 0x05],
-                &byte_array(&encrypted),
+                &byte_array(&encrypted).unwrap(),
                 &[0x74],
-                &utf(SEAL_ALGORITHM),
+                &utf(SEAL_ALGORITHM).unwrap(),
                 &[0x74],
-                &utf(SEAL_ALGORITHM),
+                &utf(SEAL_ALGORITHM).unwrap(),
             ]
             .concat()
         };
-        let plain = serialized(&aes);
+        let plain = serialized(&aes).unwrap();
         assert!(unseal(&reseal(&plain), "changeit") == Ok(aes.clone()));
         assert!(unseal(&reseal(b"not a stream"), "changeit") == Err(Error::Password));
         assert!(unsupported(&reseal(&plain[..plain.len() - 1])));
@@ -395,6 +396,20 @@ mod tests {
         let at = name.windows(3).rposition(|w| w == b"AES").unwrap();
         name[at] = 0xff;
         assert!(unsupported(&reseal(&name)));
+    }
+
+    #[test]
+    fn utf_uses_modified_utf8_and_enforces_length_bounds() {
+        // NUL becomes 0xC0 0x80; supplementary U+1F511 becomes two 3-byte surrogates.
+        assert_eq!(utf("\0").unwrap(), vec![0x00, 0x02, 0xc0, 0x80]);
+        assert_eq!(
+            utf("🔑").unwrap(),
+            vec![0x00, 0x06, 0xed, 0xa0, 0xbd, 0xed, 0xb4, 0x91]
+        );
+        // Strings whose modified UTF-8 encoding exceeds u16::MAX are rejected.
+        assert_eq!(utf(&"a".repeat(65_536)), Err(Error::Unsupported));
+        // byte_array prefixes a 4-byte big-endian length.
+        assert_eq!(*byte_array(&[1, 2, 3]).unwrap(), vec![0, 0, 0, 3, 1, 2, 3]);
     }
 
     #[test]
