@@ -1,8 +1,7 @@
 # Agent and contributor guide
 
-keystore-tui is a Rust and Ratatui TUI for inspecting keystores, certificates,
-and certificate signing requests. Release 1.1 adds write features; see the
-[ROADMAP](docs/ROADMAP.md).
+keystore-tui is a Rust and Ratatui TUI for inspecting and editing keystores
+and inspecting certificates and certificate signing requests.
 
 ## Conventions and constraints
 
@@ -51,25 +50,10 @@ KEYSTORE_TUI_BINARY=/absolute/path/to/keystore-tui cargo test --locked --test te
 Give each smoke test a `SPEC:` doc line linking the [SPEC](docs/SPEC.md)
 sections it checks; `spec.rs` fails on a missing link or a renamed heading. For TUI
 changes, also check rendering, input, and terminal restoration by hand in an
-interactive terminal. CI (`.github/workflows/rust.yml`) runs these automated
-checks on Linux for pushes to `main` and PRs, builds with the minimum supported
-Rust from `rust-version`, runs all tests, including the PTY smoke tests, on
-macOS, runs the unit tests on Windows, and measures test coverage with
-`cargo llvm-cov` for Codecov (`codecov.yml` makes the patch status
-informational). Changes only to Markdown, `docs/`, or the licence
-skip these jobs, except `docs/SPEC.md`; the `ci-ok` job reports the combined
-result and is the only check branch protection should require. It fails unless
-every job succeeded or was skipped. A job that never got a runner ends as
-`abandoned` and fails it too, so re-run that job. Keep each platform a separate
-job rather than a matrix leg, so `ci-ok` sees each platform's own result. Release CI runs
-`dist plan` on PRs. When changing `rust-version`, update the toolchain in the
-`msrv` job too.
+interactive terminal.
 
-Dependabot (`.github/dependabot.yml`) opens monthly grouped dependency and
-GitHub Actions update PRs. `.github/workflows/dependabot-auto-merge.yml` turns on
-auto-merge for all of them, so they merge once the required checks pass; the
-automated checks, including the PTY smoke tests, stand in for a manual TUI
-check. Merges made this way don't trigger the push workflows on `main`.
+See the [CI workflow](.github/workflows/rust.yml), [Dependabot configuration](.github/dependabot.yml), and [auto-merge workflow](.github/workflows/dependabot-auto-merge.yml).
+When changing `rust-version` in `Cargo.toml`, update the toolchain in the CI workflow's `msrv` job.
 
 Use the environment's default temporary directory. If a sandbox cannot write
 there, create `target/tmp` and set `TMPDIR="$PWD/target/tmp"` for the affected
@@ -99,11 +83,8 @@ Tests needing private-key entries use synthetic bytes at runtime; never commit p
 
 ## Workflow
 
-Use the coding agent's configured GitHub integration for authenticated remote
-operations; keep Git credentials out of the workspace. Local Git may be used
-for inspection, branching, commits, checkouts, and cleanup. Synchronize through
-the integration or credential-free access. If an operation is unsupported,
-report the limitation instead of adding workspace credentials.
+Keep Git credentials out of the workspace. If a remote operation requires
+unavailable credentials, report the limitation.
 
 **Ship** means complete the development workflow below without further confirmation.
 Shipping includes no version bump or release tag. Keep any existing version bump
@@ -111,7 +92,7 @@ out of the shipping PR without discarding the user's work.
 
 1. Run the applicable [development checks](#development) and fix failures.
 2. Create a feature branch and commit the completed changes there, never directly to `main`.
-3. Use the GitHub integration to publish the branch and open a PR against `main`.
+3. Publish the branch and open a PR against `main`.
 4. Wait for all required checks to pass, then merge. Fix failures and rerun
    checks, or report what remains blocked.
 5. Synchronize local `main` with the merged result and switch to it; delete the
