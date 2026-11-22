@@ -1,75 +1,99 @@
 # Architecture
 
-Module responsibilities and dependencies for keystore-tui. See
-[AGENTS.md](../AGENTS.md) for development checks and contribution instructions.
+How keystore-tui is organised, to help locate responsibilities. Behaviour is
+specified in [SPEC](SPEC.md); development checks and conventions are in
+[AGENTS.md](../AGENTS.md). Each module's own doc comment has the details.
 
-| Module | Responsibility |
+## Overview
+
+keystore-tui is a single binary crate with no Java dependency. It is built in
+three layers:
+
+1. **Application shell** (`main.rs`, `startup.rs`): command-line handling,
+   terminal setup and restoration, the event loop, and the `App` state.
+2. **Workflows and views**: the screens, prompts, and forms that turn key
+   presses into actions on the open keystore.
+3. **Formats and cryptography**: parsing, verifying, editing, and writing
+   keystores, certificates, requests, and revocation lists. These modules
+   know nothing about the UI.
+
+## Application shell
+
+`main.rs` holds the `App` struct, which owns the loaded entries and the state
+of whichever prompt, form, or view is active (each an `Option` field). Its
+event loop draws, then routes each key press to the active component; global
+keys such as `Ctrl+C` are handled first. Workflow modules add their own
+`impl App` blocks rather than growing `main.rs`.
+
+Long-running work (key pair generation) runs on a worker thread; the loop
+polls it and shows a cancellable modal meanwhile.
+
+## Workflows and views
+
+| Area | Modules |
 | --- | --- |
-| `src/startup.rs` | Command-line arguments (`--version`, `--help`), startup loading, and hidden terminal password input |
-| `src/main.rs` | App state, event loop, main view rendering, password prompt, deleting entries and confirmation questions, file loading (size limit, format detection), terminal setup and restoration |
-| `src/certificate_file.rs` | PEM, DER, and PKCS#7 certificate files (including requests and revocation lists), and chain linking within a file |
-| `src/chain_edit.rs` | Editing a private key's chain: the append-or-remove question, checking that a certificate issued the chain's last one, and replacing the chain |
-| `src/revocation_list.rs` | Certificate revocation lists, read for display: issuer, update times, extensions, and revoked certificates |
-| `src/certificate_request.rs` | PKCS#10 certificate requests: fields, requested extensions, and attributes |
-| `src/file_picker.rs` | The keystore file browser, which can also list every file |
-| `src/canonical_path.rs` | Canonical paths without the Windows verbatim `\\?\` prefix, as the file browser, path bar, and export prompt show them |
-| `src/path_input.rs` | The cursor-edited, horizontally scrolled text input shared by every file name prompt |
-| `src/path_bar.rs` | The opened file's path line and absolute directory, shared by the main view and the detail view |
-| `src/editing.rs` | The alias prompt, renaming an entry, and importing a trusted certificate or a key pair under the typed alias |
-| `src/generate.rs` | Generating a key pair: the RSA, EC, and Ed25519 keys as PKCS #8, and adding the result with its certificate, self-signed or signed by another private key, under the typed alias; the key and certificate are made on a worker thread while a cancellable modal waits for them |
-| `src/certificate_form.rs` | The form asking what a new key pair's certificate or a certificate request holds, its checks, and the private key that signs a new key pair, if any |
-| `src/ca_reply.rs` | Importing a CA reply: building the issued chain from the reply file and the keystore's certificates, and replacing a private key's chain with it |
-| `src/new_request.rs` | Making a certificate request for a private key: starting the form from its certificate, the file name prompt, and writing the request |
-| `src/signing.rs` | Certificates and requests signed with a PKCS #8 key: the subject name, the extensions of a purpose, alternative names, the signature algorithm of a key type, a self-signed certificate, a certificate issued by another key for a new key or for a request, a revocation list, the warning for a signer that is not a CA, and a PKCS #10 request |
-| `src/sign.rs` | Signing with a private key as a certificate authority: the menu of what to sign, reading and verifying a request file and writing its certificate to a new file, and writing a signed revocation list to a new file |
-| `src/crl_form.rs` | The form asking what a revocation list holds: revoked serial numbers with reasons, update times, and the CRL number |
-| `src/sign_form.rs` | The form asking how a request is signed: validity, serial number, what the file holds, and which requested extensions are copied |
-| `src/key_export.rs` | Exporting a private key, alone or with its certificates, to a new PKCS12, PEM, or DER file, and its name prompt |
-| `src/key_import.rs` | Importing a key pair: finding the private key in a PEM or PKCS #8 file, or a keystore to copy from, the file's password prompt, and matching a key to its certificate chain |
-| `src/copy_entries.rs` | Copying entries from another keystore: the list in which they are chosen, and adding them to the open keystore |
-| `src/new_password.rs` | Typing a new password twice, changing the open keystore's password or a key's password, and creating a new keystore file |
-| `src/save.rs` | The open keystore's writable form and password, converting it to another format, the "save as" and new-keystore name prompt, and replacing a file atomically |
-| `src/keystore.rs` | JKS and JCEKS parsing, integrity check (SHA-1), and writing entries back as stored, renamed, added, or with another certificate chain; the shared `KeystoreEntry` model, whose content is certificates (with their `Kind`) or a request |
-| `src/key_protection.rs` | Java's password protection of private keys in JKS (SHA-1 keystream) and JCEKS (`PBEWithMD5AndTripleDES`): recovering a key and protecting it again |
-| `src/java_serialization.rs` | Walking a serialized Java object (a JCEKS secret key) without deserializing it, and giving the byte arrays and strings it holds |
-| `src/secret_key.rs` | Secret keys as the keystores hold them: sealing and unsealing Java's JCEKS `SealedObject`, the PKCS #8 structure of PKCS12, the algorithms offered, and reading a key from a file's content |
-| `src/secret_entry.rs` | Secret-key entries: choosing the algorithm of a new or imported key, reading a key file, and exporting a key to a new file |
-| `src/pkcs12/` | PKCS12 support: `read.rs` parses, verifies the MAC, and lists entries from bags; `crypto.rs` decrypts safe contents (AES and legacy PBE) and re-encrypts keys for a new password; `bags.rs` reads bag metadata and attributes; `write.rs` edits bags and writes them back with PBES2 and a new MAC |
-| `src/entry_list.rs` | Entry-list filtering, sorting, and expiry classification |
-| `src/certificate.rs` | X.509 summary (subject, algorithm, key size, expiry) for the entry table |
-| `src/certificate/details.rs` | Full certificate fields for the detail view |
-| `src/certificate/extensions.rs` | Decoding X.509 extensions into display lines |
-| `src/certificate/security.rs` | Weak key-size and signature-hash checks |
-| `src/certificate/diagnostics.rs` | Offline stored-chain validity, issuer and CA constraint diagnostics; no trust decisions |
-| `src/certificate/signature.rs` | Checking a certificate's signature with its issuer's public key, and a request's with its own; finding a certificate's SubjectPublicKeyInfo |
-| `src/entry_details.rs` | The full-screen detail view: layout, keys, the bottom pane (details, diagnostics, ASN.1, PEM), export, shared detail formatting, and lazy rendering caches bounded to the selected object |
-| `src/entry_details/chain.rs` | A stored chain's hierarchy and certificate details |
-| `src/entry_details/request.rs` | A certificate request's details, shown in place of a hierarchy |
-| `src/entry_details/crl.rs` | A revocation list's details, shown in place of a hierarchy |
-| `src/asn1_dump.rs` | The ASN.1 structure dump of a certificate or request, hiding challenge passwords |
-| `src/export.rs` | The export name prompt and writing PEM/DER certificate, public key, request, and revocation list files |
-| `src/test_support.rs`, `src/tests/` | Unit-test helpers, synthetic keystores, and `App` tests split by workflow |
-| `tests/terminal_smoke/` | Unix PTY smoke tests against the built binary: the harness (`pty.rs`, `screen.rs`, `fixtures.rs`), tests grouped by SPEC section, each linking the sections it checks, and the link check (`spec.rs`) |
-| `tests/fixtures/` | Generated keystore fixtures; see its `README.md` for how they were made |
-| `dist-workspace.toml`, `.github/workflows/release.yml` | Release configuration for [`dist`](https://github.com/axodotdev/cargo-dist) and the workflow it generates |
-| `.github/workflows/publish-crates.yml` | The crates.io publish job that `release.yml` calls |
-| `.github/workflows/tag-release.yml` | Tags a new `Cargo.toml` version on `main`, which starts `release.yml` |
-| `.github/workflows/rust.yml` | CI checks (format, lint, build, tests), a minimum-supported-Rust build, macOS tests, including the PTY smoke tests, Windows unit tests, and test coverage, uploaded to Codecov, for pushes to `main` and PRs; docs-only changes skip these jobs, and the `ci-ok` job is the single required check |
-| `.github/dependabot.yml` | Monthly grouped Cargo and GitHub Actions updates, leaving out the generated `release.yml` |
-| `.github/workflows/dependabot-auto-merge.yml` | Turns on auto-merge for minor and patch Dependabot PRs that don't touch release workflows, which merge once the required checks pass |
+| Browsing and viewing | `file_picker`, `entry_list`, `entry_details/`, `asn1_dump`, `path_bar`, `canonical_path` |
+| Shared input | `path_input` (file name prompts), `new_password` |
+| Editing entries | `editing` (alias prompt, rename, import certificate), `copy_entries`, `chain_edit`, `ca_reply` |
+| Keys | `generate`, `key_import`, `key_export`, `secret_entry` |
+| Signing and requests | `certificate_form`, `new_request`, `sign`, `sign_form`, `crl_form` |
+| Saving and exporting | `save` (save, save as, new keystore, atomic replace), `export` (certificates, public keys, requests, CRLs) |
+
+## Formats and cryptography
+
+| Area | Modules |
+| --- | --- |
+| JKS and JCEKS | `keystore` (parsing, integrity check, writing, and the shared `KeystoreEntry` model), `key_protection`, `java_serialization`, `secret_key` |
+| PKCS12 | `pkcs12/` (`read`, `crypto`, `bags`, `write`) |
+| Certificate files | `certificate_file` (PEM, DER, PKCS#7), `certificate_request`, `revocation_list` |
+| X.509 | `certificate` (summary) and `certificate/` (details, extensions, security warnings, offline diagnostics, signature checks) |
+| Creating objects | `signing` (certificates, requests, and CRLs signed with a PKCS #8 key) |
+
+## Data flow
+
+- **Opening:** a file is read with a size limit and its format detected. A
+  keystore is verified with its password, giving the entry list and, when it
+  can be edited, a writable `save::Document`. Certificate files are read-only.
+- **Editing:** workflows change the entries and the document in memory and
+  mark the keystore modified; nothing touches the file until an explicit save.
+- **Saving:** the document is serialised and written to a temporary file in
+  the target directory, then renamed over the original. Exports and "save as"
+  only create new files.
+
+## Handling secrets
+
+Passwords live in zeroizing buffers; the open keystore's password is kept only
+for saving. Private and secret keys are decrypted or generated in memory only
+where a workflow needs them and are wiped afterwards. See the write and secret
+rules in [AGENTS.md](../AGENTS.md) and [ROADMAP](ROADMAP.md).
+
+## Dependencies
 
 Dependencies are deliberately few:
 
-- `ratatui`, with the `crossterm` backend, for the UI.
-- `sha1` for the JKS and JCEKS integrity digest and the JKS key protector.
-- `crown` for ASN.1, PEM, X.509, PKCS#7, PKCS12 (MAC and PBE), signature
-  verification (certificates and requests), key generation, and signing
-  certificates, requests, and revocation lists. It generates RSA keys without giving out their private parts,
-  so `generate.rs` works them out again from the modulus and the random
-  candidates the generator drew.
-- `zeroize` for wiping passwords, including the one kept for saving.
-- `getrandom` for the random salts and IVs of saved PKCS12 keystores, and for
-  generated keys and serial numbers.
+- `ratatui` (crossterm backend) for the UI.
+- `crown` for ASN.1, PEM, X.509, PKCS#7, PKCS12, signature verification, key
+  generation, and signing.
+- `sha1` for the JKS and JCEKS integrity digest and JKS key protection.
+- `zeroize` for wiping passwords and keys.
+- `getrandom` for salts, IVs, keys, and serial numbers.
+- `rustix` (Unix dev-dependency, already used by crossterm) for the PTY smoke
+  tests.
 
-The PTY smoke tests also use `rustix` (Unix only, a dev-dependency) for
-pseudo-terminals; crossterm already depends on it.
+## Tests
+
+- Unit tests sit next to their modules; `App` workflow tests are in
+  `src/tests/`, with helpers and synthetic keystores in `src/test_support.rs`.
+- `tests/terminal_smoke/` drives the built binary in a pseudo-terminal, with
+  tests grouped by SPEC section and linked to it (checked by `spec.rs`).
+- `tests/fixtures/` holds generated fixtures; see its `README.md`.
+
+## CI and release
+
+- `.github/workflows/rust.yml`: format, lint, tests, MSRV, macOS and Windows,
+  and coverage; `ci-ok` is the single required check.
+- `tag-release.yml` tags a new `Cargo.toml` version on `main`, which starts the
+  [`dist`](https://github.com/axodotdev/cargo-dist)-generated `release.yml`
+  (configured in `dist-workspace.toml`); it calls `publish-crates.yml`.
+- `.github/dependabot.yml` and `dependabot-auto-merge.yml` handle dependency
+  updates. See [RELEASING](RELEASING.md).
