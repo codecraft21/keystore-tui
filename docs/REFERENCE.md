@@ -91,9 +91,11 @@ visible below the entry list and the detail view.
 A certificate file opens without a password. Each certificate in it, in PEM,
 DER, or PKCS#7 form, is listed as a `Certificate` entry in file order, named by
 its subject common name. Its hierarchy is built from the other certificates in
-the same file. Certificate signing requests (PKCS#10), in PEM or DER, open the
-same way and are listed as `Certificate request` entries. Private keys and
-other PEM blocks are not read; a yellow warning says when some were present.
+the same file. Certificate signing requests (PKCS#10) and certificate
+revocation lists, in PEM or DER, open the same way and are listed as
+`Certificate request` (named by subject) and `Revocation list` (named by
+issuer) entries. Private keys and other PEM blocks are not read; a yellow
+warning says when some were present.
 
 ## Entry list
 
@@ -108,10 +110,10 @@ certificates whose names match another certificate or key.
 | --- | --- |
 | Alias | The entry alias |
 | Type | Private key, Trusted certificate, Secret key, Certificate, Certificate request, or Revocation list |
-| Algorithm | The certificate's public key algorithm (RSA, EC, DSA, Ed25519, ...) |
-| Key size | The key size in bits (RSA/DSA modulus, EC curve size) |
-| Expires | The certificate's expiry date (UTC): yellow within 30 days of expiry, red once it has passed; `-` for a request or a revocation list |
-| Crypto | `Weak`, in yellow, when the certificate's key is too short or its signature uses a broken hash |
+| Algorithm | The certificate's or request's public key algorithm (RSA, EC, DSA, Ed25519, ...), or `-` when none is present |
+| Key size | The key size in bits (RSA/DSA modulus, EC curve size), or `-` when none is present |
+| Expires | The certificate's expiry date (UTC): yellow within 30 days of expiry, red once it has passed; `-` for a request, revocation list, secret key, or private key without a certificate |
+| Crypto | `Weak`, in yellow, when the certificate's or request's key is too short or a certificate's signature uses a broken hash; `-` when no certificate or request is present |
 
 | Key | Action in the entry list |
 | --- | --- |
@@ -134,13 +136,13 @@ certificates whose names match another certificate or key.
 | `w` | Save the changes to the opened file |
 | `W` | Save the keystore to a new file, converting it when the name asks for another format |
 | `p` | Change the keystore password |
-| `P` | Change the selected private key's own password (JKS and JCEKS) |
+| `P` | Change the selected private key's or JCEKS secret key's own password (JKS and JCEKS) |
 
 Press `/` to filter by part of the alias or the certificate subject (such as
 `CN=example`), ignoring case. The list updates as you type, and every letter,
-including `q` and `s`, goes into the filter. `Backspace` deletes a character,
-`Enter` keeps the filter, and `Esc` clears it. To clear an applied filter, press
-`/` and then `Esc`.
+including `q` and `s`, goes into the filter. `Up` / `Down` move the selection,
+`Backspace` deletes a character, `Enter` keeps the filter, and `Esc` clears it.
+To clear an applied filter, press `/` and then `Esc`.
 
 Press `s` to sort by expiry date, soonest first, and again to return to alias
 order.
@@ -160,8 +162,9 @@ empty password, press `p` to set a password.
 - **Rename:** press `r` on an entry, edit its alias, and press `Enter`.
 - **Generate a key pair:** press `g` and fill in the form. Choose the
   algorithm (RSA 2048, 3072, or 4096, EC P-256, P-384, or P-521, or Ed25519)
-  and the purpose with `Left` / `Right`, and type the other fields; move
-  between them with `Up` / `Down` or `Tab`. Only the common name is
+  and the purpose with `Left` / `Right`, and type the other fields (`Ctrl+U`
+  clears a text field); move between them with `Up` / `Down` or
+  `Tab` / `Shift+Tab`. Only the common name is
   required. Alternative names are separated by commas: DNS names, IP
   addresses, or email addresses. The purpose sets the key usage extensions
   for a TLS server, a TLS client, both, a certificate authority, or code
@@ -174,9 +177,9 @@ empty password, press `p` to set a password.
 - **Make a certificate request:** press `c` on a private key. The form
   starts from the key's certificate; change the subject or the alternative
   names if the request should differ, and choose a purpose to ask for key
-  usage extensions. Press `Enter`, edit the file name, and press `Enter`
-  again: a `.der` name saves DER, any other name PEM. Send the file to your
-  certificate authority. The keystore is not changed.
+  usage extensions. Press `Enter`, edit the file name (`Esc` returns to the
+  form), and press `Enter` again: a `.der` name saves DER, any other name PEM.
+  Send the file to your certificate authority. The keystore is not changed.
 - **Import a CA reply:** press `R` on the private key the certificate was
   issued for and choose the file the certificate authority sent (PEM, DER,
   or PKCS#7). The certificate must hold the key's public key. Its chain is
@@ -205,20 +208,22 @@ empty password, press `p` to set a password.
   certificate authority, then `r`, and choose the `.csr` file. Its signature
   is checked first. In the form, set the validity in days, a serial number in
   hex if you want a particular one, and whether the file also gets the
-  signer's chain. Each extension the request asks for is listed: `Space`
-  marks the ones the certificate gets. A request for a certificate authority
-  starts unmarked. Then edit the file name and press `Enter`. The certificate
-  is written to a new PEM file, or alone as DER under a `.der` name; the
-  keystore is not changed. Check the result with
-  `openssl verify -CAfile ca.pem issued.pem`.
+  signer's chain (`Ctrl+U` clears a text field). Each extension the request
+  asks for is listed: `Space` (or `Left` / `Right`) marks the ones the
+  certificate gets. A request for a certificate authority starts unmarked. Then
+  edit the file name (`Esc` returns to the form) and press `Enter`. The
+  certificate is written to a new PEM file, or as DER under a `.der` name when
+  saving the certificate only; the keystore is not changed. Check the result
+  with `openssl verify -CAfile ca.pem issued.pem`.
 - **Generate a key pair signed by another key:** press `S` on the signing
   private key, then `g`, and fill in the form as for `g`. The new entry's
   chain is its certificate followed by the signer's chain.
 - **Sign a revocation list:** press `S` on the private key of your
   certificate authority, then `l`. Type the revoked serial numbers in hex,
   separated by commas; a reason may follow each one, as in
-  `01A4=keyCompromise, 0F`. Adjust the two update times and the CRL number,
-  then edit the file name and press `Enter`. The list is written to a new
+  `01A4=keyCompromise, 0F`. Adjust the two update times and the CRL number
+  (`Ctrl+U` clears a text field), then edit the file name (`Esc` returns to
+  the form) and press `Enter`. The list is written to a new
   `.crl` file as PEM, or as DER under a `.der` name; the keystore is not
   changed. Check the result with
   `openssl crl -in ca.crl -text -noout -CAfile ca.pem`.
@@ -227,7 +232,9 @@ empty password, press `p` to set a password.
   it signs.
 - **Copy entries from another keystore:** press `i`, choose a JKS, JCEKS, or
   PKCS12 keystore, and type its password. In the list, press `Space` to choose
-  entries or `a` for all, then `Enter`. Several entries keep their aliases,
+  entries or `a` for all, then `Enter` (pressing `Enter` with nothing marked
+  imports the highlighted entry, and a single-entry keystore skips the list).
+  Several entries keep their aliases,
   and those whose alias already exists are skipped; a single entry lets you
   edit its alias. Private keys are stored under the open keystore's password.
   Secret keys are copied into JCEKS and PKCS12 keystores. Keys with a
@@ -237,7 +244,8 @@ empty password, press `p` to set a password.
   the algorithm with `Left` / `Right` (AES with 128, 192, or 256 bits, or
   HMAC with SHA-1, SHA-256, SHA-384, or SHA-512), press `Enter`, and confirm
   or edit the alias.
-- **Import a secret key:** press `G`, then `i`, and choose the file. It holds
+- **Import a secret key:** press `G`, then `i`, and choose the file (the
+  browser lists all files regardless of extension). It holds
   the key as hex digits or as its bytes, 1 to 1024 of them. Choose the
   algorithm, then the alias.
 - **Export a secret key:** press `e` on it, edit the file name, and confirm
@@ -330,7 +338,7 @@ explain the result below the signature algorithm.
 | `a` | Toggle the selected certificate's ASN.1 structure / details |
 | `p` | Toggle the selected certificate's PEM encoding / details |
 | `f` | Toggle SHA-256 / SHA-1 fingerprints; kept while switching certificates |
-| `x` | Export the selected certificate, or the certificate request |
+| `x` | Export the selected certificate, certificate request, or revocation list |
 | `X` | Export the entry's whole chain, leaf first |
 | `K` | Export the selected certificate's public key |
 | `Esc` | Return to the entry list, preserving its selection and scroll position |
@@ -364,7 +372,7 @@ A passing check does not establish that a certificate is trusted or usable.
 ## ASN.1 and PEM views
 
 Press `a` in the detail view to show the DER structure of the selected
-certificate, or of a certificate request, in the bottom pane. Press `p` to show
+certificate, certificate request, or revocation list in the bottom pane. Press `p` to show
 it in PEM instead. Press the same key again to return to the details. The pane
 takes keyboard focus; press `Tab` to focus the hierarchy and select another
 certificate.
@@ -407,9 +415,9 @@ show the request's [ASN.1 structure and PEM encoding](#asn1-and-pem-views).
 
 Press `x`, `X`, or `K` in the detail view, then edit the suggested file name and press
 `Enter`. The suggestion is `<alias>.pem` (or `<alias>-chain.pem`) next to the
-open file, `<alias>-public-key.pem` for a public key, or `<alias>.csr` for a
-certificate request. A name ending in `.der`
-saves a single certificate, the public key, or the request as DER; any other name saves PEM. Relative names are saved next to the open file. Every key,
+open file, `<alias>-public-key.pem` for a public key, `<alias>.csr` for a
+certificate request, or `<alias>.crl` for a revocation list. A name ending in `.der`
+saves a single certificate, public key, request, or revocation list as DER; any other name saves PEM. Relative names are saved next to the open file. Every key,
 including `q`, is typed into the name at the cursor; `Left`/`Right` and
 `Home`/`End` move the cursor, `Backspace` deletes the character before it,
 `Delete` the character under it, `Ctrl+U` clears the name, and `Esc` cancels.
@@ -426,8 +434,8 @@ the private key. Check the file with `openssl pkey -pubin -in <file> -text -noou
 
 | Key | Quits from |
 | --- | --- |
-| `q` | The entry list (when not typing a filter, alias, or file name) or detail view (when not typing an export name); asks first with unsaved changes |
-| `Esc` | The entry list, when not typing a filter, alias, or file name; asks first with unsaved changes |
+| `q` | The entry list or detail view, when no prompt, form, menu, or overlay is open; asks first with unsaved changes |
+| `Esc` | The entry list, when no prompt, form, menu, or overlay is open; asks first with unsaved changes |
 | `Ctrl+C` | Any view, including the file browser, the password prompt, while typing a filter or file name, and while a key pair is generated; discards unsaved changes without asking |
 
 The terminal is restored when the app exits.
