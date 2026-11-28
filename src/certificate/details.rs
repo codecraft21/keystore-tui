@@ -1,4 +1,7 @@
 //! Display-only certificate metadata. Public keys and signatures are never verified here.
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+
 use crown::{
     asn1::{Asn1Time, Reader, der, oid::ObjectIdentifier},
     error::{CryptoError, CryptoResult},
@@ -19,80 +22,154 @@ pub struct Details {
     pub signature_algorithm: String,
     /// In certificate order; empty when the certificate has none.
     pub extensions: Vec<Extension>,
-    subject_key_id: Option<Vec<u8>>,
-    authority_key_id: Option<Vec<u8>>,
-    authority_serial: Option<Vec<u8>>,
-    authority_issuers: Vec<Name>,
+}
+
+struct ParsedCertificate<'a> {
+    version: i64,
+    serial: &'a [u8],
+    issuer: Name,
+    not_before: Asn1Time,
+    not_after: Asn1Time,
+    subject: Name,
+    signature_oid: ObjectIdentifier,
+    tbs_rest: Reader<'a>,
+}
+
+fn parse_certificate_parts(encoding: &[u8]) -> CryptoResult<ParsedCertificate<'_>> {
+    let mut reader = Reader::new(encoding);
+    let mut certificate = reader.read_sequence()?;
+    reader.expect_end()?;
+    let mut tbs = certificate.read_sequence()?;
+    let version = if tbs.peek_tag()? == der::Tag::context_constructed(0) {
+        tbs.read_explicit(0)?
+            .read_integer_i64()?
+            .checked_add(1)
+            .ok_or(CryptoError::StrError("invalid certificate version"))?
+    } else {
+        1
+    };
+    let serial = tbs.read_expected(der::INTEGER)?;
+    if serial.is_empty() {
+        return Err(CryptoError::StrError("empty certificate serial"));
+    }
+    AlgorithmIdentifier::parse(&mut tbs)?;
+    let issuer = Name::parse(&mut tbs)?;
+    let mut validity = tbs.read_sequence()?;
+    let not_before = validity.read_time()?;
+    let not_after = validity.read_time()?;
+    validity.expect_end()?;
+    let subject = Name::parse(&mut tbs)?;
+    tbs.read_sequence()?; // SPKI: summarize() tolerates algorithms crown cannot decode.
+    let signature_oid = AlgorithmIdentifier::parse(&mut certificate)?.oid;
+    certificate.read_bit_string()?;
+    certificate.expect_end()?;
+    Ok(ParsedCertificate {
+        version,
+        serial,
+        issuer,
+        not_before,
+        not_after,
+        subject,
+        signature_oid,
+        tbs_rest: tbs,
+    })
 }
 
 impl Details {
     pub fn parse(encoding: &[u8]) -> CryptoResult<Self> {
-        let mut reader = Reader::new(encoding);
-        let mut certificate = reader.read_sequence()?;
-        reader.expect_end()?;
-        let mut tbs = certificate.read_sequence()?;
-        let version = if tbs.peek_tag()? == der::Tag::context_constructed(0) {
-            tbs.read_explicit(0)?
-                .read_integer_i64()?
-                .checked_add(1)
-                .ok_or(CryptoError::StrError("invalid certificate version"))?
-        } else {
-            1
-        };
-        let serial = tbs.read_expected(der::INTEGER)?.to_vec();
-        if serial.is_empty() {
-            return Err(CryptoError::StrError("empty certificate serial"));
-        }
-        AlgorithmIdentifier::parse(&mut tbs)?;
-        let issuer = Name::parse(&mut tbs)?;
-        let mut validity = tbs.read_sequence()?;
-        let not_before = validity.read_time()?;
-        let not_after = validity.read_time()?;
-        validity.expect_end()?;
-        let subject = Name::parse(&mut tbs)?;
-        tbs.read_sequence()?; // SPKI: summarize() tolerates algorithms crown cannot decode.
+        let mut parsed = parse_certificate_parts(encoding)?;
         let mut details = Self {
-            version,
-            subject,
-            issuer,
-            serial_hex: serial_text(&serial, true),
-            serial_decimal: serial_text(&serial, false),
-            not_before,
-            not_after,
-            signature_algorithm: signature_name(&AlgorithmIdentifier::parse(&mut certificate)?.oid),
+            version: parsed.version,
+            subject: parsed.subject,
+            issuer: parsed.issuer,
+            serial_hex: serial_text(parsed.serial, true),
+            serial_decimal: serial_text(parsed.serial, false),
+            not_before: parsed.not_before,
+            not_after: parsed.not_after,
+            signature_algorithm: signature_name(&parsed.signature_oid),
             extensions: Vec::new(),
-            subject_key_id: None,
-            authority_key_id: None,
-            authority_serial: None,
-            authority_issuers: Vec::new(),
         };
-        certificate.read_bit_string()?;
-        certificate.expect_end()?;
-        while !tbs.is_empty() {
-            if tbs.peek_tag()? == der::Tag::context_constructed(3) {
-                let mut explicit = tbs.read_explicit(3)?;
+        while !parsed.tbs_rest.is_empty() {
+            if parsed.tbs_rest.peek_tag()? == der::Tag::context_constructed(3) {
+                let mut explicit = parsed.tbs_rest.read_explicit(3)?;
                 let mut extensions = explicit.read_sequence()?;
                 while !extensions.is_empty() {
                     // A malformed extension is described, not fatal to the other details.
-                    let extension = Extension::parse(extensions.read_raw_tlv()?);
-                    // Optional linking hints must not make otherwise readable details disappear.
-                    if let Some(id) = &extension.oid {
-                        if id.matches(OID_SUBJECT_KEY_ID) {
-                            details.subject_key_id = Reader::new(&extension.value)
-                                .read_octet_string()
-                                .ok()
-                                .map(Vec::from);
-                        } else if id.matches(OID_AUTHORITY_KEY_ID) {
-                            let _ = details.read_authority(&extension.value);
-                        }
-                    }
-                    details.extensions.push(extension);
+                    details
+                        .extensions
+                        .push(Extension::parse(extensions.read_raw_tlv()?));
                 }
             } else {
-                tbs.read_raw_tlv()?; // Optional issuer/subject unique identifiers.
+                parsed.tbs_rest.read_raw_tlv()?; // Optional issuer/subject unique identifiers.
             }
         }
         Ok(details)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NameKey(Name);
+
+impl Hash for NameKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.rdns.len().hash(state);
+        for rdn in &self.0.rdns {
+            rdn.attributes.len().hash(state);
+            for attr in &rdn.attributes {
+                attr.oid.arcs().hash(state);
+                std::mem::discriminant(&attr.tag.class).hash(state);
+                attr.tag.constructed.hash(state);
+                attr.tag.number.hash(state);
+                attr.value.hash(state);
+            }
+        }
+    }
+}
+
+struct ChainInfo {
+    subject: NameKey,
+    issuer: NameKey,
+    serial_hex: String,
+    subject_key_id: Option<Vec<u8>>,
+    authority_key_id: Option<Vec<u8>>,
+    authority_serial_hex: Option<String>,
+    authority_issuers: Vec<NameKey>,
+}
+
+impl ChainInfo {
+    fn parse(encoding: &[u8]) -> CryptoResult<Self> {
+        let mut parsed = parse_certificate_parts(encoding)?;
+        let mut info = Self {
+            subject: NameKey(parsed.subject),
+            issuer: NameKey(parsed.issuer),
+            serial_hex: serial_text(parsed.serial, true),
+            subject_key_id: None,
+            authority_key_id: None,
+            authority_serial_hex: None,
+            authority_issuers: Vec::new(),
+        };
+        while !parsed.tbs_rest.is_empty() {
+            if parsed.tbs_rest.peek_tag()? == der::Tag::context_constructed(3) {
+                let mut explicit = parsed.tbs_rest.read_explicit(3)?;
+                let mut extensions = explicit.read_sequence()?;
+                while !extensions.is_empty() {
+                    let raw = extensions.read_raw_tlv()?;
+                    // Optional linking hints must not make otherwise readable certificates disappear.
+                    let Ok((oid, _, value)) = extensions::fields(raw) else {
+                        continue;
+                    };
+                    if oid.matches(OID_SUBJECT_KEY_ID) {
+                        info.subject_key_id =
+                            Reader::new(value).read_octet_string().ok().map(Vec::from);
+                    } else if oid.matches(OID_AUTHORITY_KEY_ID) {
+                        let _ = info.read_authority(value);
+                    }
+                }
+            } else {
+                parsed.tbs_rest.read_raw_tlv()?; // Optional issuer/subject unique identifiers.
+            }
+        }
+        Ok(info)
     }
 
     fn read_authority(&mut self, value: &[u8]) -> CryptoResult<()> {
@@ -100,19 +177,19 @@ impl Details {
         let mut sequence = reader.read_sequence()?;
         reader.expect_end()?;
         let mut key_id = None;
-        let mut serial = None;
+        let mut serial_hex = None;
         let mut issuers = Vec::new();
         while !sequence.is_empty() {
             let (tag, value) = sequence.read_tlv()?;
             if tag == der::Tag::context(0) {
                 key_id = Some(value.to_vec());
             } else if tag == der::Tag::context(2) {
-                serial = Some(value.to_vec());
+                serial_hex = Some(serial_text(value, true));
             } else if tag == der::Tag::context_constructed(1) {
                 let mut names = Reader::new(value);
                 while !names.is_empty() {
                     if names.peek_tag()? == der::Tag::context_constructed(4) {
-                        issuers.push(Name::parse(&mut names.read_explicit(4)?)?);
+                        issuers.push(NameKey(Name::parse(&mut names.read_explicit(4)?)?));
                     } else {
                         names.read_raw_tlv()?;
                     }
@@ -120,7 +197,7 @@ impl Details {
             }
         }
         self.authority_key_id = key_id;
-        self.authority_serial = serial;
+        self.authority_serial_hex = serial_hex;
         self.authority_issuers = issuers;
         Ok(())
     }
@@ -239,18 +316,41 @@ pub fn chain(leaf: &[u8], pool: &[&[u8]]) -> (Vec<Vec<u8>>, Option<&'static str>
 }
 
 /// Certificate metadata shared by all descriptive chains in one listing.
-/// Retains pool order and duplicate encodings for the existing issuer rules.
+/// Deduplicates identical encodings and indexes candidates by subject name.
 pub(crate) struct ParsedPool<'a> {
-    certificates: Vec<(&'a [u8], Option<Details>)>,
+    by_der: HashMap<&'a [u8], Option<usize>>,
+    certificates: Vec<(&'a [u8], ChainInfo)>,
+    by_subject: HashMap<NameKey, Vec<usize>>,
 }
 
 impl<'a> ParsedPool<'a> {
     pub(crate) fn new(pool: &[&'a [u8]]) -> Self {
+        let mut by_der = HashMap::with_capacity(pool.len());
+        let mut certificates = Vec::new();
+        let mut by_subject: HashMap<NameKey, Vec<usize>> = HashMap::new();
+        for &der in pool {
+            if by_der.contains_key(der) {
+                continue;
+            }
+            match ChainInfo::parse(der) {
+                Ok(info) => {
+                    let index = certificates.len();
+                    by_subject
+                        .entry(info.subject.clone())
+                        .or_default()
+                        .push(index);
+                    certificates.push((der, info));
+                    by_der.insert(der, Some(index));
+                }
+                Err(_) => {
+                    by_der.insert(der, None);
+                }
+            }
+        }
         Self {
-            certificates: pool
-                .iter()
-                .map(|der| (*der, Details::parse(der).ok()))
-                .collect(),
+            by_der,
+            certificates,
+            by_subject,
         }
     }
 
@@ -259,10 +359,11 @@ impl<'a> ParsedPool<'a> {
         // Leaves in the pool (including unreadable ones) reuse their cached result.
         // The compatibility wrapper also accepts leaves outside the pool.
         let leaf_metadata;
-        let mut current = match self.certificates.iter().find(|(der, _)| *der == leaf) {
-            Some((_, info)) => info.as_ref(),
+        let mut current = match self.by_der.get(leaf) {
+            Some(Some(index)) => Some(&self.certificates[*index].1),
+            Some(None) => None,
             None => {
-                leaf_metadata = Details::parse(leaf).ok();
+                leaf_metadata = ChainInfo::parse(leaf).ok();
                 leaf_metadata.as_ref()
             }
         };
@@ -276,44 +377,39 @@ impl<'a> ParsedPool<'a> {
             if info.subject == info.issuer {
                 return (chain, None);
             }
-            let mut candidates: Vec<(&[u8], &Details)> = Vec::new();
-            for (der, metadata) in &self.certificates {
-                let Some(candidate) = metadata else {
-                    continue;
-                };
-                if candidate.subject != info.issuer {
-                    continue;
-                }
-                if let (Some(authority), Some(subject)) =
-                    (&info.authority_key_id, &candidate.subject_key_id)
-                    && authority != subject
-                {
-                    continue;
-                }
-                if let Some(serial) = &info.authority_serial
-                    && serial_text(serial, true) != candidate.serial_hex
-                {
-                    continue;
-                }
-                if !info.authority_issuers.is_empty()
-                    && !info.authority_issuers.contains(&candidate.issuer)
-                {
-                    continue;
-                }
-                if !candidates.iter().any(|(candidate, _)| candidate == der) {
-                    candidates.push((der, candidate));
+            let mut matched: Option<(&[u8], &ChainInfo)> = None;
+            if let Some(indices) = self.by_subject.get(&info.issuer) {
+                for &index in indices {
+                    let (der, candidate) = &self.certificates[index];
+                    if let (Some(authority), Some(subject)) =
+                        (&info.authority_key_id, &candidate.subject_key_id)
+                        && authority != subject
+                    {
+                        continue;
+                    }
+                    if let Some(serial_hex) = &info.authority_serial_hex
+                        && *serial_hex != candidate.serial_hex
+                    {
+                        continue;
+                    }
+                    if !info.authority_issuers.is_empty()
+                        && !info.authority_issuers.contains(&candidate.issuer)
+                    {
+                        continue;
+                    }
+                    if matched.is_some() {
+                        return (chain, Some("Issuer could not be determined uniquely."));
+                    }
+                    matched = Some((*der, candidate));
                 }
             }
-            if candidates.len() > 1 {
-                return (chain, Some("Issuer could not be determined uniquely."));
-            }
-            let Some((issuer, metadata)) = candidates.first() else {
+            let Some((issuer, metadata)) = matched else {
                 return (
                     chain,
                     Some("Issuer certificate is not stored or could not be decoded."),
                 );
             };
-            if chain.iter().any(|der| der.as_slice() == *issuer) {
+            if chain.iter().any(|der| der.as_slice() == issuer) {
                 return (chain, Some("Certificate chain contains a cycle."));
             }
             if chain.len() >= MAX_CHAIN_DEPTH {
@@ -367,13 +463,13 @@ mod tests {
         let broken_key_usage = extension(&[2, 5, 29, 15], &[0xff]);
         let malformed = der::sequence(&der::null());
         let unknown = extension(&[1, 2, 3], &[0xab]);
-        let info = Details::parse(&metadata_certificate(
+        let cert = metadata_certificate(
             "leaf",
             "issuer",
             &[1],
             &[ski, broken_key_usage, malformed, unknown],
-        ))
-        .unwrap();
+        );
+        let info = Details::parse(&cert).unwrap();
         let shown: Vec<_> = info
             .extensions
             .iter()
@@ -394,7 +490,8 @@ mod tests {
                 ("1.2.3".into(), "Value: AB".into()),
             ]
         );
-        assert_eq!(info.subject_key_id.as_deref(), Some(&[7][..]));
+        let chain_info = ChainInfo::parse(&cert).unwrap();
+        assert_eq!(chain_info.subject_key_id.as_deref(), Some(&[7][..]));
     }
 
     #[test]
@@ -618,9 +715,9 @@ mod tests {
             &[1],
             &[extension(&[2, 5, 29, 35], &bad_aki)],
         );
-        let info = Details::parse(&cert).unwrap();
+        let info = ChainInfo::parse(&cert).unwrap();
         assert_eq!(info.authority_key_id, None);
-        assert_eq!(info.authority_serial, None);
+        assert_eq!(info.authority_serial_hex, None);
         assert!(info.authority_issuers.is_empty());
 
         // Trailing bytes after the SEQUENCE also fail cleanly without leaking state.
@@ -632,7 +729,7 @@ mod tests {
             &[1],
             &[extension(&[2, 5, 29, 35], &trailing_aki)],
         );
-        let info = Details::parse(&cert).unwrap();
+        let info = ChainInfo::parse(&cert).unwrap();
         assert_eq!(info.authority_key_id, None);
     }
 }
