@@ -18,6 +18,7 @@ mod java_serialization;
 mod key_export;
 mod key_import;
 mod key_protection;
+mod key_unlock;
 mod keystore;
 mod legacy_pem;
 mod new_password;
@@ -139,6 +140,8 @@ struct App {
     importing: bool,
     /// Another keystore's entries, being chosen for copying.
     copying: Option<copy_entries::Selection>,
+    /// Separate key passwords being prompted for a copy or conversion.
+    key_unlock: Option<key_unlock::KeyUnlock>,
     /// The file name being typed for a private key export.
     key_export: Option<key_export::KeyExport>,
     /// A key pair import waiting for a password or a certificate file.
@@ -314,6 +317,8 @@ impl App {
             if details.handle_event(key) {
                 self.entry_details = None;
             }
+        } else if self.key_unlock.is_some() {
+            self.handle_key_unlock(key);
         } else if self.copying.is_some() {
             self.handle_selection(key);
         } else if self.key_export.is_some() {
@@ -489,12 +494,42 @@ impl App {
         };
         // A name asking for another format converts the keystore.
         let target = save::Format::from_name(&path).filter(|&format| format != document.format());
-        let saved = match target {
-            Some(format) => self.save_converted(&path, format),
-            None => document
-                .save_new(&path, &self.entries)
-                .map(|()| String::new()),
-        };
+        if let Some(format) = target {
+            if save::path_exists(&path) {
+                self.message = Some((
+                    format!("'{}' already exists; choose another name.", path.display()),
+                    true,
+                ));
+                return;
+            }
+            match document.locked_keys_for_convert(&self.entries, format) {
+                Ok(locked) if !locked.is_empty() => {
+                    self.key_unlock =
+                        Some(key_unlock::KeyUnlock::for_convert(path, format, locked));
+                }
+                Ok(_) => self.finish_converted(path, format, &[]),
+                Err(error) => self.message = Some((error, true)),
+            }
+            return;
+        }
+        let saved = document
+            .save_new(&path, &self.entries)
+            .map(|()| String::new());
+        self.record_saved_new(path, saved);
+    }
+
+    /// Completes a keystore conversion using any unlocked `key_passwords`.
+    pub(crate) fn finish_converted(
+        &mut self,
+        path: PathBuf,
+        format: save::Format,
+        key_passwords: &[(usize, &str)],
+    ) {
+        let saved = self.save_converted(&path, format, key_passwords);
+        self.record_saved_new(path, saved);
+    }
+
+    fn record_saved_new(&mut self, path: PathBuf, saved: Result<String, String>) {
         self.message = Some(match saved {
             Ok(format) => {
                 let path = canonical_path::canonicalize(&path).unwrap_or(path);
@@ -510,9 +545,14 @@ impl App {
 
     /// Writes the keystore to the new file `path` in another format and
     /// opens that file in its place. Returns what to add to the message.
-    fn save_converted(&mut self, path: &Path, format: save::Format) -> Result<String, String> {
+    fn save_converted(
+        &mut self,
+        path: &Path,
+        format: save::Format,
+        key_passwords: &[(usize, &str)],
+    ) -> Result<String, String> {
         let document = self.document.as_ref().ok_or("No keystore is open.")?;
-        let data = document.convert(&self.entries, format)?;
+        let data = document.convert_with_passwords(&self.entries, format, key_passwords)?;
         let password = Zeroizing::new(document.password().to_owned());
         save::create(path, &data)?;
         // The converted keystore was read back before it was written.
@@ -534,6 +574,7 @@ impl App {
             || self.alias_prompt.is_some()
             || self.new_password.is_some()
             || self.unlocking_import()
+            || self.key_unlock.is_some()
             || self.key_export.is_some()
             || self.secret_export.is_some()
             || self.secret_choice.is_some()
@@ -715,6 +756,7 @@ impl App {
         self.secret_choice = None;
         self.importing_secret = false;
         self.copying = None;
+        self.key_unlock = None;
         self.generating = None;
         self.generation = None;
         self.requesting = None;
@@ -1009,6 +1051,15 @@ impl App {
             vec![generate::SHORTCUTS.into()]
         } else if self.password_prompt.is_some() {
             vec!["Enter Verify | Backspace Delete | Esc Cancel | Ctrl+C Quit".into()]
+        } else if let Some(unlock) = &self.key_unlock {
+            let alias = unlock.current_alias(&self.entries);
+            vec![
+                Line::from(vec![
+                    format!("Password of key '{alias}': ").bold(),
+                    format!("{}_", "*".repeat(unlock.current.0.chars().count())).into(),
+                ]),
+                "Enter Confirm | Backspace Delete | Esc Cancel | Ctrl+C Quit".into(),
+            ]
         } else if let Some(prompt) = &self.save_as {
             vec![
                 path_input::line(

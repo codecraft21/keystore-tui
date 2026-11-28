@@ -546,22 +546,132 @@ impl Document {
         }
     }
 
+    /// Checks conversion preconditions that do not require unlocking
+    /// separate-password keys, and returns the indices of keys whose password
+    /// differs from the keystore's.
+    pub(crate) fn locked_keys_for_convert(
+        &self,
+        entries: &[KeystoreEntry],
+        target: Format,
+    ) -> Result<Vec<usize>, String> {
+        let password = self.password();
+        let to_java = target != Format::Pkcs12;
+        let failed = |error: String| format!("Not converted: {error}.");
+        if target == Format::Pkcs12 && password.is_empty() {
+            return Err(failed(
+                "a PKCS12 keystore needs a password that is not empty; change the password first (p)"
+                    .into(),
+            ));
+        }
+        let mut has_keys = false;
+        let mut seen_aliases: Vec<String> = Vec::new();
+        let mut locked = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            match &entry.content {
+                Content::Certificates {
+                    kind: Kind::PrivateKey,
+                    ..
+                } => {
+                    has_keys = true;
+                    match self.private_key_with(index, None) {
+                        Ok(_) => {}
+                        Err(KeyAccessError::Password) => locked.push(index),
+                        Err(KeyAccessError::Other(error)) => {
+                            return Err(format!(
+                                "Not converted: the key '{}' {error}.",
+                                entry.alias
+                            ));
+                        }
+                    }
+                }
+                Content::Certificates {
+                    kind: Kind::SecretKey,
+                    ..
+                } => {
+                    if target == Format::Jks {
+                        return Err(format!(
+                            "Not converted: the secret key '{}' stops it, because {JKS_HOLDS_NO_SECRET_KEYS}.",
+                            entry.alias
+                        ));
+                    }
+                    has_keys = true;
+                    match self.secret_key_with(index, None) {
+                        Ok(secret) => {
+                            if target == Format::Pkcs12 && secret_key::to_pkcs8(&secret).is_none() {
+                                return Err(failed(format!(
+                                    "PKCS12 has no name for the algorithm '{}' of the secret key '{}'",
+                                    secret.algorithm, entry.alias
+                                )));
+                            }
+                        }
+                        Err(KeyAccessError::Password) => locked.push(index),
+                        Err(KeyAccessError::Other(error)) => {
+                            return Err(format!(
+                                "Not converted: the secret key '{}' {error}.",
+                                entry.alias
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if to_java {
+                let alias = entry.alias.to_lowercase();
+                if seen_aliases.iter().any(|other| other == &alias) {
+                    return Err(format!(
+                        "Not converted: two entries would share the alias '{alias}'."
+                    ));
+                }
+                seen_aliases.push(alias);
+            }
+        }
+        if target == Format::Jceks
+            && has_keys
+            && !password.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+        {
+            return Err(key_error(KeyError::PasswordNotAscii));
+        }
+        Ok(locked)
+    }
+
     /// The keystore as a file of another format, with the same password.
     /// Private keys are recovered in memory with the keystore's password,
     /// protected again as the other format does, and wiped. The result is
     /// read back and compared with `entries` before it is returned.
     pub fn convert(&self, entries: &[KeystoreEntry], target: Format) -> Result<Vec<u8>, String> {
+        self.convert_with_passwords(entries, target, &[])
+    }
+
+    /// Like `convert`, using the given password for any entry listed in
+    /// `key_passwords` and the keystore's password for the rest.
+    pub(crate) fn convert_with_passwords(
+        &self,
+        entries: &[KeystoreEntry],
+        target: Format,
+        key_passwords: &[(usize, &str)],
+    ) -> Result<Vec<u8>, String> {
         let password = self.password();
         let to_java = target != Format::Pkcs12;
         let mut expected: Vec<Converted> = Vec::new();
         for (index, entry) in entries.iter().enumerate() {
+            let key_password = key_passwords
+                .iter()
+                .find(|&&(at, _)| at == index)
+                .map(|&(_, password)| password);
             let key = match &entry.content {
                 Content::Certificates {
                     kind: Kind::PrivateKey,
                     ..
-                } => Some(self.private_key(index).map_err(|error| {
-                    format!("Not converted: the key '{}' {error}.", entry.alias)
-                })?),
+                } => Some(
+                    self.private_key_with(index, key_password)
+                        .map_err(|error| {
+                            format!(
+                                "Not converted: the key '{}' {}.",
+                                entry.alias,
+                                error.into_message()
+                            )
+                        })?,
+                ),
                 Content::Certificates {
                     kind: Kind::TrustedCertificate | Kind::Certificate,
                     ..
@@ -575,8 +685,12 @@ impl Document {
                         entry.alias
                     ));
                 }
-                true => Some(self.secret_key(index).map_err(|error| {
-                    format!("Not converted: the secret key '{}' {error}.", entry.alias)
+                true => Some(self.secret_key_with(index, key_password).map_err(|error| {
+                    format!(
+                        "Not converted: the secret key '{}' {}.",
+                        entry.alias,
+                        error.into_message()
+                    )
                 })?),
                 false => None,
             };
@@ -743,41 +857,86 @@ impl Document {
         }
     }
 
-    /// The secret key listed at `index`, recovered in memory with the
-    /// keystore's password.
-    pub(crate) fn secret_key(&self, index: usize) -> Result<SecretKey, String> {
+    /// The secret key listed at `index`, recovered in memory with `password`,
+    /// or with the keystore's password when `None`.
+    pub(crate) fn secret_key_with(
+        &self,
+        index: usize,
+        password: Option<&str>,
+    ) -> Result<SecretKey, KeyAccessError> {
         match self {
-            Self::Jks { .. } => match self.sealed_key(index, None) {
+            Self::Jks { .. } => match self.sealed_key(index, password) {
                 Some(Ok(key)) => Ok(key),
-                Some(Err(KeyError::Password)) => Err(
-                    "has a password of its own; give it the keystore's password first (P)".into(),
-                ),
-                Some(Err(_)) => Err("is sealed in a way that is not supported".into()),
-                None => Err("is not a secret key".into()),
+                Some(Err(KeyError::Password)) => Err(KeyAccessError::Password),
+                Some(Err(_)) => Err(KeyAccessError::Other(
+                    "is sealed in a way that is not supported".into(),
+                )),
+                None => Err(KeyAccessError::Other("is not a secret key".into())),
             },
             Self::Pkcs12(writable) => writable
                 .secret_key(index)
                 .and_then(|wrapped| secret_key::from_pkcs8(&wrapped))
-                .ok_or_else(|| "could not be decrypted with the keystore's password".into()),
+                .ok_or_else(|| {
+                    KeyAccessError::Other(
+                        "could not be decrypted with the keystore's password".into(),
+                    )
+                }),
+        }
+    }
+
+    /// The secret key listed at `index`, recovered in memory with the
+    /// keystore's password.
+    pub(crate) fn secret_key(&self, index: usize) -> Result<SecretKey, String> {
+        self.secret_key_with(index, None)
+            .map_err(KeyAccessError::into_message)
+    }
+
+    /// The PKCS #8 encoding of the private key listed at `index`, recovered
+    /// in memory with `password`, or with the keystore's password when `None`.
+    pub(crate) fn private_key_with(
+        &self,
+        index: usize,
+        password: Option<&str>,
+    ) -> Result<Zeroizing<Vec<u8>>, KeyAccessError> {
+        match self {
+            Self::Jks { .. } => match self.recover_key(index, password) {
+                // The other formats only hold PKCS #8 keys.
+                Ok(key) if pkcs12::is_private_key_info(&key) => Ok(key),
+                Ok(_) => Err(KeyAccessError::Other("is not a PKCS #8 key".into())),
+                Err(KeyError::Password) => Err(KeyAccessError::Password),
+                Err(_) => Err(KeyAccessError::Other(
+                    "uses protection that is not supported".into(),
+                )),
+            },
+            Self::Pkcs12(writable) => writable.private_key(index).ok_or_else(|| {
+                KeyAccessError::Other("could not be decrypted with the keystore's password".into())
+            }),
         }
     }
 
     /// The PKCS #8 encoding of the private key listed at `index`, recovered
     /// in memory with the keystore's password.
     pub(crate) fn private_key(&self, index: usize) -> Result<Zeroizing<Vec<u8>>, String> {
+        self.private_key_with(index, None)
+            .map_err(KeyAccessError::into_message)
+    }
+}
+
+/// Why a private or secret key could not be recovered.
+pub(crate) enum KeyAccessError {
+    /// The given password (or keystore password) did not unlock the key.
+    Password,
+    /// The key uses unsupported protection, is not PKCS #8, or is not that kind of entry.
+    Other(String),
+}
+
+impl KeyAccessError {
+    fn into_message(self) -> String {
         match self {
-            Self::Jks { .. } => match self.recover_key(index, None) {
-                // The other formats only hold PKCS #8 keys.
-                Ok(key) if pkcs12::is_private_key_info(&key) => Ok(key),
-                Ok(_) => Err("is not a PKCS #8 key".into()),
-                Err(KeyError::Password) => Err(
-                    "has a password of its own; give it the keystore's password first (P)".into(),
-                ),
-                Err(_) => Err("uses protection that is not supported".into()),
-            },
-            Self::Pkcs12(writable) => writable
-                .private_key(index)
-                .ok_or_else(|| "could not be decrypted with the keystore's password".into()),
+            Self::Password => {
+                "has a password of its own; give it the keystore's password first (P)".into()
+            }
+            Self::Other(message) => message,
         }
     }
 }
