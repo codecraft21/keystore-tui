@@ -12,8 +12,9 @@ use crate::{
     App,
     editing::{Action, AliasPrompt},
     key_import::Key,
+    key_unlock,
     keystore::{Content, KeystoreEntry, Kind},
-    save::{Document, Format},
+    save::{Document, Format, KeyAccessError},
     secret_key::SecretKey,
 };
 
@@ -24,14 +25,28 @@ enum Item {
     Secret(SecretKey),
 }
 
-/// Why a key that was not recovered cannot be copied, if it was not.
-fn readable(recovered: Result<(), String>) -> Option<&'static str> {
+/// Whether an entry in the source keystore can be copied directly, needs a
+/// separate key password first, or cannot be copied at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Availability {
+    Ready,
+    NeedsPassword,
+    Blocked(&'static str),
+}
+
+impl Availability {
+    fn is_blocked(self) -> bool {
+        matches!(self, Self::Blocked(_))
+    }
+}
+
+/// Classifies a private or secret key after attempting recovery with the
+/// source keystore's password.
+fn key_availability<T>(recovered: Result<T, KeyAccessError>) -> Availability {
     match recovered {
-        Ok(()) => None,
-        Err(error) if error.contains("password of its own") => {
-            Some("its key has a password of its own")
-        }
-        Err(_) => Some("its key cannot be read"),
+        Ok(_) => Availability::Ready,
+        Err(KeyAccessError::Password) => Availability::NeedsPassword,
+        Err(KeyAccessError::Other(_)) => Availability::Blocked("its key cannot be read"),
     }
 }
 
@@ -42,8 +57,8 @@ pub struct Selection {
     /// The opened keystore, which unlocks its private keys.
     source: Document,
     entries: Vec<KeystoreEntry>,
-    /// Why each entry cannot be copied, if it cannot.
-    blocked: Vec<Option<&'static str>>,
+    /// Whether each entry can be copied, needs a key password, or is blocked.
+    availability: Vec<Availability>,
     chosen: Vec<bool>,
     cursor: ListState,
 }
@@ -55,27 +70,29 @@ impl Selection {
         entries: Vec<KeystoreEntry>,
         allows_secret_keys: bool,
     ) -> Self {
-        let blocked = entries
+        let availability = entries
             .iter()
             .enumerate()
             .map(|(index, entry)| match &entry.content {
                 Content::Certificates {
                     kind: Kind::PrivateKey,
                     ..
-                } => readable(source.private_key(index).map(drop)),
+                } => key_availability(source.private_key_with(index, None)),
                 Content::Certificates {
                     kind: Kind::SecretKey,
                     ..
-                } if !allows_secret_keys => Some("a JKS keystore cannot hold secret keys"),
+                } if !allows_secret_keys => {
+                    Availability::Blocked("a JKS keystore cannot hold secret keys")
+                }
                 Content::Certificates {
                     kind: Kind::SecretKey,
                     ..
-                } => readable(source.secret_key(index).map(drop)),
+                } => key_availability(source.secret_key_with(index, None)),
                 Content::Certificates {
                     kind: Kind::TrustedCertificate | Kind::Certificate,
                     certificates,
-                } if !certificates.is_empty() => None,
-                _ => Some("it holds no certificate"),
+                } if !certificates.is_empty() => Availability::Ready,
+                _ => Availability::Blocked("it holds no certificate"),
             })
             .collect();
         Self {
@@ -84,21 +101,41 @@ impl Selection {
             chosen: vec![false; entries.len()],
             cursor: ListState::default().with_selected((!entries.is_empty()).then_some(0)),
             entries,
-            blocked,
+            availability,
         }
     }
 
-    /// What copying the entry at `index` adds.
-    fn item(&self, index: usize) -> Result<Item, String> {
+    pub(crate) fn source(&self) -> &Document {
+        &self.source
+    }
+
+    pub(crate) fn entries(&self) -> &[KeystoreEntry] {
+        &self.entries
+    }
+
+    /// What copying the entry at `index` adds, using `password` when given
+    /// and the source keystore's password otherwise.
+    fn item(&self, index: usize, password: Option<&str>) -> Result<Item, String> {
         let entry = &self.entries[index];
-        if let Some(reason) = self.blocked[index] {
+        if let Availability::Blocked(reason) = self.availability[index] {
             return Err(reason.into());
         }
+        let map_key_error = |error: KeyAccessError| match error {
+            KeyAccessError::Password => "its key has a password of its own".into(),
+            KeyAccessError::Other(reason) => reason,
+        };
         if entry.kind() == Kind::PrivateKey.label() {
-            let key = self.source.private_key(index)?;
+            let key = self
+                .source
+                .private_key_with(index, password)
+                .map_err(map_key_error)?;
             Ok(Item::Key(key, entry.certificates().to_vec()))
         } else if entry.kind() == Kind::SecretKey.label() {
-            Ok(Item::Secret(self.source.secret_key(index)?))
+            Ok(Item::Secret(
+                self.source
+                    .secret_key_with(index, password)
+                    .map_err(map_key_error)?,
+            ))
         } else {
             Ok(Item::Certificate(entry.certificates()[0].clone()))
         }
@@ -127,9 +164,9 @@ impl Selection {
     /// Chooses every entry that can be copied, or none if they all are.
     fn toggle_all(&mut self) {
         let all = (0..self.entries.len())
-            .all(|index| self.chosen[index] || self.blocked[index].is_some());
+            .all(|index| self.chosen[index] || self.availability[index].is_blocked());
         for index in 0..self.entries.len() {
-            self.chosen[index] = !all && self.blocked[index].is_none();
+            self.chosen[index] = !all && !self.availability[index].is_blocked();
         }
     }
 
@@ -159,13 +196,18 @@ impl Selection {
             let taken = existing
                 .iter()
                 .any(|other| other.alias.to_lowercase() == entry.alias.to_lowercase());
-            let (mark, note) = match self.blocked[index] {
-                Some(reason) => ("[-]", format!(" ({reason})")),
-                None if taken => (self.mark(index), " (alias exists)".into()),
-                None => (self.mark(index), String::new()),
+            let (mark, note) = match self.availability[index] {
+                Availability::Blocked(reason) => ("[-]", format!(" ({reason})")),
+                Availability::Ready if taken => (self.mark(index), " (alias exists)".into()),
+                Availability::Ready => (self.mark(index), String::new()),
+                Availability::NeedsPassword if taken => (
+                    self.mark(index),
+                    " (alias exists, key password needed)".into(),
+                ),
+                Availability::NeedsPassword => (self.mark(index), " (key password needed)".into()),
             };
             let item = ListItem::new(format!("{mark} {} | {}{note}", entry.alias, entry.kind()));
-            if self.blocked[index].is_some() {
+            if self.availability[index].is_blocked() {
                 item.style(Style::default().fg(Color::DarkGray))
             } else {
                 item
@@ -229,7 +271,7 @@ impl App {
             KeyCode::Char('a') => selection.toggle_all(),
             KeyCode::Char(' ') => {
                 if let Some(at) = selection.cursor.selected()
-                    && selection.blocked[at].is_none()
+                    && !selection.availability[at].is_blocked()
                 {
                     selection.chosen[at] = !selection.chosen[at];
                 }
@@ -239,16 +281,62 @@ impl App {
         }
     }
 
-    /// Copies the chosen entries. A single entry is given its alias in the
-    /// alias prompt; several keep their aliases.
+    /// Copies the chosen entries. If any chosen entry that will be imported
+    /// has a password of its own, prompts for it first.
     fn copy_chosen(&mut self) {
         let Some(selection) = self.copying.take() else {
             return;
         };
         let picked = selection.picked();
         if let [index] = picked[..] {
+            if selection.availability[index] == Availability::NeedsPassword {
+                self.key_unlock = Some(key_unlock::KeyUnlock::for_copy(
+                    selection,
+                    vec![index],
+                    vec![index],
+                ));
+                return;
+            }
+            self.finish_copy(selection, vec![index], &[]);
+            return;
+        }
+        let pending: Vec<usize> = picked
+            .iter()
+            .copied()
+            .filter(|&index| {
+                if selection.availability[index] != Availability::NeedsPassword {
+                    return false;
+                }
+                let alias = selection.entries[index].alias.to_lowercase();
+                !self
+                    .entries
+                    .iter()
+                    .any(|entry| entry.alias.to_lowercase() == alias)
+            })
+            .collect();
+        if !pending.is_empty() {
+            self.key_unlock = Some(key_unlock::KeyUnlock::for_copy(selection, picked, pending));
+            return;
+        }
+        self.finish_copy(selection, picked, &[]);
+    }
+
+    /// Completes copying `picked` entries using any unlocked `key_passwords`.
+    /// A single entry goes through the alias prompt; several keep their aliases.
+    pub(crate) fn finish_copy(
+        &mut self,
+        selection: Selection,
+        picked: Vec<usize>,
+        key_passwords: &[(usize, &str)],
+    ) {
+        let password_for = |index: usize| {
+            key_passwords
+                .iter()
+                .find_map(|&(at, password)| (at == index).then_some(password))
+        };
+        if let [index] = picked[..] {
             let entry = &selection.entries[index];
-            match selection.item(index) {
+            match selection.item(index, password_for(index)) {
                 Ok(item) => {
                     self.alias_prompt = Some(AliasPrompt {
                         action: match item {
@@ -285,17 +373,19 @@ impl App {
                 skipped.push(alias);
                 continue;
             }
-            let result = selection.item(index).and_then(|item| match item {
-                Item::Certificate(certificate) => {
-                    document.import_certificate(&mut self.entries, alias.clone(), &certificate)
-                }
-                Item::Key(key, chain) => {
-                    document.import_key_pair(&mut self.entries, alias.clone(), &key, &chain)
-                }
-                Item::Secret(key) => {
-                    document.import_secret_key(&mut self.entries, alias.clone(), &key)
-                }
-            });
+            let result = selection
+                .item(index, password_for(index))
+                .and_then(|item| match item {
+                    Item::Certificate(certificate) => {
+                        document.import_certificate(&mut self.entries, alias.clone(), &certificate)
+                    }
+                    Item::Key(key, chain) => {
+                        document.import_key_pair(&mut self.entries, alias.clone(), &key, &chain)
+                    }
+                    Item::Secret(key) => {
+                        document.import_secret_key(&mut self.entries, alias.clone(), &key)
+                    }
+                });
             match result {
                 Ok(_) => copied += 1,
                 Err(error) => {
@@ -336,11 +426,11 @@ mod tests {
         let source = Document::jks(Writable::empty(true), "");
         let mut selection = Selection::new("source.jceks".into(), source, vec![entry], true);
         let reason = "its key cannot be read";
-        assert_eq!(selection.blocked, [Some(reason)]);
+        assert_eq!(selection.availability, [Availability::Blocked(reason)]);
         // It is not chosen with the others.
         selection.toggle_all();
         assert_eq!(selection.chosen, [false]);
-        assert_eq!(selection.item(0).err().as_deref(), Some(reason));
+        assert_eq!(selection.item(0, None).err().as_deref(), Some(reason));
 
         // Copying into JKS blocks secret keys up front.
         let entry = KeystoreEntry {
@@ -355,9 +445,9 @@ mod tests {
         let source = Document::jks(Writable::empty(true), "");
         let mut selection = Selection::new("source.jceks".into(), source, vec![entry], false);
         let jks_reason = "a JKS keystore cannot hold secret keys";
-        assert_eq!(selection.blocked, [Some(jks_reason)]);
+        assert_eq!(selection.availability, [Availability::Blocked(jks_reason)]);
         selection.toggle_all();
         assert_eq!(selection.chosen, [false]);
-        assert_eq!(selection.item(0).err().as_deref(), Some(jks_reason));
+        assert_eq!(selection.item(0, None).err().as_deref(), Some(jks_reason));
     }
 }

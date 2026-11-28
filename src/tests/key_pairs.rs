@@ -131,61 +131,78 @@ fn entries_are_copied_from_another_keystore() {
     let rendered = screen(&mut app, 120, 24);
     assert!(rendered.contains(" Import entries from 'source.jks' "));
     assert!(rendered.contains("> [ ] cert | Trusted certificate"));
-    assert!(rendered.contains("[-] own | Private key (its key has a password of its own)"));
+    assert!(rendered.contains("[ ] own | Private key (key password needed)"));
     assert!(rendered.contains("[ ] shared | Private key"));
     assert!(rendered.contains("Space Choose | a All | Up/Down j/k Move | Enter Import"));
 
-    // An entry that cannot be copied is neither chosen nor imported.
+    // A key with a separate password prompts for it; Esc returns to the list.
     assert!(!press(&mut app, KeyCode::Char('q')));
     press(&mut app, KeyCode::Char('j'));
-    press(&mut app, KeyCode::Char(' '));
-    assert!(screen(&mut app, 120, 24).contains("> [-] own"));
     press(&mut app, KeyCode::Enter);
-    assert!(red_text(&mut app).contains("'own' is not copied: its key has a password of its own."));
-    assert!(app.copying.is_some() && app.alias_prompt.is_none());
-    // The selection wraps; `a` chooses all that can be copied, or none.
+    assert!(screen(&mut app, 120, 24).contains("Password of key 'own': _"));
+    assert!(app.key_unlock.is_some() && app.copying.is_none());
+    type_password(&mut app, "wrong");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("Incorrect password."));
+    assert!(app.key_unlock.is_some());
+    press(&mut app, KeyCode::Esc);
+    assert!(app.key_unlock.is_none() && app.copying.is_some() && app.alias_prompt.is_none());
+
+    // The selection wraps; `a` chooses all entries that can be copied, including locked keys.
     press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Up);
     press(&mut app, KeyCode::Char('k'));
-    assert!(screen(&mut app, 120, 24).contains("> [-] own"));
+    assert!(screen(&mut app, 120, 24).contains("> [ ] own"));
     press(&mut app, KeyCode::Char('a'));
     let rendered = screen(&mut app, 120, 24);
-    assert!(rendered.contains("[x] cert") && rendered.contains("[x] shared"));
+    assert!(
+        rendered.contains("[x] cert")
+            && rendered.contains("[x] own")
+            && rendered.contains("[x] shared")
+    );
     press(&mut app, KeyCode::Char('a'));
     assert!(screen(&mut app, 120, 24).contains("[ ] cert"));
     press(&mut app, KeyCode::Char('a'));
     press(&mut app, KeyCode::Tab);
     press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Password of key 'own': _"));
+    type_password(&mut app, "keypass");
+    press(&mut app, KeyCode::Enter);
     assert_eq!(
         app.message,
-        Some(("Imported 2 entries from 'source.jks'.".into(), false))
+        Some(("Imported 3 entries from 'source.jks'.".into(), false))
     );
-    assert!(app.modified && app.copying.is_none());
-    assert_eq!(app.entries.len(), 4);
+    assert!(app.modified && app.copying.is_none() && app.key_unlock.is_none());
+    assert_eq!(app.entries.len(), 5);
     press(&mut app, KeyCode::Char('w'));
     assert!(!app.modified, "{:?}", app.message);
     assert_eq!(
         aliases(&path),
-        ["cert", "root-cert", "server-key", "shared"]
+        ["cert", "own", "root-cert", "server-key", "shared"]
     );
-    assert_eq!(saved_key(&path, 3, "changeit"), Ok(key.clone()));
+    assert_eq!(saved_key(&path, 1, "changeit"), Ok(key.clone()));
+    assert_eq!(saved_key(&path, 4, "changeit"), Ok(key));
     assert_eq!(
         app.entries,
         keystore::load_entries(&fs::read(&path).unwrap(), "changeit").unwrap()
     );
 
-    // Aliases that exist are marked, and skipped when several are copied.
+    // Aliases that exist are marked, and skipped without prompting when several are copied.
     import(&mut app, "source");
     type_password(&mut app, "changeit");
     press(&mut app, KeyCode::Enter);
-    assert!(screen(&mut app, 120, 24).contains("[ ] cert | Trusted certificate (alias exists)"));
+    let rendered = screen(&mut app, 120, 24);
+    assert!(rendered.contains("[ ] cert | Trusted certificate (alias exists)"));
+    assert!(rendered.contains("[ ] own | Private key (alias exists, key password needed)"));
     press(&mut app, KeyCode::Char('a'));
     press(&mut app, KeyCode::Enter);
+    assert!(app.key_unlock.is_none());
     assert_eq!(
         app.message,
         Some((
-            "Imported 0 entries from 'source.jks'. Skipped, alias exists: cert, shared.".into(),
+            "Imported 0 entries from 'source.jks'. Skipped, alias exists: cert, own, shared."
+                .into(),
             true
         ))
     );
@@ -212,7 +229,7 @@ fn entries_are_copied_from_another_keystore() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Esc);
     assert!(app.copying.is_none());
-    assert_eq!(app.entries.len(), 5);
+    assert_eq!(app.entries.len(), 6);
 
     // An entry that fails stops the copy; those before it stay.
     let path = directory.path().join("open.p12");
@@ -228,10 +245,12 @@ fn entries_are_copied_from_another_keystore() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('a'));
     press(&mut app, KeyCode::Enter);
+    type_password(&mut app, "keypass");
+    press(&mut app, KeyCode::Enter);
     let (message, failed) = app.message.clone().unwrap();
     assert!(failed && app.modified);
     assert!(
-        message.starts_with("Imported 1 entry from 'source.jks'. 'shared' failed: Not imported"),
+        message.starts_with("Imported 1 entry from 'source.jks'. 'own' failed: Not imported"),
         "{message}"
     );
     // Without a list, its keys do nothing.

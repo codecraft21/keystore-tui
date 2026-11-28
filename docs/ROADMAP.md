@@ -90,7 +90,7 @@ here too.
 2. **Legacy OpenSSL PEM** (done): import keys encrypted in OpenSSL's older PEM
    format, and export `RSA PRIVATE KEY` and `EC PRIVATE KEY` PEM files,
    optionally encrypted.
-3. **Separate key passwords when copying or converting:** prompt for
+3. **Separate key passwords when copying or converting** (done): prompt for
    a key's own password when the source keystore password cannot unlock it.
 4. **PKCS #7 CA replies:** write signed replies as `.p7b` files.
 5. **Verify revocation-list signatures** when reading a CRL with an available

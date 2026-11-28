@@ -280,6 +280,41 @@ fn convert_keystore_and_quit_restores_terminal() {
     app.assert_restored();
 }
 
+/// SPEC: [Converting a keystore](../../docs/SPEC.md#converting-a-keystore),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn convert_keystore_with_separate_key_password_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("keys.jks");
+    let original = key_keystore("keypass");
+    fs::write(&path, &original).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("keys.jks")]);
+    app.expect(&["server", "Private key"]);
+    app.send(b"W");
+    app.expect(&["Save keystore as:", "name converts"]);
+    app.send(b"\x15keys.jceks\r");
+    app.expect(&["Password of key 'server': _"]);
+    app.send(b"wrong\r");
+    app.expect(&["Incorrect password.", "Password of key 'server': _"]);
+    app.send(b"\x1b");
+    app.expect(&["Save keystore as:", "keys.jceks"]);
+    assert!(!directory.join("keys.jceks").exists());
+    app.send(b"\r");
+    app.expect(&["Password of key 'server': _"]);
+    app.send(b"keypass\r");
+    app.expect(&["Saved", "server", "Private key"]);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let converted = fs::read(directory.join("keys.jceks")).unwrap();
+    assert_eq!(converted[..4], [0xce; 4]);
+    // In the converted keystore the key uses the keystore's password.
+    app.send(b"P");
+    app.expect(&["New password for key 'server': _"]);
+    app.send(b"\x1b");
+    app.expect(&["P Key password"]);
+    app.send(b"q");
+    app.assert_restored();
+}
+
 /// SPEC: [Importing key pairs](../../docs/SPEC.md#importing-key-pairs),
 /// [Saving](../../docs/SPEC.md#saving),
 /// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
