@@ -23,6 +23,9 @@ All notable changes to keystore-tui are listed here. Versions follow
   typed passwords across remaining locked keys in the same operation and
   protecting the copied or converted keys with the destination keystore's
   password.
+- Write DER-encoded PKCS #7 `SignedData` bundles (`.p7b` and `.p7c`,
+  case-insensitive) when saving signed CSR replies (`S` → `r`) and when
+  exporting certificates or chains (`x` / `X`).
 
 ## 1.1.1
 

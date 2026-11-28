@@ -92,7 +92,8 @@ here too.
    optionally encrypted.
 3. **Separate key passwords when copying or converting** (done): prompt for
    a key's own password when the source keystore password cannot unlock it.
-4. **PKCS #7 CA replies:** write signed replies as `.p7b` files.
+4. **PKCS #7 CA replies** (done): write signed replies (and exported
+   certificates or chains) as DER-encoded `.p7b` / `.p7c` files.
 5. **Verify revocation-list signatures** when reading a CRL with an available
    issuer certificate.
 

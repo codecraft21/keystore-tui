@@ -716,11 +716,12 @@ any existing incomplete-entry warnings.
 - `Enter` then asks `Save certificate as:`, suggesting the request's file
   name with a `.pem` extension, next to the opened keystore, as the
   [certificate export](#exporting) does. `Esc` returns to the form as it was
-  filled in. A `.der` name writes the certificate alone as DER, and is
-  refused with the signer's chain; any other name writes PEM `CERTIFICATE`
-  blocks, the new certificate first and then the signer's chain when asked
-  for. An existing file is never replaced: a red message asks for another
-  name.
+  filled in. A `.p7b` or `.p7c` name (case-insensitive) writes a DER-encoded
+  PKCS#7 `SignedData` bundle holding the new certificate first and then the
+  signer's chain when asked for; a `.der` name writes the certificate alone as
+  DER, and is refused with the signer's chain; any other name writes PEM
+  `CERTIFICATE` blocks in the same order. An existing file is never replaced:
+  a red message asks for another name.
 - A green message names the request's file, the signer, and the new file.
   The keystore is not changed.
 - In a terminal smaller than the form, a resize hint is shown instead; `Esc`
@@ -1351,7 +1352,9 @@ any existing incomplete-entry warnings.
   new keystore, certificate, key, request, and revocation list exports) edits
   the same way. `Ctrl+C` still quits.
 - A relative name is resolved against the open file's directory.
-- A `.der` name (case-insensitive) saves one certificate, the public key,
+- A `.p7b` or `.p7c` name (case-insensitive) for a certificate or chain saves a
+  DER-encoded PKCS#7 `SignedData` bundle holding the certificate(s) in order.
+  A `.der` name (case-insensitive) saves one certificate, the public key,
   the revocation list, or
   the request as raw DER; a chain cannot be saved as DER. Any other name saves
   PEM `CERTIFICATE` blocks, a `PUBLIC KEY` block for a public key, an `X509

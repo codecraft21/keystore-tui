@@ -1,7 +1,7 @@
-//! Saving certificates, public keys, and certificate requests to new PEM or
-//! DER files.
+//! Saving certificates, public keys, and certificate requests to new PEM,
+//! DER, or PKCS#7 files.
 //! Existing files are never replaced.
-use crate::path_input::PathInput;
+use crate::{certificate_file, path_input::PathInput};
 use std::{
     borrow::Cow,
     fs::{self, OpenOptions},
@@ -75,6 +75,11 @@ impl Scope {
             Self::PublicKey => "PUBLIC KEY",
             Self::Crl => crate::revocation_list::PEM_LABEL,
         }
+    }
+
+    /// Whether `.p7b` and `.p7c` file names write a PKCS#7 certificate bundle.
+    pub fn supports_pkcs7(self) -> bool {
+        matches!(self, Self::Certificate | Self::Chain)
     }
 }
 
@@ -150,35 +155,51 @@ impl ExportPrompt {
     }
 }
 
-/// Whether `path` names a DER file; every other name is written as PEM.
+/// Whether `path` names a DER file.
 pub fn is_der(path: &Path) -> bool {
     path.extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("der"))
 }
 
-/// PEM concatenates blocks labelled `pem_label` in the given order; DER holds
-/// exactly one item.
+/// Whether `path` names a PKCS#7 certificate bundle (`.p7b` or `.p7c`).
+pub fn is_pkcs7(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("p7b") || extension.eq_ignore_ascii_case("p7c")
+    })
+}
+
+/// Encodes `items` for `path` and `scope`: DER PKCS#7 `SignedData` for `.p7b`
+/// or `.p7c` when `scope` holds certificates, raw DER for a single item under
+/// `.der`, and concatenated PEM blocks labelled `scope.pem_label()` otherwise.
 pub fn encode<'a, T: AsRef<[u8]>>(
     items: &'a [T],
-    der: bool,
-    pem_label: &str,
+    path: &Path,
+    scope: Scope,
 ) -> Result<Cow<'a, [u8]>, &'static str> {
-    match (der, items) {
-        (true, [item]) => Ok(Cow::Borrowed(item.as_ref())),
-        (true, _) => Err("A DER file holds one certificate; use a .pem name for the chain."),
-        (false, _) => Ok(Cow::Owned(
+    if scope.supports_pkcs7() && is_pkcs7(path) {
+        if items.is_empty() {
+            return Err("There are no certificates to save.");
+        }
+        Ok(Cow::Owned(certificate_file::encode_pkcs7(items)))
+    } else if is_der(path) {
+        match items {
+            [item] => Ok(Cow::Borrowed(item.as_ref())),
+            _ => Err("A DER file holds one certificate; use a .pem or .p7b name for the chain."),
+        }
+    } else {
+        Ok(Cow::Owned(
             items
                 .iter()
-                .map(|item| pem::encode(pem_label, item.as_ref()))
+                .map(|item| pem::encode(scope.pem_label(), item.as_ref()))
                 .collect::<String>()
                 .into_bytes(),
-        )),
+        ))
     }
 }
 
 /// Writes a new file, failing if `path` already exists.
-pub fn save<T: AsRef<[u8]>>(path: &Path, items: &[T], pem_label: &str) -> Result<(), String> {
-    let data = encode(items, is_der(path), pem_label)?;
+pub fn save<T: AsRef<[u8]>>(path: &Path, items: &[T], scope: Scope) -> Result<(), String> {
+    let data = encode(items, path, scope)?;
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -303,46 +324,79 @@ mod tests {
     }
 
     #[test]
-    fn saves_pem_chains_and_single_der_without_overwriting() {
+    fn saves_pem_pkcs7_and_single_der_without_overwriting() {
         let directory = TestDirectory::new();
         let leaf = metadata_certificate("leaf", "root", &[1], &[]);
         let root = metadata_certificate("root", "root", &[2], &[]);
         let chain = [leaf.clone(), root.clone()];
 
         let pem_path = directory.path().join("chain.PEM");
-        save(&pem_path, &chain, "CERTIFICATE").unwrap();
+        save(&pem_path, &chain, Scope::Chain).unwrap();
         let blocks = pem::parse(&fs::read_to_string(&pem_path).unwrap()).unwrap();
         assert_eq!(blocks.len(), 2);
         assert!(blocks.iter().all(|block| block.label == "CERTIFICATE"));
         assert_eq!([blocks[0].data.clone(), blocks[1].data.clone()], chain);
 
         let der_path = directory.path().join("leaf.DER");
-        save(&der_path, &chain[..1], "CERTIFICATE").unwrap();
+        save(&der_path, &chain[..1], Scope::Certificate).unwrap();
         assert_eq!(fs::read(&der_path).unwrap(), leaf);
         assert!(
-            save(&der_path, &chain[1..], "CERTIFICATE")
+            save(&der_path, &chain[1..], Scope::Certificate)
                 .unwrap_err()
                 .contains("already exists")
         );
         assert_eq!(fs::read(&der_path).unwrap(), leaf);
 
-        let request = directory.path().join("request.csr");
-        save(&request, &chain[..1], Scope::Request.pem_label()).unwrap();
-        let blocks = pem::parse(&fs::read_to_string(&request).unwrap()).unwrap();
-        assert_eq!(blocks[0].label, "CERTIFICATE REQUEST");
+        // .p7b and .p7c (case-insensitive) write DER PKCS#7 SignedData for
+        // single certificates and chains.
+        for (name, scope, items) in [
+            ("chain.p7b", Scope::Chain, &chain[..]),
+            ("chain.P7C", Scope::Certificate, &chain[..]),
+            ("leaf.P7B", Scope::Certificate, &chain[..1]),
+        ] {
+            let path = directory.path().join(name);
+            save(&path, items, scope).unwrap();
+            let bytes = fs::read(&path).unwrap();
+            assert!(!certificate_file::is_pem(&bytes));
+            let parsed = certificate_file::parse(&bytes).unwrap();
+            assert_eq!(parsed.entries.len(), items.len());
+            assert_eq!(parsed.entries[0].certificates(), items);
+        }
+        assert!(
+            save(
+                &directory.path().join("empty.p7b"),
+                &[] as &[&[u8]],
+                Scope::Certificate
+            )
+            .unwrap_err()
+            .contains("no certificates")
+        );
+
+        // Non-certificate scopes still write PEM even under a .p7b name.
+        for (name, scope, label) in [
+            ("request.csr", Scope::Request, "CERTIFICATE REQUEST"),
+            ("request.p7b", Scope::Request, "CERTIFICATE REQUEST"),
+            ("key.p7b", Scope::PublicKey, "PUBLIC KEY"),
+            ("list.p7c", Scope::Crl, "X509 CRL"),
+        ] {
+            let path = directory.path().join(name);
+            save(&path, &chain[..1], scope).unwrap();
+            let blocks = pem::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(blocks[0].label, label);
+        }
 
         let rejected = directory.path().join("chain.der");
         assert!(
-            save(&rejected, &chain, "CERTIFICATE")
+            save(&rejected, &chain, Scope::Certificate)
                 .unwrap_err()
-                .contains(".pem")
+                .contains(".pem or .p7b")
         );
         assert!(!rejected.exists());
         assert!(
             save(
                 &directory.path().join("missing/leaf.pem"),
                 &chain,
-                "CERTIFICATE"
+                Scope::Certificate
             )
             .is_err()
         );

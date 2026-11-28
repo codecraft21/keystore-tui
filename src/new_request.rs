@@ -123,7 +123,7 @@ impl App {
         let mut rng = save::OsRng::default();
         let request = signing::request(&key, asked, &mut rng)?;
         rng.check()?;
-        export::save(path, &[request], Scope::Request.pem_label())?;
+        export::save(path, &[request], Scope::Request)?;
         Ok(format!(
             "Saved a certificate request for '{alias}' to '{}'.",
             path.display()
