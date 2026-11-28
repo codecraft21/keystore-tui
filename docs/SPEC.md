@@ -717,10 +717,11 @@ any existing incomplete-entry warnings.
   name with a `.pem` extension, next to the opened keystore, as the
   [certificate export](#exporting) does. `Esc` returns to the form as it was
   filled in. A `.p7b` or `.p7c` name (case-insensitive) writes a DER-encoded
-  PKCS#7 `SignedData` bundle holding the new certificate first and then the
-  signer's chain when asked for; a `.der` name writes the certificate alone as
-  DER, and is refused with the signer's chain; any other name writes PEM
-  `CERTIFICATE` blocks in the same order. An existing file is never replaced:
+  PKCS#7 `SignedData` bundle holding the new certificate and, when asked for,
+  the signer's chain (in canonical DER `SET OF` order); a `.der` name writes
+  the certificate alone as DER, and is refused with the signer's chain; any
+  other name writes PEM `CERTIFICATE` blocks, the new certificate first and
+  then the signer's chain when asked for. An existing file is never replaced:
   a red message asks for another name.
 - A green message names the request's file, the signer, and the new file.
   The keystore is not changed.
@@ -1353,7 +1354,8 @@ any existing incomplete-entry warnings.
   the same way. `Ctrl+C` still quits.
 - A relative name is resolved against the open file's directory.
 - A `.p7b` or `.p7c` name (case-insensitive) for a certificate or chain saves a
-  DER-encoded PKCS#7 `SignedData` bundle holding the certificate(s) in order.
+  DER-encoded PKCS#7 `SignedData` bundle holding the certificate(s) in
+  canonical DER `SET OF` order.
   A `.der` name (case-insensitive) saves one certificate, the public key,
   the revocation list, or
   the request as raw DER; a chain cannot be saved as DER. Any other name saves

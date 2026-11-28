@@ -204,9 +204,13 @@ fn a_certificate_request_is_signed_into_a_new_certificate_file() {
     assert!(!certificate_file::is_pem(&p7b));
     let parsed = certificate_file::parse(&p7b).unwrap();
     assert_eq!(parsed.entries.len(), 2);
-    assert_eq!(parsed.entries[0].certificates().len(), 2);
-    assert_eq!(parsed.entries[0].certificates()[1], ca);
-    let p7b_leaf = Certificate::parse(&parsed.entries[0].certificates()[0]).unwrap();
+    let leaf_entry = parsed
+        .entries
+        .iter()
+        .find(|entry| entry.certificates().len() == 2)
+        .unwrap();
+    assert_eq!(leaf_entry.certificates()[1], ca);
+    let p7b_leaf = Certificate::parse(&leaf_entry.certificates()[0]).unwrap();
     assert_eq!(p7b_leaf.verify_signature(authority.public_key()), Ok(true));
 
     sign_request(&mut app, "device");
