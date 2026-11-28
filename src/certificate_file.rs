@@ -12,10 +12,7 @@ use crown::{
 };
 
 use crate::{
-    certificate::{
-        self,
-        details::{Details, MAX_CHAIN_DEPTH},
-    },
+    certificate::{self, Summary, details::MAX_CHAIN_DEPTH},
     certificate_request,
     keystore::{Content, KeystoreEntry, Kind},
     revocation_list,
@@ -36,9 +33,38 @@ pub struct CertificateFile {
 
 /// A certificate, request, or revocation list in file order, as exact DER.
 enum Item {
-    Certificate(Vec<u8>),
-    Request(Vec<u8>),
-    Crl(Vec<u8>),
+    Certificate {
+        der: Vec<u8>,
+        /// Pre-parsed `(alias, summary)` when `single_der_item` already
+        /// parsed this DER certificate.
+        parsed: Option<(Option<String>, Summary)>,
+    },
+    Request {
+        der: Vec<u8>,
+        /// Pre-parsed `(alias, summary)` when `single_der_item` already
+        /// parsed this DER request.
+        parsed: Option<(Option<String>, Summary)>,
+    },
+    Crl {
+        der: Vec<u8>,
+        /// Pre-parsed issuer alias when `single_der_item` already parsed this
+        /// DER revocation list.
+        alias: Option<Option<String>>,
+    },
+}
+
+impl Item {
+    fn certificate(der: Vec<u8>) -> Self {
+        Self::Certificate { der, parsed: None }
+    }
+
+    fn request(der: Vec<u8>) -> Self {
+        Self::Request { der, parsed: None }
+    }
+
+    fn crl(der: Vec<u8>) -> Self {
+        Self::Crl { der, alias: None }
+    }
 }
 
 pub fn is_pem(data: &[u8]) -> bool {
@@ -66,9 +92,9 @@ pub fn parse(data: &[u8]) -> Result<CertificateFile, &'static str> {
         let text = std::str::from_utf8(data).map_err(|_| "PEM file is not valid UTF-8 text")?;
         for block in pem::parse(text).map_err(|_| "malformed PEM block")? {
             match block.label.as_str() {
-                "CERTIFICATE" | "X509 CERTIFICATE" => items.push(Item::Certificate(block.data)),
+                "CERTIFICATE" | "X509 CERTIFICATE" => items.push(Item::certificate(block.data)),
                 // OpenSSL appends trust settings after the certificate.
-                "TRUSTED CERTIFICATE" => items.push(Item::Certificate(
+                "TRUSTED CERTIFICATE" => items.push(Item::certificate(
                     Reader::new(&block.data)
                         .read_raw_tlv()
                         .map_err(|_| "malformed trusted certificate")?
@@ -76,13 +102,13 @@ pub fn parse(data: &[u8]) -> Result<CertificateFile, &'static str> {
                 )),
                 // Java's keytool writes the older "NEW" label.
                 "CERTIFICATE REQUEST" | "NEW CERTIFICATE REQUEST" => {
-                    items.push(Item::Request(block.data))
+                    items.push(Item::request(block.data))
                 }
-                "X509 CRL" => items.push(Item::Crl(block.data)),
+                "X509 CRL" => items.push(Item::crl(block.data)),
                 "PKCS7" | "CMS" => items.extend(
                     pkcs7_certificates(&block.data)?
                         .into_iter()
-                        .map(Item::Certificate),
+                        .map(Item::certificate),
                 ),
                 _ => skipped = true,
             }
@@ -92,7 +118,7 @@ pub fn parse(data: &[u8]) -> Result<CertificateFile, &'static str> {
     } else {
         items = pkcs7_certificates(data)?
             .into_iter()
-            .map(Item::Certificate)
+            .map(Item::certificate)
             .collect();
     }
     if items.is_empty() {
@@ -104,17 +130,30 @@ pub fn parse(data: &[u8]) -> Result<CertificateFile, &'static str> {
     })
 }
 
-/// A certificate or request that is exactly one DER element.
+/// A certificate, request, or revocation list that is exactly one DER element.
 fn single_der_item(data: &[u8]) -> Option<Item> {
     let tlv = Reader::new(data).read_raw_tlv().ok()?;
     if tlv.len() != data.len() {
         None
-    } else if certificate::summarize(data).is_some() {
-        Some(Item::Certificate(data.to_vec()))
-    } else if certificate_request::summarize(data).is_some() {
-        Some(Item::Request(data.to_vec()))
-    } else if revocation_list::List::parse(data).is_ok() {
-        Some(Item::Crl(data.to_vec()))
+    } else if let Some(parsed) = certificate::summarize_full(data) {
+        let alias = parsed
+            .subject_name
+            .as_ref()
+            .and_then(certificate::name_alias);
+        Some(Item::Certificate {
+            der: data.to_vec(),
+            parsed: Some((alias, parsed.summary)),
+        })
+    } else if let Some((summary, alias)) = certificate_request::summarize_with_alias(data) {
+        Some(Item::Request {
+            der: data.to_vec(),
+            parsed: Some((alias, summary)),
+        })
+    } else if let Ok(issuer) = revocation_list::parse_issuer(data) {
+        Some(Item::Crl {
+            der: data.to_vec(),
+            alias: Some(certificate::name_alias(&issuer)),
+        })
     } else {
         None
     }
@@ -176,8 +215,9 @@ pub fn encode_pkcs7<T: AsRef<[u8]>>(certificates: &[T]) -> Vec<u8> {
     .encode()
 }
 
-/// Comparable issuer and subject names, used to link chains.
-fn names(der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+/// Comparable issuer and subject names, plus subject alias, for certificates
+/// that could not be summarized (e.g. malformed SPKI or validity).
+fn fallback_names(der: &[u8]) -> Option<(Vec<u8>, Vec<u8>, Option<String>)> {
     let mut tbs = Reader::new(der)
         .read_sequence()
         .ok()?
@@ -190,30 +230,80 @@ fn names(der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     tbs.read_raw_tlv().ok()?; // Signature algorithm.
     let issuer = tbs.read_raw_tlv().ok()?;
     tbs.read_raw_tlv().ok()?; // Validity.
-    Some((name_key(issuer), name_key(tbs.read_raw_tlv().ok()?)))
+    let subject = tbs.read_raw_tlv().ok()?;
+    let subject_name = Name::parse(&mut Reader::new(subject)).ok();
+    let alias = subject_name.as_ref().and_then(certificate::name_alias);
+    Some((
+        name_key(issuer),
+        name_key_from(subject_name.as_ref(), subject),
+        alias,
+    ))
 }
 
 /// The decoded name ignoring case, so the same name matches across string
 /// encodings; the raw DER when it cannot be decoded.
 fn name_key(raw: &[u8]) -> Vec<u8> {
-    Name::parse(&mut Reader::new(raw)).map_or_else(
-        |_| raw.to_vec(),
+    let parsed = Name::parse(&mut Reader::new(raw)).ok();
+    name_key_from(parsed.as_ref(), raw)
+}
+
+fn name_key_from(parsed: Option<&Name>, raw: &[u8]) -> Vec<u8> {
+    parsed.map_or_else(
+        || raw.to_vec(),
         |name| name.to_string().to_lowercase().into_bytes(),
     )
 }
 
-fn entries(items: Vec<Item>) -> Vec<KeystoreEntry> {
-    // Requests have no issuer and are never part of a chain.
-    let names: Vec<_> = items
-        .iter()
+struct ParsedCert {
+    names: Option<(Vec<u8>, Vec<u8>)>,
+    alias: Option<String>,
+    summary: Option<Summary>,
+}
+
+fn entries(mut items: Vec<Item>) -> Vec<KeystoreEntry> {
+    // Requests and revocation lists have no issuer chain.
+    let mut certs: Vec<Option<ParsedCert>> = items
+        .iter_mut()
         .map(|item| match item {
-            Item::Certificate(der) => names(der),
-            Item::Request(_) | Item::Crl(_) => None,
+            Item::Certificate { der, parsed } => {
+                Some(if let Some((alias, summary)) = parsed.take() {
+                    // Pre-parsed certificates only come from single_der_item, so
+                    // there are no other certificates to link into a chain.
+                    ParsedCert {
+                        names: None,
+                        alias,
+                        summary: Some(summary),
+                    }
+                } else if let Some(info) = certificate::summarize_full(der) {
+                    let alias = info.subject_name.as_ref().and_then(certificate::name_alias);
+                    let subject_key = name_key_from(info.subject_name.as_ref(), info.subject);
+                    ParsedCert {
+                        names: Some((name_key(info.issuer), subject_key)),
+                        alias,
+                        summary: Some(info.summary),
+                    }
+                } else {
+                    let (names, alias) = match fallback_names(der) {
+                        Some((issuer, subject, alias)) => (Some((issuer, subject)), alias),
+                        None => (None, None),
+                    };
+                    ParsedCert {
+                        names,
+                        alias,
+                        summary: None,
+                    }
+                })
+            }
+            Item::Request { .. } | Item::Crl { .. } => None,
         })
         .collect();
     let mut by_subject: HashMap<&[u8], Vec<usize>> = HashMap::new();
-    for (index, entry) in names.iter().enumerate() {
-        if let Some((_, subject)) = entry {
+    for (index, entry) in certs.iter().enumerate() {
+        if let Some(ParsedCert {
+            names: Some((_, subject)),
+            ..
+        }) = entry
+        {
             by_subject
                 .entry(subject.as_slice())
                 .or_default()
@@ -221,13 +311,13 @@ fn entries(items: Vec<Item>) -> Vec<KeystoreEntry> {
         }
     }
     let der = |index: usize| match &items[index] {
-        Item::Certificate(der) | Item::Request(der) | Item::Crl(der) => der,
+        Item::Certificate { der, .. } | Item::Request { der, .. } | Item::Crl { der, .. } => der,
     };
     // Certificates may appear in several chains, so their entries copy them;
     // requests and revocation lists are then moved into theirs.
-    let chains: Vec<_> = (0..items.len())
+    let chain_indices: Vec<_> = (0..items.len())
         .map(|index| {
-            let Item::Certificate(certificate) = &items[index] else {
+            let Some(ParsedCert { names, .. }) = &certs[index] else {
                 return None;
             };
             // Follow issuers through the file, stopping at a self-issued
@@ -235,63 +325,93 @@ fn entries(items: Vec<Item>) -> Vec<KeystoreEntry> {
             // MAX_CHAIN_DEPTH.
             let mut chain = vec![index];
             let mut chain_warning = None;
-            while let Some((issuer, subject)) = &names[chain[chain.len() - 1]]
-                && issuer != subject
-                && let Some(next) = by_subject
-                    .get(issuer.as_slice())
-                    .and_then(|candidates| candidates.iter().copied().find(|c| !chain.contains(c)))
-            {
-                if chain.len() >= MAX_CHAIN_DEPTH {
-                    chain_warning = Some("Certificate chain exceeds the maximum depth.");
-                    break;
+            if names.is_some() {
+                while let Some(ParsedCert {
+                    names: Some((issuer, subject)),
+                    ..
+                }) = &certs[chain[chain.len() - 1]]
+                    && issuer != subject
+                    && let Some(next) = by_subject.get(issuer.as_slice()).and_then(|candidates| {
+                        candidates.iter().copied().find(|c| !chain.contains(c))
+                    })
+                {
+                    if chain.len() >= MAX_CHAIN_DEPTH {
+                        chain_warning = Some("Certificate chain exceeds the maximum depth.");
+                        break;
+                    }
+                    chain.push(next);
                 }
-                chain.push(next);
             }
-            Some(KeystoreEntry {
-                alias: alias(index, certificate),
-                certificate: certificate::summarize(certificate),
-                content: Content::Certificates {
-                    kind: Kind::Certificate,
-                    certificates: chain.iter().map(|&i| der(i).clone()).collect(),
-                },
-                chain_warning,
-            })
+            let certificates: Vec<Vec<u8>> = chain.iter().map(|&i| der(i).clone()).collect();
+            Some((certificates, chain_warning))
         })
         .collect();
     items
         .into_iter()
-        .zip(chains)
+        .zip(chain_indices)
         .enumerate()
         .map(|(index, (item, chain))| match item {
-            Item::Certificate(_) => chain.expect("every certificate has a chain entry"),
-            Item::Request(request) => KeystoreEntry {
-                alias: certificate_request::subject_name(&request)
-                    .unwrap_or_else(|| format!("Certificate request {}", index + 1)),
-                certificate: certificate_request::summarize(&request),
-                content: Content::Request(request),
-                chain_warning: None,
-            },
-            Item::Crl(list) => KeystoreEntry {
-                alias: revocation_list::issuer_name(&list)
-                    .unwrap_or_else(|| format!("Revocation list {}", index + 1)),
-                certificate: None,
-                content: Content::Crl(list),
-                chain_warning: None,
-            },
+            Item::Certificate { .. } => {
+                let (certificates, chain_warning) =
+                    chain.expect("every certificate has a chain entry");
+                let parsed = certs[index]
+                    .take()
+                    .expect("every certificate has parsed metadata");
+                KeystoreEntry {
+                    alias: parsed
+                        .alias
+                        .unwrap_or_else(|| format!("Certificate {}", index + 1)),
+                    certificate: parsed.summary,
+                    content: Content::Certificates {
+                        kind: Kind::Certificate,
+                        certificates,
+                    },
+                    chain_warning,
+                }
+            }
+            Item::Request { der, parsed } => {
+                let (alias, summary) = match parsed {
+                    Some((alias, summary)) => (alias, Some(summary)),
+                    None => match certificate_request::summarize_with_alias(&der) {
+                        Some((summary, alias)) => (alias, Some(summary)),
+                        None => (certificate_request::subject_name(&der), None),
+                    },
+                };
+                KeystoreEntry {
+                    alias: alias.unwrap_or_else(|| format!("Certificate request {}", index + 1)),
+                    certificate: summary,
+                    content: Content::Request(der),
+                    chain_warning: None,
+                }
+            }
+            Item::Crl { der, alias } => {
+                let alias = alias.unwrap_or_else(|| revocation_list::issuer_name(&der));
+                KeystoreEntry {
+                    alias: alias.unwrap_or_else(|| format!("Revocation list {}", index + 1)),
+                    certificate: None,
+                    content: Content::Crl(der),
+                    chain_warning: None,
+                }
+            }
         })
         .collect()
 }
 
-/// The subject name, else the file position.
-fn alias(index: usize, der: &[u8]) -> String {
-    subject_name(der).unwrap_or_else(|| format!("Certificate {}", index + 1))
-}
-
 /// The subject common name, else the whole subject, if either is non-empty.
 pub fn subject_name(der: &[u8]) -> Option<String> {
-    Details::parse(der)
-        .ok()
-        .and_then(|info| certificate::name_alias(&info.subject))
+    let mut reader = Reader::new(der);
+    let mut certificate = reader.read_sequence().ok()?;
+    reader.expect_end().ok()?;
+    let mut tbs = certificate.read_sequence().ok()?;
+    if tbs.peek_tag().ok()? == der::Tag::context_constructed(0) {
+        tbs.read_raw_tlv().ok()?; // Version.
+    }
+    tbs.read_expected(der::INTEGER).ok()?; // Serial number.
+    tbs.read_sequence().ok()?; // Signature algorithm.
+    tbs.read_sequence().ok()?; // Issuer.
+    tbs.read_sequence().ok()?; // Validity.
+    let subject = Name::parse(&mut tbs).ok()?;
+    certificate::name_alias(&subject)
 }
 
 #[cfg(test)]
@@ -509,5 +629,52 @@ mod tests {
         let exact = &file.entries[total - MAX_CHAIN_DEPTH];
         assert_eq!(exact.certificates().len(), MAX_CHAIN_DEPTH);
         assert_eq!(exact.chain_warning, None);
+    }
+
+    #[test]
+    fn subject_name_reads_only_subject_tlv_and_rejects_non_certificates() {
+        use crate::test_support::{OPENSSL_REQUEST_DER, ed25519_crl};
+
+        let cert = metadata_certificate("leaf", "ca", &[1], &[]);
+        assert_eq!(subject_name(&cert).as_deref(), Some("leaf"));
+
+        // Trailing bytes, truncated input, CSR, CRL, and empty subject return None.
+        let mut trailing = cert.clone();
+        trailing.push(0);
+        assert_eq!(subject_name(&trailing), None);
+        assert_eq!(subject_name(&cert[..cert.len() - 1]), None);
+        assert_eq!(subject_name(OPENSSL_REQUEST_DER), None);
+        assert_eq!(subject_name(&ed25519_crl()), None);
+        let empty = metadata_certificate("", "ca", &[1], &[]);
+        assert_eq!(subject_name(&empty), None);
+
+        // A PEM certificate whose SPKI is unreadable still links into a chain
+        // and uses its subject name as alias via fallback_names.
+        let ca = metadata_certificate("ca", "ca", &[1], &[]);
+        let sig = der::sequence(&der::oid(
+            &oid::ObjectIdentifier::new(oid::OID_ED25519).unwrap(),
+        ));
+        let bad_spki_tbs = der::sequence(
+            &[
+                der::integer_i64(2),
+                sig.clone(),
+                Name::from_common_name("ca").encode(),
+                der::sequence(&[]), // Invalid validity so summarize_full returns None.
+                Name::from_common_name("broken-leaf").encode(),
+                der::sequence(&[]),
+            ]
+            .concat(),
+        );
+        let bad_cert = der::sequence(&[bad_spki_tbs, sig, der::bit_string(0, &[0])].concat());
+        assert!(certificate::summarize(&bad_cert).is_none());
+        let pem = [
+            pem::encode("CERTIFICATE", &bad_cert),
+            pem::encode("CERTIFICATE", &ca),
+        ]
+        .concat();
+        let file = parse(pem.as_bytes()).unwrap();
+        assert_eq!(aliases(&file), ["broken-leaf", "ca"]);
+        assert!(file.entries[0].certificate.is_none());
+        assert_eq!(file.entries[0].certificates(), [bad_cert, ca]);
     }
 }

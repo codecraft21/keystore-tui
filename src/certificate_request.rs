@@ -10,7 +10,7 @@ use crate::certificate::{
     Summary,
     details::signature_name,
     extensions::{Extension, hex, printable},
-    name_alias, public_key, security, subject_text,
+    name_alias, name_text, public_key, security,
 };
 
 pub const KIND: &str = "Certificate request";
@@ -151,34 +151,43 @@ fn string_or_hex(value: &[u8]) -> String {
         )
 }
 
-/// Reads only the fields the entry list shows. A request has no expiry, and
-/// only its key size is checked: the hash it is signed with does not carry
-/// into the certificate it asks for.
-pub fn summarize(encoding: &[u8]) -> Option<Summary> {
-    let mut info = Reader::new(encoding)
-        .read_sequence()
-        .ok()?
-        .read_sequence()
-        .ok()?;
+/// Reads only the fields the entry list shows, plus the subject alias, in a
+/// single pass. A request has no expiry, and only its key size is checked: the
+/// hash it is signed with does not carry into the certificate it asks for.
+pub(crate) fn summarize_with_alias(encoding: &[u8]) -> Option<(Summary, Option<String>)> {
+    let mut reader = Reader::new(encoding);
+    let mut request = reader.read_sequence().ok()?;
+    reader.expect_end().ok()?;
+    let mut info = request.read_sequence().ok()?;
     info.read_raw_tlv().ok()?; // Version.
     let subject = info.read_raw_tlv().ok()?;
     let (algorithm, key_size) = public_key(info.read_raw_tlv().ok()?)?;
-    Some(Summary {
-        subject: subject_text(subject),
-        weaknesses: security::key_weakness(&algorithm, key_size)
-            .into_iter()
-            .collect(),
-        algorithm,
-        key_size,
-        not_after: None,
-    })
+    let parsed_subject = Name::parse(&mut Reader::new(subject)).ok();
+    let alias = parsed_subject.as_ref().and_then(name_alias);
+    let subject = parsed_subject.as_ref().map(name_text).unwrap_or_default();
+    Some((
+        Summary {
+            subject,
+            weaknesses: security::key_weakness(&algorithm, key_size)
+                .into_iter()
+                .collect(),
+            algorithm,
+            key_size,
+            not_after: None,
+        },
+        alias,
+    ))
 }
 
 /// The subject common name, else the whole subject, if either is non-empty.
 pub fn subject_name(encoding: &[u8]) -> Option<String> {
-    Request::parse(encoding)
-        .ok()
-        .and_then(|request| name_alias(&request.subject))
+    let mut reader = Reader::new(encoding);
+    let mut request = reader.read_sequence().ok()?;
+    reader.expect_end().ok()?;
+    let mut info = request.read_sequence().ok()?;
+    info.read_expected(der::INTEGER).ok()?; // Version.
+    let subject = Name::parse(&mut info).ok()?;
+    name_alias(&subject)
 }
 
 #[cfg(test)]
@@ -189,6 +198,10 @@ mod tests {
         test_support::{KEYTOOL_REQUEST, OPENSSL_REQUEST_DER, ed25519_request},
     };
     use crown::asn1::pem;
+
+    fn summarize(encoding: &[u8]) -> Option<Summary> {
+        summarize_with_alias(encoding).map(|(summary, _)| summary)
+    }
 
     fn attribute(oid: &[u64], values: &[Vec<u8>]) -> Vec<u8> {
         der::sequence(
@@ -402,6 +415,13 @@ mod tests {
         let mut trailing = der.clone();
         trailing.push(0);
         assert!(Request::parse(&trailing).is_err());
+        assert_eq!(subject_name(&trailing), None);
+        assert!(summarize(&trailing).is_none());
         assert!(Request::parse(crate::test_support::fixture_certificate_der()).is_err());
+        assert_eq!(
+            subject_name(crate::test_support::fixture_certificate_der()),
+            None
+        );
+        assert_eq!(subject_name(&crate::test_support::ed25519_crl()), None);
     }
 }

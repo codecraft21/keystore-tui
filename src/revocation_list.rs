@@ -1,7 +1,7 @@
 //! X.509 certificate revocation lists (CRLs), read for display only. Whether
 //! a list is current or trusted is not checked.
 use crown::{
-    asn1::{Asn1Time, Reader, der},
+    asn1::{Asn1Time, Reader, der, oid::ObjectIdentifier},
     error::{CryptoError, CryptoResult},
     x509::{algorithm::AlgorithmIdentifier, name::Name},
 };
@@ -39,34 +39,55 @@ pub struct Revoked {
     pub extensions: Vec<Extension>,
 }
 
-impl List {
-    pub fn parse(encoding: &[u8]) -> CryptoResult<Self> {
-        let mut reader = Reader::new(encoding);
-        let mut list = reader.read_sequence()?;
-        reader.expect_end()?;
-        let mut tbs = list.read_sequence()?;
-        let signature_algorithm = signature_name(&AlgorithmIdentifier::parse(&mut list)?.oid);
-        list.read_bit_string()?;
-        list.expect_end()?;
+struct Header<'a> {
+    version: i64,
+    issuer: Name,
+    this_update: Asn1Time,
+    next_update: Option<Asn1Time>,
+    signature_oid: ObjectIdentifier,
+    tbs_rest: Reader<'a>,
+}
 
-        // The stored value plus one, as for certificates; omitted means v1.
-        let version = if !tbs.is_empty() && tbs.peek_tag()? == der::INTEGER {
-            tbs.read_integer_i64()?
-                .checked_add(1)
-                .ok_or(CryptoError::StrError("invalid revocation list version"))?
-        } else {
-            1
-        };
-        AlgorithmIdentifier::parse(&mut tbs)?;
-        let issuer = Name::parse(&mut tbs)?;
-        let this_update = tbs.read_time()?;
-        let next_update = if !tbs.is_empty()
-            && matches!(tbs.peek_tag()?, der::UTC_TIME | der::GENERALIZED_TIME)
-        {
+fn parse_header(encoding: &[u8]) -> CryptoResult<Header<'_>> {
+    let mut reader = Reader::new(encoding);
+    let mut list = reader.read_sequence()?;
+    reader.expect_end()?;
+    let mut tbs = list.read_sequence()?;
+    let signature_oid = AlgorithmIdentifier::parse(&mut list)?.oid;
+    list.read_bit_string()?;
+    list.expect_end()?;
+
+    // The stored value plus one, as for certificates; omitted means v1.
+    let version = if !tbs.is_empty() && tbs.peek_tag()? == der::INTEGER {
+        tbs.read_integer_i64()?
+            .checked_add(1)
+            .ok_or(CryptoError::StrError("invalid revocation list version"))?
+    } else {
+        1
+    };
+    AlgorithmIdentifier::parse(&mut tbs)?;
+    let issuer = Name::parse(&mut tbs)?;
+    let this_update = tbs.read_time()?;
+    let next_update =
+        if !tbs.is_empty() && matches!(tbs.peek_tag()?, der::UTC_TIME | der::GENERALIZED_TIME) {
             Some(tbs.read_time()?)
         } else {
             None
         };
+    Ok(Header {
+        version,
+        issuer,
+        this_update,
+        next_update,
+        signature_oid,
+        tbs_rest: tbs,
+    })
+}
+
+impl List {
+    pub fn parse(encoding: &[u8]) -> CryptoResult<Self> {
+        let mut header = parse_header(encoding)?;
+        let tbs = &mut header.tbs_rest;
         let mut revoked = Vec::new();
         if !tbs.is_empty() && tbs.peek_tag()? == der::SEQUENCE {
             let mut entries = tbs.read_sequence()?;
@@ -105,22 +126,37 @@ impl List {
         }
         tbs.expect_end()?;
         Ok(Self {
-            version,
-            issuer,
-            this_update,
-            next_update,
-            signature_algorithm,
+            version: header.version,
+            issuer: header.issuer,
+            this_update: header.this_update,
+            next_update: header.next_update,
+            signature_algorithm: signature_name(&header.signature_oid),
             extensions,
             revoked,
         })
     }
 }
 
+/// Validates a CRL's outer structure and header and returns its issuer without
+/// decoding the revoked certificate list or extensions.
+pub(crate) fn parse_issuer(encoding: &[u8]) -> CryptoResult<Name> {
+    let mut header = parse_header(encoding)?;
+    let tbs = &mut header.tbs_rest;
+    if !tbs.is_empty() && tbs.peek_tag()? == der::SEQUENCE {
+        tbs.read_raw_tlv()?;
+    }
+    if !tbs.is_empty() && tbs.peek_tag()? == der::Tag::context_constructed(0) {
+        tbs.read_raw_tlv()?;
+    }
+    tbs.expect_end()?;
+    Ok(header.issuer)
+}
+
 /// The issuer's common name, else its whole name, if either is non-empty.
 pub fn issuer_name(encoding: &[u8]) -> Option<String> {
-    List::parse(encoding)
+    parse_issuer(encoding)
         .ok()
-        .and_then(|list| name_alias(&list.issuer))
+        .and_then(|issuer| name_alias(&issuer))
 }
 
 #[cfg(test)]
@@ -233,5 +269,15 @@ mod tests {
             "Malformed extension"
         );
         assert_eq!(parsed.extensions[0].title(), "Malformed extension");
+        assert_eq!(issuer_name(&minimal).as_deref(), Some("minimal-ca"));
+        assert_eq!(issuer_name(&crl).as_deref(), Some("ca"));
+        let mut trailing = crl.clone();
+        trailing.push(0);
+        assert_eq!(issuer_name(&trailing), None);
+        assert_eq!(
+            issuer_name(crate::test_support::fixture_certificate_der()),
+            None
+        );
+        assert_eq!(issuer_name(crate::test_support::OPENSSL_REQUEST_DER), None);
     }
 }
