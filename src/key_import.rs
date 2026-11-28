@@ -390,6 +390,7 @@ mod tests {
             pem::encode("CERTIFICATE", &certificate).as_bytes(),
             b"\xfe\xed\xfe\xed",
             b"-----BEGIN \xff",
+            b"-----BEGIN CERTIFICATE-----\nAAAA\n",
             b"neither",
         ] {
             assert!(matches!(find(data), Ok(None)));
