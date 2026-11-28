@@ -235,10 +235,11 @@ empty password, press `p` to set a password.
   imports the highlighted entry, and a single-entry keystore skips the list).
   Several entries keep their aliases,
   and those whose alias already exists are skipped; a single entry lets you
-  edit its alias. Private keys are stored under the open keystore's password.
-  Secret keys are copied into JCEKS and PKCS12 keystores. Keys with a
-  password of their own are not copied. A private key without a certificate
-  is copied without one into any format.
+  edit its alias. Private and secret keys are stored under the open keystore's
+  password. Secret keys are copied into JCEKS and PKCS12 keystores. When a key
+  has a password other than the source keystore's, keystore-tui prompts for it
+  (reusing typed passwords across remaining locked keys in the same copy). A
+  private key without a certificate is copied without one into any format.
 - **Generate a secret key:** in a JCEKS or PKCS12 keystore, press `G`, choose
   the algorithm with `Left` / `Right` (AES with 128, 192, or 256 bits, or
   HMAC with SHA-1, SHA-256, SHA-384, or SHA-512), press `Enter`, and confirm
@@ -298,10 +299,11 @@ cancels. The new file becomes the opened one.
 
 To convert a keystore to another format, give the new name that format's
 extension: `.jks`, `.jceks`, or `.p12` (or `.pfx`). The converted keystore has
-the same password, for the keystore and for every private key in it, and the
-original file is left as it was. A key with a password of its own must first be
-given the keystore's password with `P`. Secret keys are converted between
-JCEKS and PKCS12; a keystore holding one cannot become a JKS keystore.
+the same password, for the keystore and for every key in it, and the original
+file is left as it was. When a key has a password other than the keystore's,
+keystore-tui prompts for it (reusing typed passwords across remaining locked
+keys). Secret keys are converted between JCEKS and PKCS12; a keystore holding
+one cannot become a JKS keystore.
 
 With unsaved changes, `q`, `Esc`, `o`, and `n` ask before discarding them; press `y`
 to go on. `Ctrl+C` quits at once and discards them.

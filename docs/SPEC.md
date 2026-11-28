@@ -859,13 +859,22 @@ any existing incomplete-entry warnings.
   drops it, shown as `[x]`; `a` chooses every entry that can be copied, or
   none when they all are chosen. `Esc` cancels, and `q` does nothing.
 - Entries that cannot be copied are greyed, marked `[-]`, and followed by the
-  reason: private keys that the source's password does not
-  unlock or that are not in PKCS #8 form, and secret keys that it does not
-  recover or when the open keystore is JKS. A secret key is copied only into a
-  JCEKS or PKCS12 keystore. An entry whose alias the open
-  keystore already has, ignoring case, is followed by `(alias exists)`.
+  reason: private keys whose protection is not supported or that are not in
+  PKCS #8 form, and secret keys that cannot be read or when the open keystore
+  is JKS. A secret key is copied only into a JCEKS or PKCS12 keystore. A
+  private or secret key whose own password differs from the source keystore's
+  remains selectable, followed by `(key password needed)`. An entry whose
+  alias the open keystore already has, ignoring case, is followed by `(alias
+  exists)`, or `(alias exists, key password needed)` when both apply.
 - `Enter` imports the chosen entries, or the highlighted one when none is
-  chosen:
+  chosen. When any entry that will be imported needs its own key password
+  (excluding entries that will be skipped because their alias already exists),
+  a prompt asks `Password of key '<alias>':`, as for a key password. A wrong
+  password shows `Incorrect password.` and leaves the prompt open. A password
+  entered for one key is tried automatically on remaining locked keys in the
+  same copy before prompting again. `Esc` cancels the copy without importing
+  anything and returns to the entry list (or closes the prompt when the source
+  has a single entry):
   - A single entry goes through the alias prompt of a [certificate
     import](#importing-certificates) or a [key pair
     import](#importing-key-pairs), which suggests its alias in lower case.
@@ -873,8 +882,8 @@ any existing incomplete-entry warnings.
     exists are skipped. A message such as `Imported 2 entries from
     '<file name>'. Skipped, alias exists: <aliases>.` reports the result, in
     red when nothing was imported or an entry failed.
-- A source with a single entry skips the list and goes straight to the alias
-  prompt.
+- A source with a single entry skips the list and goes straight to the key
+  password prompt (when needed) and the alias prompt.
 - A certificate is added as a trusted certificate, and a private key with its
   certificate chain, protected with the open keystore's password, under the
   same rules as the two imports above. Creation dates are not copied.
@@ -1079,11 +1088,17 @@ any existing incomplete-entry warnings.
   hint line says so, and the green message ends with `as JKS`, `as JCEKS`, or
   `as PKCS12`.
 - The opened file is not changed. Unsaved changes go into the converted file.
-- Each private key is recovered in memory with the keystore's password,
-  protected again as the new format does, and wiped: Java's key protector for
-  JKS, `PBEWithMD5AndTripleDES` for JCEKS, and PBES2 for PKCS12, each with a
-  new random salt. In the converted keystore every key has the keystore's
-  password.
+- Each private or secret key is recovered in memory with the keystore's
+  password, or with its own password when the keystore's does not unlock it:
+  after non-password checks pass, a prompt asks `Password of key '<alias>':`,
+  as for a key password. A wrong password shows `Incorrect password.` and
+  leaves the prompt open. A password entered for one key is tried automatically
+  on remaining locked keys before prompting again. `Esc` cancels the
+  conversion without writing anything and returns to the "save as" prompt.
+  Each recovered key is protected again as the new format does, and wiped:
+  Java's key protector for JKS, `PBEWithMD5AndTripleDES` for JCEKS, and PBES2
+  for PKCS12, each with a new random salt. In the converted keystore every key
+  has the keystore's password.
 - Certificates and chains are copied byte for byte. To JKS or JCEKS, a
   certificate entry of either PKCS12 kind becomes a trusted certificate,
   aliases become lower case, and entries get the current time as creation
@@ -1099,8 +1114,7 @@ any existing incomplete-entry warnings.
   that is not linked by issuer names fails this check for PKCS12, which
   rebuilds chains from them.
 - The conversion is refused, with a red message and the prompt left open,
-  when a key has a password other than the keystore's (change it first with
-  `P`), when a key's protection is not supported or the key is not PKCS #8,
+  when a key's protection is not supported or the key is not PKCS #8,
   when a secret key would go to JKS, which holds none, or to PKCS12 under an
   algorithm it has no name for, when two aliases would be the same in
   lower case, when the target is PKCS12 and the password is empty, when the

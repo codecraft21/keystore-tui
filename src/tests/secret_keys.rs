@@ -348,10 +348,14 @@ fn jceks_secret_keys_are_sealed_converted_and_given_passwords() {
     assert!(red_text(&mut app).contains(
         "Not exported: the secret key 'mac' has a password of its own; give it the keystore's password first (P)."
     ));
-    // It stops a conversion, and comes back with its current password.
+    // Converting prompts for the secret key's own password; Esc returns to
+    // the "save as" prompt without writing.
     press(&mut app, KeyCode::Char('W'));
     type_alias(&mut app, "late.p12");
-    assert!(red_text(&mut app).contains("Not converted: the secret key 'mac' has a password"));
+    assert!(screen(&mut app, 120, 24).contains("Password of key 'mac': _"));
+    assert!(app.key_unlock.is_some() && app.save_as.is_some());
+    press(&mut app, KeyCode::Esc);
+    assert!(app.key_unlock.is_none() && app.save_as.is_some());
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('P'));
     assert!(screen(&mut app, 120, 24).contains("Current password of key 'mac': _"));

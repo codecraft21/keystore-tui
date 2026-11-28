@@ -13,6 +13,12 @@ All notable changes to keystore-tui are listed here. Versions follow
   `EC PRIVATE KEY`), optionally encrypted with `AES-256-CBC` (toggled with
   `Tab` in the `Export key to:` prompt for PEM file names, with a confirmation
   warning about weaker MD5 key derivation when encrypted).
+- Prompt for a key's own password when copying entries from another keystore
+  (`i`) or converting a keystore to another format (`W`) if the source
+  keystore's password cannot unlock a private or JCEKS secret key, reusing
+  typed passwords across remaining locked keys in the same operation and
+  protecting the copied or converted keys with the destination keystore's
+  password.
 
 ## 1.1.1
 

@@ -166,22 +166,26 @@ fn save_as_with_another_format_name_converts_the_keystore() {
     let original = fs::read(&path).unwrap();
     press(&mut app, KeyCode::Char('W'));
     assert!(screen(&mut app, 200, 24).contains("A .jks, .jceks, or .p12 name converts"));
-    // A key with a password of its own cannot follow the keystore.
+    // A key with a password of its own prompts for it; wrong password keeps the
+    // prompt open, and Esc returns to the "save as" prompt without writing.
     type_alias(&mut app, "store.p12");
-    assert!(red_text(&mut app).contains("the key 'own' has a password of its own"));
-    assert!(app.save_as.is_some());
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'own': _"));
+    assert!(app.key_unlock.is_some() && app.save_as.is_some());
     assert!(!directory.path().join("store.p12").exists());
+    type_password(&mut app, "wrong");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("Incorrect password."));
+    assert!(app.key_unlock.is_some());
     press(&mut app, KeyCode::Esc);
+    assert!(app.key_unlock.is_none() && app.save_as.is_some());
+    assert!(!directory.path().join("store.p12").exists());
 
-    // Once it shares the keystore's password, the keystore converts.
-    press(&mut app, KeyCode::Down);
-    press(&mut app, KeyCode::Char('P'));
+    // Pressing Enter again prompts for `own`, and the right password converts.
+    let listed = app.entries.len();
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'own': _"));
     type_password(&mut app, "keypass");
     press(&mut app, KeyCode::Enter);
-    type_new_password(&mut app, "changeit", "changeit");
-    let listed = app.entries.len();
-    press(&mut app, KeyCode::Char('W'));
-    type_alias(&mut app, "store.p12");
     let converted = canonical_path::canonicalize(&directory.path().join("store.p12")).unwrap();
     let rendered = screen(&mut app, 200, 24);
     assert!(rendered.contains("' as PKCS12."), "{:?}", app.message);
@@ -324,4 +328,177 @@ fn keystores_that_cannot_be_converted_are_left_alone() {
         app.message
     );
     assert_eq!(app.entries[0].certificates().len(), 2);
+}
+
+#[test]
+fn separate_key_passwords_are_reused_when_converting_and_copying() {
+    use crate::secret_key::{self, SecretKey};
+    use crate::test_support::{TestRng, metadata_certificate, synthetic_pkcs8};
+
+    let directory = TestDirectory::new();
+    let key = synthetic_pkcs8(b"synthetic, not a private key");
+    let cert1 = metadata_certificate("CN=Key1", "CN=Key1", &[1], &[]);
+    let cert2 = metadata_certificate("CN=Key2", "CN=Key2", &[2], &[]);
+    let cert3 = metadata_certificate("CN=Key3", "CN=Key3", &[3], &[]);
+    let secret = SecretKey {
+        algorithm: "AES".into(),
+        key: Zeroizing::new(vec![0x42; 16]),
+    };
+
+    let mut rng = TestRng(0);
+    let mut writable = keystore::Writable::empty(true);
+    writable
+        .insert_private_key(
+            0,
+            "k1",
+            &key_protection::protect(&key, "keypass1", true, &mut rng).unwrap(),
+            std::slice::from_ref(&cert1),
+            0,
+        )
+        .unwrap();
+    writable
+        .insert_private_key(
+            1,
+            "k2",
+            &key_protection::protect(&key, "keypass1", true, &mut rng).unwrap(),
+            &[cert2],
+            0,
+        )
+        .unwrap();
+    writable
+        .insert_private_key(
+            2,
+            "k3",
+            &key_protection::protect(&key, "keypass2", true, &mut rng).unwrap(),
+            &[cert3],
+            0,
+        )
+        .unwrap();
+    writable
+        .insert_secret_key(
+            3,
+            "sec",
+            &secret_key::seal(&secret, "keypass1", &mut rng).unwrap(),
+            0,
+        )
+        .unwrap();
+    let source_path = directory.path().join("multi.jceks");
+    fs::write(&source_path, writable.encode("changeit")).unwrap();
+
+    // Open multi.jceks and check pre-validation runs before prompting.
+    let mut app = App::default();
+    app.open_file(source_path);
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.entries.len(), 4);
+
+    // Converting to JKS is refused up front because of the secret key, without prompting.
+    press(&mut app, KeyCode::Char('W'));
+    type_alias(&mut app, "fail.jks");
+    assert!(red_text(&mut app).contains("cannot hold secret keys"));
+    assert!(app.key_unlock.is_none() && app.save_as.is_some());
+
+    // Converting to an existing file is refused up front without prompting.
+    let existing = directory.path().join("existing.p12");
+    fs::write(&existing, b"placeholder").unwrap();
+    type_alias(&mut app, "existing.p12");
+    assert!(red_text(&mut app).contains("already exists"));
+    assert!(app.key_unlock.is_none() && app.save_as.is_some());
+
+    // Converting to PKCS12 prompts for k1; typing keypass1 unlocks k1, k2, and
+    // skips to k3 (then sec is unlocked automatically by keypass1 too).
+    type_alias(&mut app, "converted.p12");
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'k1': _"));
+    type_password(&mut app, "keypass1");
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'k3': _"));
+    type_password(&mut app, "keypass2");
+    press(&mut app, KeyCode::Enter);
+    assert!(
+        screen(&mut app, 200, 24).contains("' as PKCS12."),
+        "{:?}",
+        app.message
+    );
+    assert!(app.key_unlock.is_none() && app.save_as.is_none());
+    let doc = app.document.as_ref().unwrap();
+    for index in 0..3 {
+        assert_eq!(doc.private_key(index).unwrap().as_slice(), key.as_slice());
+    }
+    assert!(doc.secret_key(3) == Ok(secret.clone()));
+
+    // Copying from multi.jceks into a fresh JCEKS reuses typed key passwords,
+    // and Esc cancels atomically without importing anything.
+    let dest_path = directory.path().join("dest.jceks");
+    fs::write(&dest_path, keystore::Writable::empty(true).encode("destpw")).unwrap();
+    let mut app = App::default();
+    app.open_file(dest_path);
+    type_password(&mut app, "destpw");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.entries.is_empty());
+
+    import(&mut app, "multi");
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'k1': _"));
+    type_password(&mut app, "keypass1");
+    press(&mut app, KeyCode::Enter);
+    // k2 was unlocked by keypass1, so it advances directly to k3.
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'k3': _"));
+    // Esc cancels atomically and returns to the selection list.
+    press(&mut app, KeyCode::Esc);
+    assert!(app.key_unlock.is_none() && app.copying.is_some());
+    assert!(app.entries.is_empty() && !app.modified);
+
+    // Confirming again and supplying both passwords imports all 4 entries.
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'k1': _"));
+    type_password(&mut app, "keypass1");
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'k3': _"));
+    type_password(&mut app, "keypass2");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.message,
+        Some(("Imported 4 entries from 'multi.jceks'.".into(), false))
+    );
+    assert_eq!(app.entries.len(), 4);
+    let doc = app.document.as_ref().unwrap();
+    for index in 0..3 {
+        assert_eq!(doc.private_key(index).unwrap().as_slice(), key.as_slice());
+    }
+    assert!(doc.secret_key(3) == Ok(secret));
+
+    // Single-entry source keystore with a separate key password skips the list,
+    // prompts for the key password, and goes to the alias prompt.
+    let mut single = keystore::Writable::empty(false);
+    single
+        .insert_private_key(
+            0,
+            "solo",
+            &key_protection::protect(&key, "solopass", false, &mut rng).unwrap(),
+            &[cert1],
+            0,
+        )
+        .unwrap();
+    let single_path = directory.path().join("solo.jks");
+    fs::write(&single_path, single.encode("changeit")).unwrap();
+
+    import(&mut app, "solo");
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'solo': _"));
+    assert!(app.key_unlock.is_some() && app.copying.is_none());
+    press(&mut app, KeyCode::Esc);
+    assert!(app.key_unlock.is_none() && app.copying.is_none());
+
+    import(&mut app, "solo");
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    type_password(&mut app, "solopass");
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("Alias for the imported key pair: solo_"));
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("Imported key pair as 'solo'."));
 }
