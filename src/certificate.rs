@@ -52,9 +52,21 @@ const OID_ML_DSA_44: &[u64] = &[2, 16, 840, 1, 101, 3, 4, 3, 17];
 const OID_ML_DSA_65: &[u64] = &[2, 16, 840, 1, 101, 3, 4, 3, 18];
 const OID_ML_DSA_87: &[u64] = &[2, 16, 840, 1, 101, 3, 4, 3, 19];
 
+/// Summary and raw/decoded name fields from a single pass over a certificate.
+pub(crate) struct Summarized<'a> {
+    pub summary: Summary,
+    pub issuer: &'a [u8],
+    pub subject: &'a [u8],
+    pub subject_name: Option<Name>,
+}
+
 /// Reads only the fields the entry list shows. Returns `None` for anything
 /// that is not a well-formed certificate, so unusual certificates still list.
 pub fn summarize(der: &[u8]) -> Option<Summary> {
+    summarize_full(der).map(|parsed| parsed.summary)
+}
+
+pub(crate) fn summarize_full(der: &[u8]) -> Option<Summarized<'_>> {
     let mut reader = Reader::new(der);
     let mut certificate = reader.read_sequence().ok()?;
     reader.expect_end().ok()?;
@@ -73,13 +85,20 @@ pub fn summarize(der: &[u8]) -> Option<Summary> {
     let (name, key_size) = public_key(tbs.read_raw_tlv().ok()?)?;
     let outer_signature = certificate.read_raw_tlv().ok()?;
     let weaknesses = security::weaknesses(&name, key_size, outer_signature, issuer == subject);
-    Some(Summary {
-        // Unusual names must not hide the entry, so decode failures leave it empty.
-        subject: subject_text(subject),
-        algorithm: name,
-        key_size,
-        not_after: Some(not_after),
-        weaknesses,
+    // Unusual names must not hide the entry, so decode failures leave it empty.
+    let subject_name = Name::parse(&mut Reader::new(subject)).ok();
+    let subject_display = subject_name.as_ref().map(name_text).unwrap_or_default();
+    Some(Summarized {
+        summary: Summary {
+            subject: subject_display,
+            algorithm: name,
+            key_size,
+            not_after: Some(not_after),
+            weaknesses,
+        },
+        issuer,
+        subject,
+        subject_name,
     })
 }
 
@@ -95,13 +114,6 @@ pub fn name_alias(name: &Name) -> Option<String> {
         .or_else(|| Some(name.to_string()))
         .filter(|name| !name.is_empty())
         .map(|name| extensions::printable(&name))
-}
-
-/// The decoded distinguished name, or empty when it cannot be decoded.
-pub fn subject_text(name: &[u8]) -> String {
-    Name::parse(&mut Reader::new(name))
-        .map(|name| name_text(&name))
-        .unwrap_or_default()
 }
 
 /// The algorithm name and key size of a SubjectPublicKeyInfo. Unrecognized
@@ -369,10 +381,6 @@ mod tests {
         assert_eq!(
             name_alias(&evil).as_deref(),
             Some("good\\u{a}Issuer: CN=Trusted\\u{d}\\u{1b}[31m")
-        );
-        assert_eq!(
-            subject_text(&evil.encode()),
-            "CN=good\\u{a}Issuer: CN=Trusted\\u{d}\\u{1b}[31m"
         );
         assert_eq!(
             name_text(&evil),
