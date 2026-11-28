@@ -779,20 +779,15 @@ impl Document {
                         ))
                     })?;
                     writable
-                        .insert_secret_key(&entry.alias, &wrapped, created(index), &mut rng)
+                        .add_secret_key(&entry.alias, &wrapped, created(index), &mut rng)
                         .map_err(|error| failed(error.to_owned()))?;
                     continue;
                 }
                 match &entry.key {
-                    Some(key) => writable.insert_private_key(
-                        &entry.alias,
-                        key,
-                        &entry.certificates,
-                        &mut rng,
-                    ),
-                    None => {
-                        writable.insert_trusted_certificate(&entry.alias, &entry.certificates[0])
+                    Some(key) => {
+                        writable.add_private_key(&entry.alias, key, &entry.certificates, &mut rng)
                     }
+                    None => writable.add_trusted_certificate(&entry.alias, &entry.certificates[0]),
                 }
                 .map_err(|error| failed(error.to_owned()))?;
             }

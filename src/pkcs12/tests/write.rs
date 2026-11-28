@@ -825,3 +825,72 @@ fn preserves_higher_kdf_iterations_on_save_password_change_and_key_insert() {
     assert_eq!(key_iters("my-secret"), sec_iters);
     assert_eq!(key_iters("extra"), mac_iters);
 }
+
+#[test]
+fn bulk_add_helpers_match_insert_without_relisting() {
+    use crate::test_support::metadata_certificate;
+
+    let root = metadata_certificate("root", "root", &[1], &[]);
+    let leaf_a = metadata_certificate("leaf-a", "root", &[2], &[]);
+    let leaf_b = metadata_certificate("leaf-b", "root", &[3], &[]);
+    let trusted = metadata_certificate("trusted", "trusted", &[4], &[]);
+    let key_a = synthetic_pkcs8(b"synthetic key a");
+    let key_b = synthetic_pkcs8(b"synthetic key b");
+    let secret = crate::secret_key::to_pkcs8(&crate::secret_key::SecretKey {
+        algorithm: "AES".into(),
+        key: Zeroizing::new(vec![0x11; 16]),
+    })
+    .unwrap();
+
+    let mut bulk = Writable::empty("changeit");
+    let mut bulk_rng = TestRng(7);
+    bulk.add_trusted_certificate("trusted", &trusted).unwrap();
+    bulk.add_private_key(
+        "key-a",
+        &key_a,
+        &[leaf_a.clone(), root.clone(), root.clone()],
+        &mut bulk_rng,
+    )
+    .unwrap();
+    bulk.add_private_key(
+        "key-b",
+        &key_b,
+        &[leaf_b.clone(), root.clone()],
+        &mut bulk_rng,
+    )
+    .unwrap();
+    bulk.add_secret_key("secret", &secret, 1_700_000_000_000, &mut bulk_rng)
+        .unwrap();
+    // Bulk construction never runs relist().
+    assert!(bulk.sources.is_empty());
+
+    let mut incremental = Writable::empty("changeit");
+    let mut inc_rng = TestRng(7);
+    incremental
+        .insert_trusted_certificate("trusted", &trusted)
+        .unwrap();
+    incremental
+        .insert_private_key(
+            "key-a",
+            &key_a,
+            &[leaf_a, root.clone(), root.clone()],
+            &mut inc_rng,
+        )
+        .unwrap();
+    incremental
+        .insert_private_key("key-b", &key_b, &[leaf_b, root], &mut inc_rng)
+        .unwrap();
+    let expected_entries = incremental
+        .insert_secret_key("secret", &secret, 1_700_000_000_000, &mut inc_rng)
+        .unwrap();
+
+    assert_eq!(bulk.safes, incremental.safes);
+    assert_eq!(bulk.bags.len(), incremental.bags.len());
+    let bulk_encoded = bulk.encode(&mut TestRng(99)).unwrap();
+    let inc_encoded = incremental.encode(&mut TestRng(99)).unwrap();
+    assert_eq!(bulk_encoded, inc_encoded);
+
+    let verified = parse(&bulk_encoded).unwrap().verify("changeit").unwrap();
+    assert!(!verified.incomplete);
+    assert_eq!(verified.entries, expected_entries);
+}
