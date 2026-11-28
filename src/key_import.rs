@@ -80,7 +80,10 @@ pub fn find(data: &[u8]) -> Result<Option<Found>, String> {
         };
         let mut keys = match legacy_pem::parse_key_blocks(text) {
             Ok(keys) => keys,
-            Err(_) => return Ok(None),
+            Err(legacy_pem::ParseError::KeyBlock) => {
+                return Err("holds a malformed private key".into());
+            }
+            Err(legacy_pem::ParseError::OtherBlock) => return Ok(None),
         };
         let Some(block) = keys.pop() else {
             return Ok(None);
@@ -409,6 +412,15 @@ mod tests {
         }
         let text = pem::encode("DSA PRIVATE KEY", b"\x30\x00");
         assert!(error(text.as_bytes()).contains("'DSA PRIVATE KEY' block"));
+        // A damaged key block is reported as a malformed key, not as a file
+        // without one.
+        for text in [
+            "-----BEGIN EC PRIVATE KEY-----\nMAA\n-----END EC PRIVATE KEY-----\n",
+            "-----BEGIN EC PRIVATE KEY-----\nMAA=\n-----END RSA PRIVATE KEY-----\n",
+            "-----BEGIN EC PRIVATE KEY-----\nMAA=\n",
+        ] {
+            assert!(error(text.as_bytes()).contains("malformed"), "{text}");
+        }
     }
 
     #[test]

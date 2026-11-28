@@ -437,11 +437,13 @@ any existing incomplete-entry warnings.
     `ENCRYPTED PRIVATE KEY`, `RSA PRIVATE KEY`, or `EC PRIVATE KEY` (OpenSSL's
     own formats, plain or encrypted with `Proc-Type: 4,ENCRYPTED` and
     `DEK-Info` using `AES-128-CBC`, `AES-192-CBC`, `AES-256-CBC`,
-    `DES-EDE3-CBC`, or `DES-CBC`; the EC key must name its curve). It may also
-    hold the certificates.
+    `DES-EDE3-CBC`, or `DES-CBC`; the EC key must name its curve). Header
+    lines may be folded onto lines that start with a space or tab. The key's
+    body must be padded base64. It may also hold the certificates.
   - A DER file holding a PKCS #8 key, plain or encrypted.
 - A PEM file with several private keys, with malformed legacy encryption
-  headers or an unsupported legacy cipher, with a malformed key, or with any
+  headers or an unsupported legacy cipher, with a malformed key (including a
+  key block with invalid base64 or a missing or mismatched END line), or with any
   other `... PRIVATE KEY` block (plain or encrypted) is refused with a red
   message.
 - For an encrypted key, a prompt asks `Password of
@@ -913,9 +915,11 @@ any existing incomplete-entry warnings.
     toggled with `Tab` for an RSA or EC key, an `RSA PRIVATE KEY` or
     `EC PRIVATE KEY` block), followed by its certificates as `CERTIFICATE`
     blocks, leaf first.
-- For an RSA or EC key with a PEM file name (not `.p12`, `.pfx`, `.p8`, or
-  `.der`), `Tab` toggles between PKCS #8 and OpenSSL's legacy PEM format; the
-  prompt shows `Export key to (OpenSSL):` when legacy mode is active.
+- For an RSA key, or an EC key that names its curve, with a PEM file name
+  (not `.p12`, `.pfx`, `.p8`, or `.der`), `Tab` toggles between PKCS #8 and
+  OpenSSL's legacy PEM format; the prompt shows `Export key to (OpenSSL):`
+  when legacy mode is active. Typing a name that is not PEM turns legacy mode
+  off.
 - A name that already exists is refused with a red message and the prompt
   stays open. Then a prompt asks `Password for the exported key:`, typed
   twice like a [new keystore password](#changing-the-password).

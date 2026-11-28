@@ -210,7 +210,9 @@ impl App {
             return;
         }
         match export.prompt.handle_key(key) {
-            Outcome::Editing => {}
+            // A name that cannot be legacy PEM turns the toggle off, so it
+            // never comes back on unseen when the name changes again.
+            Outcome::Editing => export.legacy &= export.can_toggle_legacy(),
             Outcome::Cancelled => self.key_export = None,
             Outcome::Save(path) if save::path_exists(&path) => {
                 self.message = Some((

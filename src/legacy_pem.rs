@@ -220,10 +220,20 @@ impl EncryptedLegacyKey {
     }
 }
 
+/// Why [`parse_key_blocks`] could not read a PEM text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseError {
+    /// A `... PRIVATE KEY` block is malformed: its END line is missing or
+    /// mismatched, or its body is not valid base64.
+    KeyBlock,
+    /// Another block, or a BEGIN line, is malformed.
+    OtherBlock,
+}
+
 /// Extracts every PEM block whose label ends with `PRIVATE KEY`, preserving its
-/// RFC 1421 headers and decoding its body into a wiping buffer.
-pub fn parse_key_blocks(text: &str) -> Result<Vec<PemKeyBlock>, String> {
-    let malformed = || "holds a malformed private key".to_owned();
+/// RFC 1421 headers (including folded continuation lines) and decoding its
+/// body into a wiping buffer.
+pub fn parse_key_blocks(text: &str) -> Result<Vec<PemKeyBlock>, ParseError> {
     let mut blocks = Vec::new();
     let mut lines = text.lines();
     while let Some(line) = lines.next() {
@@ -232,19 +242,24 @@ pub fn parse_key_blocks(text: &str) -> Result<Vec<PemKeyBlock>, String> {
             continue;
         };
         let Some(label) = rest.strip_suffix("-----") else {
-            return Err(malformed());
+            return Err(ParseError::OtherBlock);
         };
         let is_key = label.ends_with("PRIVATE KEY");
-        let mut headers = Vec::new();
+        let malformed = if is_key {
+            ParseError::KeyBlock
+        } else {
+            ParseError::OtherBlock
+        };
+        let mut headers: Vec<(String, String)> = Vec::new();
         let mut body = Zeroizing::new(String::new());
         let mut in_body = false;
         let mut closed = false;
         for line in lines.by_ref() {
             let trimmed = line.trim();
             if let Some(rest) = trimmed.strip_prefix("-----END ") {
-                let end_label = rest.strip_suffix("-----").ok_or_else(malformed)?;
+                let end_label = rest.strip_suffix("-----").ok_or(malformed)?;
                 if end_label != label {
-                    return Err(malformed());
+                    return Err(malformed);
                 }
                 closed = true;
                 break;
@@ -257,6 +272,13 @@ pub fn parse_key_blocks(text: &str) -> Result<Vec<PemKeyBlock>, String> {
                     if !headers.is_empty() {
                         in_body = true;
                     }
+                    continue;
+                }
+                if line.starts_with([' ', '\t'])
+                    && let Some((_, value)) = headers.last_mut()
+                {
+                    value.push(' ');
+                    value.push_str(trimmed);
                     continue;
                 }
                 if let Some((name, value)) = trimmed.split_once(':') {
@@ -272,10 +294,10 @@ pub fn parse_key_blocks(text: &str) -> Result<Vec<PemKeyBlock>, String> {
             }
         }
         if !closed {
-            return Err(malformed());
+            return Err(malformed);
         }
         if is_key {
-            let data = base64_decode(&body).ok_or_else(malformed)?;
+            let data = base64_decode(&body).ok_or(malformed)?;
             blocks.push(PemKeyBlock {
                 label: label.to_owned(),
                 headers,
@@ -287,19 +309,10 @@ pub fn parse_key_blocks(text: &str) -> Result<Vec<PemKeyBlock>, String> {
 }
 
 /// The legacy OpenSSL PEM label for `pkcs8_der` (`RSA PRIVATE KEY` or
-/// `EC PRIVATE KEY`), or `None` for key algorithms that have no legacy format.
+/// `EC PRIVATE KEY`), or `None` when the key cannot be written in that format,
+/// such as a key of another algorithm or an EC key that names no curve.
 pub fn legacy_label(pkcs8_der: &[u8]) -> Option<&'static str> {
-    let info = PrivateKeyInfo::parse(pkcs8_der).ok()?;
-    let oid = &info.algorithm.oid;
-    let label = if oid.matches(oid::OID_RSA_ENCRYPTION) {
-        Some(KeyKind::Rsa.label())
-    } else if oid.matches(oid::OID_EC_PUBLIC_KEY) {
-        Some(KeyKind::Ec.label())
-    } else {
-        None
-    };
-    let _ = Zeroizing::new(info.private_key);
-    label
+    from_pkcs8(pkcs8_der).ok().map(|(label, _)| label)
 }
 
 /// Converts a PKCS #8 `PrivateKeyInfo` into its traditional OpenSSL PEM label
@@ -585,18 +598,21 @@ fn base64_decode(text: &str) -> Option<Zeroizing<Vec<u8>>> {
             _ => None,
         }
     }
-    let mut out = Zeroizing::new(Vec::with_capacity(text.len() / 4 * 3));
+    // Padded base64 only: whole groups of four, with at most two `=` at the
+    // end. The output then never outgrows the buffer, so no unwiped copy of
+    // the decoded key is left behind by reallocation.
+    let bytes = text.as_bytes();
+    if !bytes.len().is_multiple_of(4) {
+        return None;
+    }
+    let padding = bytes.iter().rev().take_while(|&&byte| byte == b'=').count();
+    if padding > 2 {
+        return None;
+    }
+    let mut out = Zeroizing::new(Vec::with_capacity(bytes.len() / 4 * 3));
     let mut acc = 0u32;
     let mut bits = 0u32;
-    let mut padding = 0usize;
-    for &byte in text.as_bytes() {
-        if byte == b'=' {
-            padding += 1;
-            continue;
-        }
-        if padding != 0 {
-            return None;
-        }
+    for &byte in &bytes[..bytes.len() - padding] {
         acc = (acc << 6) | value(byte)?;
         bits += 6;
         if bits >= 8 {
@@ -604,9 +620,10 @@ fn base64_decode(text: &str) -> Option<Zeroizing<Vec<u8>>> {
             out.push((acc >> bits) as u8);
         }
     }
-    if bits >= 6 || acc & ((1 << bits) - 1) != 0 {
+    if acc & ((1 << bits) - 1) != 0 {
         return None;
     }
+    debug_assert!(out.len() <= out.capacity());
     Some(out)
 }
 
@@ -746,5 +763,69 @@ mod tests {
         let enc_pkcs8 = "-----BEGIN PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-256-CBC,00112233445566778899AABBCCDDEEFF\n\nAAAAAAAAAAAAAAAAAAAAAA==\n-----END PRIVATE KEY-----\n";
         let mut blocks = parse_key_blocks(enc_pkcs8).unwrap();
         assert!(EncryptedLegacyKey::parse(blocks.pop().unwrap()).is_err());
+    }
+
+    #[test]
+    fn legacy_label_needs_a_named_curve() {
+        let ec = sample_ec_pkcs8();
+        let info = PrivateKeyInfo::parse(&ec).unwrap();
+        let mut reader = Reader::new(&info.private_key);
+        let mut seq = reader.read_sequence().unwrap();
+        let version = seq.read_integer().unwrap();
+        let scalar = seq.read_octet_string().unwrap();
+        let inner = der::sequence(&[der::integer(version), der::octet_string(scalar)].concat());
+        // No curve in the `ECPrivateKey` and only NULL in the PKCS #8 parameters.
+        let unnamed = wrap_pkcs8(oid::OID_EC_PUBLIC_KEY, &der::null(), &inner);
+        assert!(from_pkcs8(&unnamed).is_err());
+        assert_eq!(legacy_label(&unnamed), None);
+    }
+
+    #[test]
+    fn base64_decode_requires_padded_groups() {
+        assert_eq!(base64_decode("").unwrap().as_slice(), b"");
+        assert_eq!(base64_decode("TWFu").unwrap().as_slice(), b"Man");
+        assert_eq!(base64_decode("TWE=").unwrap().as_slice(), b"Ma");
+        assert_eq!(base64_decode("TQ==").unwrap().as_slice(), b"M");
+        for bad in [
+            "TWE", "TQ", "TQ=", "TWFuTWE", "T===", "====", "TQ==TQ==", "TW=u", "TR==",
+        ] {
+            assert!(base64_decode(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn parse_key_blocks_reads_folded_headers_and_reports_where_it_failed() {
+        let folded = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
+            DEK-Info: AES-128-CBC,\n 00112233445566778899AABBCCDDEEFF\n\n\
+            AAAAAAAAAAAAAAAAAAAAAA==\n-----END RSA PRIVATE KEY-----\n";
+        let mut blocks = parse_key_blocks(folded).unwrap();
+        let block = blocks.pop().unwrap();
+        assert_eq!(
+            block.header("DEK-Info"),
+            Some("AES-128-CBC, 00112233445566778899AABBCCDDEEFF")
+        );
+        let encrypted = EncryptedLegacyKey::parse(block).unwrap();
+        assert_eq!(encrypted.cipher, Cipher::Aes128);
+
+        let damaged_key = "-----BEGIN PRIVATE KEY-----\nAAA\n-----END PRIVATE KEY-----\n";
+        assert_eq!(
+            parse_key_blocks(damaged_key).err(),
+            Some(ParseError::KeyBlock)
+        );
+        let unclosed_key = "-----BEGIN PRIVATE KEY-----\nAAAA\n";
+        assert_eq!(
+            parse_key_blocks(unclosed_key).err(),
+            Some(ParseError::KeyBlock)
+        );
+        let unclosed_other = "-----BEGIN CERTIFICATE-----\nAAAA\n";
+        assert_eq!(
+            parse_key_blocks(unclosed_other).err(),
+            Some(ParseError::OtherBlock)
+        );
+        let bad_begin = "-----BEGIN CERTIFICATE\n";
+        assert_eq!(
+            parse_key_blocks(bad_begin).err(),
+            Some(ParseError::OtherBlock)
+        );
     }
 }
