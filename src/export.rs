@@ -176,10 +176,10 @@ pub fn encode<'a, T: AsRef<[u8]>>(
     path: &Path,
     scope: Scope,
 ) -> Result<Cow<'a, [u8]>, &'static str> {
+    if items.is_empty() {
+        return Err("There is nothing to save.");
+    }
     if scope.supports_pkcs7() && is_pkcs7(path) {
-        if items.is_empty() {
-            return Err("There are no certificates to save.");
-        }
         Ok(Cow::Owned(certificate_file::encode_pkcs7(items)))
     } else if is_der(path) {
         match items {
@@ -360,17 +360,18 @@ mod tests {
             assert!(!certificate_file::is_pem(&bytes));
             let parsed = certificate_file::parse(&bytes).unwrap();
             assert_eq!(parsed.entries.len(), items.len());
-            assert_eq!(parsed.entries[0].certificates(), items);
+            let leaf_entry = parsed.entries.iter().find(|e| e.alias == "leaf").unwrap();
+            assert_eq!(leaf_entry.certificates(), items);
         }
-        assert!(
-            save(
-                &directory.path().join("empty.p7b"),
-                &[] as &[&[u8]],
-                Scope::Certificate
-            )
-            .unwrap_err()
-            .contains("no certificates")
-        );
+        for name in ["empty.p7b", "empty.der", "empty.pem"] {
+            let path = directory.path().join(name);
+            assert!(
+                save(&path, &[] as &[&[u8]], Scope::Certificate)
+                    .unwrap_err()
+                    .contains("nothing to save")
+            );
+            assert!(!path.exists());
+        }
 
         // Non-certificate scopes still write PEM even under a .p7b name.
         for (name, scope, label) in [
