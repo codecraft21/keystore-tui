@@ -19,6 +19,7 @@ mod key_export;
 mod key_import;
 mod key_protection;
 mod keystore;
+mod legacy_pem;
 mod new_password;
 mod new_request;
 mod path_bar;
@@ -185,7 +186,10 @@ enum Confirm {
     /// Create a keystore, which replaces the modified one.
     New,
     /// Write the private key at this index unencrypted to this new file.
-    ExportPlain(PathBuf, usize),
+    ExportPlain(PathBuf, usize, bool),
+    /// Write the private key at this index encrypted in OpenSSL's legacy PEM
+    /// format, which uses weaker MD5 key derivation.
+    ExportLegacyEncrypted(PathBuf, usize, Password),
     /// Write the secret key at this index, unencrypted, to this new file.
     ExportSecret(PathBuf, usize),
 }
@@ -411,7 +415,10 @@ impl App {
             Confirm::Quit => return true,
             Confirm::Open => self.open_picker(),
             Confirm::New => self.name_new_keystore(),
-            Confirm::ExportPlain(path, index) => self.export_key(&path, index, ""),
+            Confirm::ExportPlain(path, index, legacy) => self.export_key(&path, index, "", legacy),
+            Confirm::ExportLegacyEncrypted(path, index, password) => {
+                self.export_key(&path, index, &password.0, true);
+            }
             Confirm::ExportSecret(path, index) => self.export_secret(&path, index),
             Confirm::Delete(index) => {
                 let Some(document) = &mut self.document else {
@@ -1034,7 +1041,7 @@ impl App {
                 }
                 (Purpose::Export(..), false) => "Password for the exported key: ".into(),
             };
-            let plain = matches!(&prompt.purpose, Purpose::Export(path, _)
+            let plain = matches!(&prompt.purpose, Purpose::Export(path, _, _)
                 if key_export::Format::from_name(path) != key_export::Format::Pkcs12);
             vec![
                 Line::from(vec![
@@ -1048,9 +1055,21 @@ impl App {
                 },
             ]
         } else if let Some(export) = &self.key_export {
+            let prompt_label = if export.use_legacy() {
+                "Export key to (OpenSSL): "
+            } else {
+                "Export key to: "
+            };
+            let hints = if export.use_legacy() {
+                ".pem Key+certs | .key Key only | Tab PKCS #8 | Enter Next | Ctrl+U Clear | Esc Cancel"
+            } else if export.can_toggle_legacy() {
+                ".p12 Keystore | .pem Key+certs | .key .p8 Key only | Tab OpenSSL | Enter Next | Ctrl+U Clear | Esc Cancel"
+            } else {
+                ".p12 Keystore | .pem Key and certificates | .key .p8 Key only | Enter Next | Ctrl+U Clear | Esc Cancel"
+            };
             vec![
-                path_input::line("Export key to: ".bold(), &export.prompt.path, width),
-                ".p12 Keystore | .pem Key and certificates | .key .p8 Key only | Enter Next | Ctrl+U Clear | Esc Cancel".into(),
+                path_input::line(prompt_label.bold(), &export.prompt.path, width),
+                hints.into(),
             ]
         } else if let Some(export) = &self.secret_export {
             vec![
@@ -1187,8 +1206,12 @@ impl App {
             Confirm::New => {
                 "Creating a keystore discards the unsaved changes. Press y to continue, any other key to cancel.".into()
             }
-            Confirm::ExportPlain(_, index) => format!(
+            Confirm::ExportPlain(_, index, _) => format!(
                 "Write the private key '{}' unencrypted? Press y to write it, any other key to cancel.",
+                self.entries[*index].alias
+            ),
+            Confirm::ExportLegacyEncrypted(_, index, _) => format!(
+                "Legacy OpenSSL PEM uses weaker MD5 key derivation. Write '{}' in this format? Press y to write it, any other key to cancel.",
                 self.entries[*index].alias
             ),
             Confirm::ExportSecret(_, index) => format!(

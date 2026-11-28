@@ -198,12 +198,11 @@ empty password, press `p` to set a password.
   suggested alias and press `Enter`.
 - **Import a key pair:** press `i` and choose the file holding the private
   key: a PEM file (PKCS #8, plain or encrypted, or OpenSSL's `RSA PRIVATE KEY`
-  and `EC PRIVATE KEY`) or a DER PKCS #8 file. Type the file's password if it
-  is encrypted. If the file has no
-  certificate, choose the certificate file next. Then confirm or edit the
-  alias. The key must match one of the certificates; it is stored under the
-  keystore's password. Keys encrypted in OpenSSL's old PEM format are not
-  read; convert them first with `openssl pkcs8 -topk8`.
+  and `EC PRIVATE KEY`, plain or encrypted with `AES-128-CBC`, `AES-192-CBC`,
+  `AES-256-CBC`, `DES-EDE3-CBC`, or `DES-CBC`) or a DER PKCS #8 file. Type the
+  file's password if it is encrypted. If the file has no certificate, choose
+  the certificate file next. Then confirm or edit the alias. The key must match
+  one of the certificates; it is stored under the keystore's password.
 - **Sign a certificate request:** press `S` on the private key of your
   certificate authority, then `r`, and choose the `.csr` file. Its signature
   is checked first. In the form, set the validity in days, a serial number in
@@ -255,9 +254,12 @@ empty password, press `p` to set a password.
   and type a password twice. A `.p12` or `.pfx` name writes a PKCS12 keystore
   with the key and its certificates, a `.pem` name the key followed by its
   certificates, a `.key` name the key alone as PEM, and a `.p8` or `.der`
-  name the key alone as DER. The key is encrypted with the password. With an
-  empty password (not for PKCS12) the key is written unencrypted, after you
-  confirm with `y`. Existing files are never replaced.
+  name the key alone as DER. For an RSA or EC key with a PEM name, press `Tab`
+  to toggle OpenSSL's legacy `RSA PRIVATE KEY` / `EC PRIVATE KEY` format
+  (encrypted with `AES-256-CBC` and MD5 key derivation, with a confirmation
+  warning). The key is encrypted with the password. With an empty password (not
+  for PKCS12) the key is written unencrypted, after you confirm with `y`.
+  Existing files are never replaced.
 - **Change the password:** press `p`, then type the new password twice. In JKS
   and JCEKS only the keystore's own password changes; private-key and
   secret-key entries keep the passwords they were protected with, as with

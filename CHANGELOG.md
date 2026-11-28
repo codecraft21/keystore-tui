@@ -3,6 +3,17 @@
 All notable changes to keystore-tui are listed here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.2.0
+
+- Import private keys encrypted in OpenSSL's legacy PEM format (`RSA PRIVATE KEY`
+  and `EC PRIVATE KEY` with `Proc-Type: 4,ENCRYPTED` and `DEK-Info` headers
+  using `AES-128-CBC`, `AES-192-CBC`, `AES-256-CBC`, `DES-EDE3-CBC`, or
+  `DES-CBC`).
+- Export RSA and EC private keys as OpenSSL legacy PEM (`RSA PRIVATE KEY` and
+  `EC PRIVATE KEY`), optionally encrypted with `AES-256-CBC` (toggled with
+  `Tab` in the `Export key to:` prompt for PEM file names, with a confirmation
+  warning about weaker MD5 key derivation when encrypted).
+
 ## 1.1.1
 
 - Fix TUI and workflow correctness issues:

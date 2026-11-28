@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crown::{
-    asn1::{Reader, der, oid, oid::ObjectIdentifier, pem},
+    asn1::{der, oid},
     x509::{
         cert::Certificate,
         keys::{EncryptedPrivateKeyInfo, PrivateKeyInfo, SubjectPublicKeyInfo},
@@ -17,7 +17,7 @@ use crate::{
     App, MAX_KEYSTORE_SIZE, Password, certificate_file,
     editing::{Action, AliasPrompt},
     keystore::{self, Content},
-    pkcs12, read_limited, save,
+    legacy_pem, pkcs12, read_limited, save,
 };
 
 /// A private key as PKCS #8, wiped when dropped.
@@ -35,6 +35,8 @@ pub enum Found {
 pub enum Locked {
     /// An `EncryptedPrivateKeyInfo`.
     Encrypted(Vec<u8>),
+    /// An encrypted legacy OpenSSL PEM key (`RSA PRIVATE KEY` or `EC PRIVATE KEY`).
+    LegacyPem(legacy_pem::EncryptedLegacyKey),
     /// A PKCS12 keystore.
     Pkcs12(pkcs12::Store),
     /// A JKS or JCEKS keystore.
@@ -76,37 +78,43 @@ pub fn find(data: &[u8]) -> Result<Option<Found>, String> {
         let Some(text) = std::str::from_utf8(data).ok() else {
             return Ok(None);
         };
-        let mut keys: Vec<_> = pem::parse(text)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|block| block.label.ends_with("PRIVATE KEY"))
-            .map(|block| (block.label, Zeroizing::new(block.data)))
-            .collect();
-        let Some((label, key)) = keys.pop() else {
+        let mut keys = match legacy_pem::parse_key_blocks(text) {
+            Ok(keys) => keys,
+            Err(_) => return Ok(None),
+        };
+        let Some(block) = keys.pop() else {
             return Ok(None);
         };
         if !keys.is_empty() {
             return Err("holds several private keys; import a file with a single one".into());
         }
-        if text.contains("Proc-Type: 4,ENCRYPTED") {
-            return Err(
-                "is encrypted in OpenSSL's old format; convert the key to PKCS #8 first".into(),
-            );
-        }
         let malformed = || "holds a malformed private key".to_owned();
+        if block.is_encrypted() {
+            let encrypted = legacy_pem::EncryptedLegacyKey::parse(block)?;
+            return Ok(Some(Found::Locked(Locked::LegacyPem(encrypted))));
+        }
+        if block.has_headers() {
+            return Err(malformed());
+        }
+        let label = block.label;
+        let key = block.data;
         match label.as_str() {
             "PRIVATE KEY" if pkcs12::is_private_key_info(&key) => Ok(Some(Found::Key(key))),
             "ENCRYPTED PRIVATE KEY" if EncryptedPrivateKeyInfo::parse(&key).is_ok() => {
                 Ok(Some(Found::Locked(Locked::Encrypted(key.to_vec()))))
             }
-            "RSA PRIVATE KEY" => Ok(Some(Found::Key(pkcs8(
+            "RSA PRIVATE KEY" => Ok(Some(Found::Key(legacy_pem::wrap_pkcs8(
                 oid::OID_RSA_ENCRYPTION,
                 &der::null(),
                 &key,
             )))),
             "EC PRIVATE KEY" => {
-                let curve = ec_curve(&key).ok_or_else(malformed)?;
-                Ok(Some(Found::Key(pkcs8(oid::OID_EC_PUBLIC_KEY, curve, &key))))
+                let curve = legacy_pem::ec_curve(&key).ok_or_else(malformed)?;
+                Ok(Some(Found::Key(legacy_pem::wrap_pkcs8(
+                    oid::OID_EC_PUBLIC_KEY,
+                    curve,
+                    &key,
+                ))))
             }
             "PRIVATE KEY" | "ENCRYPTED PRIVATE KEY" => Err(malformed()),
             _ => Err(format!(
@@ -128,28 +136,6 @@ pub fn find(data: &[u8]) -> Result<Option<Found>, String> {
     } else {
         Ok(None)
     }
-}
-
-/// The curve named inside an `ECPrivateKey`, as an encoded object identifier.
-fn ec_curve(key: &[u8]) -> Option<&[u8]> {
-    let mut key = Reader::new(key).read_sequence().ok()?;
-    key.read_integer().ok()?;
-    key.read_octet_string().ok()?;
-    key.read_explicit(0).ok()?.read_raw_tlv().ok()
-}
-
-/// A PKCS #8 `PrivateKeyInfo` around `key`, a key in its algorithm's own
-/// encoding.
-fn pkcs8(algorithm: &[u64], parameters: &[u8], key: &[u8]) -> Key {
-    let algorithm = ObjectIdentifier::new(algorithm).expect("static oid");
-    let octets = Zeroizing::new(der::octet_string(key));
-    let mut content = Zeroizing::new(Vec::with_capacity(octets.len() + 64));
-    content.extend(der::integer(&[0]));
-    content.extend(der::sequence(
-        &[der::oid(&algorithm), parameters.to_vec()].concat(),
-    ));
-    content.extend_from_slice(&octets);
-    Zeroizing::new(der::sequence(&content))
 }
 
 /// The certificate chains in the certificate file content `data`.
@@ -343,6 +329,10 @@ impl App {
                 let key = pkcs12::decrypt_key(&encrypted, password.0.as_bytes());
                 (Locked::Encrypted(encrypted), key)
             }
+            Locked::LegacyPem(encrypted) => {
+                let key = encrypted.decrypt(password.0.as_bytes());
+                (Locked::LegacyPem(encrypted), key)
+            }
         };
         match unlocked {
             Some(key) => self.import_key(file, key, chains),
@@ -366,7 +356,7 @@ mod tests {
     use super::*;
     use crate::test_support::{TestRng, ed25519_certificate, ed25519_pkcs8};
     use crown::{
-        asn1::Asn1Time,
+        asn1::{Asn1Time, oid::ObjectIdentifier, pem},
         x509::{
             algorithm::{Hash, SignatureAlgorithm},
             name::Name,
@@ -407,9 +397,12 @@ mod tests {
     fn refuses_keys_it_cannot_read() {
         let key = pem::encode("PRIVATE KEY", &ed25519_pkcs8(7));
         assert!(error(format!("{key}{key}").as_bytes()).contains("several private keys"));
-        let legacy = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
+        let bad_legacy = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
             DEK-Info: AES-256-CBC,00\n\nAAAA\n-----END RSA PRIVATE KEY-----\n";
-        assert!(error(legacy.as_bytes()).contains("OpenSSL's old format"));
+        assert!(error(bad_legacy.as_bytes()).contains("malformed"));
+        let unsupported_cipher = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
+            DEK-Info: BF-CBC,0011223344556677\n\nAAAAAAAAAAAAAAAAAAAAAA==\n-----END RSA PRIVATE KEY-----\n";
+        assert!(error(unsupported_cipher.as_bytes()).contains("BF-CBC"));
         for label in ["PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "EC PRIVATE KEY"] {
             let text = pem::encode(label, b"\x30\x00");
             assert!(error(text.as_bytes()).contains("malformed"), "{label}");

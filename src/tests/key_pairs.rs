@@ -533,7 +533,7 @@ fn exporting_a_private_key_writes_a_new_protected_file() {
     let mut app = App::default();
     press(&mut app, KeyCode::Char('e'));
     app.handle_key_export(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    app.export_key(&file("none.key"), 0, "");
+    app.export_key(&file("none.key"), 0, "", false);
     assert!(app.key_export.is_none() && app.message.is_none());
     assert!(!file("none.key").exists());
 }
@@ -731,4 +731,169 @@ fn failed_certificate_read_clears_pending_key_import() {
     press(&mut app, KeyCode::Enter);
     assert!(screen(&mut app, 120, 24).contains("Imported certificate as 'five'."));
     assert_eq!(app.entries[0].kind(), "Trusted certificate");
+}
+
+#[test]
+fn legacy_openssl_pem_export_and_import() {
+    use crate::{
+        generate::{self, Algorithm},
+        signing,
+        test_support::{TestRng, ed25519_certificate, ed25519_pkcs8},
+    };
+    use crown::{
+        asn1::Asn1Time,
+        ec::CurveId,
+        x509::{cert::Certificate, keys::PrivateKeyInfo, name::Name},
+    };
+
+    let clear = |app: &mut App| {
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    };
+    let directory = TestDirectory::new();
+    let file = |name: &str| directory.path().join(name);
+    let mut rng = TestRng(55);
+    let mut os_rng = save::OsRng::default();
+    let rsa_key = generate::key_pair(Algorithm::Rsa(1024), &mut os_rng).unwrap();
+    let ec_key = generate::key_pair(Algorithm::Ec(CurveId::P256), &mut rng).unwrap();
+    let ed_key = ed25519_pkcs8(7);
+    let time = |seconds| Asn1Time::from_unix(seconds, true);
+    let rsa_decoded = PrivateKeyInfo::parse(&rsa_key).unwrap().decode().unwrap();
+    let rsa_cert = Certificate::self_signed(
+        Name::from_common_name("rsa-leaf"),
+        signing::signature_algorithm(&rsa_decoded).unwrap(),
+        &rsa_decoded,
+        time(0),
+        time(1_000_000_000),
+        vec![],
+        &mut rng,
+    )
+    .unwrap()
+    .encode();
+    let ec_decoded = PrivateKeyInfo::parse(&ec_key).unwrap().decode().unwrap();
+    let ec_cert = Certificate::self_signed(
+        Name::from_common_name("ec-leaf"),
+        signing::signature_algorithm(&ec_decoded).unwrap(),
+        &ec_decoded,
+        time(0),
+        time(1_000_000_000),
+        vec![],
+        &mut rng,
+    )
+    .unwrap()
+    .encode();
+    let ed_cert = ed25519_certificate("ed-leaf", "ed-leaf", 7, 7);
+
+    let mut store = pkcs12::Writable::empty("storepw");
+    store
+        .insert_private_key("ec", &ec_key, &[ec_cert], &mut rng)
+        .unwrap();
+    store
+        .insert_private_key("ed", &ed_key, &[ed_cert], &mut rng)
+        .unwrap();
+    store
+        .insert_private_key("rsa", &rsa_key, &[rsa_cert], &mut rng)
+        .unwrap();
+    let store_path = file("keys.p12");
+    fs::write(&store_path, store.encode(&mut rng).unwrap()).unwrap();
+    let mut app = App::default();
+    app.open_file(store_path);
+    type_password(&mut app, "storepw");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.entries.len(), 3);
+
+    // Entries are sorted: 0 = "ec", 1 = "ed", 2 = "rsa".
+    // 1. Export EC key as encrypted legacy OpenSSL PEM (.pem includes certificates).
+    press(&mut app, KeyCode::Char('e'));
+    // Default .p12 does not offer Tab toggle.
+    assert!(!screen(&mut app, 200, 24).contains("Tab OpenSSL"));
+    press(&mut app, KeyCode::Tab);
+    assert!(!screen(&mut app, 200, 24).contains("Export key to (OpenSSL):"));
+    // Switching to .pem enables Tab toggle.
+    clear(&mut app);
+    type_password(&mut app, "ec-legacy.pem");
+    assert!(screen(&mut app, 200, 24).contains("Tab OpenSSL"));
+    press(&mut app, KeyCode::Tab);
+    let rendered = screen(&mut app, 200, 24);
+    assert!(rendered.contains("Export key to (OpenSSL):"));
+    assert!(rendered.contains("Tab PKCS #8"));
+    press(&mut app, KeyCode::Enter);
+    type_new_password(&mut app, "legacypw", "legacypw");
+    // Encrypted legacy OpenSSL PEM asks for MD5 confirmation.
+    let rendered = screen(&mut app, 200, 24);
+    assert!(rendered.contains("Legacy OpenSSL PEM uses weaker MD5 key derivation"));
+    // Declining writes nothing.
+    press(&mut app, KeyCode::Char('n'));
+    assert!(!file("ec-legacy.pem").exists());
+
+    // Confirming with `y` writes the encrypted EC PRIVATE KEY + CERTIFICATE.
+    press(&mut app, KeyCode::Char('e'));
+    clear(&mut app);
+    type_password(&mut app, "ec-legacy.pem");
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Enter);
+    type_new_password(&mut app, "legacypw", "legacypw");
+    press(&mut app, KeyCode::Char('y'));
+    assert!(screen(&mut app, 200, 24).contains("Exported key 'ec' to '"));
+    let ec_pem = fs::read_to_string(file("ec-legacy.pem")).unwrap();
+    assert!(ec_pem.starts_with(
+        "-----BEGIN EC PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-256-CBC,"
+    ));
+    assert!(ec_pem.contains("-----BEGIN CERTIFICATE-----"));
+
+    // 2. Ed25519 key does not offer Tab toggle even for .key.
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char('e'));
+    clear(&mut app);
+    type_password(&mut app, "ed.key");
+    assert!(!screen(&mut app, 200, 24).contains("Tab OpenSSL"));
+    press(&mut app, KeyCode::Tab);
+    assert!(!screen(&mut app, 200, 24).contains("Export key to (OpenSSL):"));
+    press(&mut app, KeyCode::Esc);
+
+    // 3. Export RSA key as plain legacy OpenSSL .key (key only, unencrypted confirm).
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char('e'));
+    clear(&mut app);
+    type_password(&mut app, "rsa-plain.key");
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Enter);
+    type_new_password(&mut app, "", "");
+    assert!(screen(&mut app, 200, 24).contains("Write the private key 'rsa' unencrypted?"));
+    press(&mut app, KeyCode::Char('y'));
+    let rsa_plain = fs::read_to_string(file("rsa-plain.key")).unwrap();
+    assert!(rsa_plain.starts_with("-----BEGIN RSA PRIVATE KEY-----\n"));
+    assert!(!rsa_plain.contains("Proc-Type"));
+    assert!(!rsa_plain.contains("-----BEGIN CERTIFICATE-----"));
+
+    // Also export RSA key as encrypted legacy OpenSSL .pem (key + cert).
+    press(&mut app, KeyCode::Char('e'));
+    clear(&mut app);
+    type_password(&mut app, "rsa-enc.pem");
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Enter);
+    type_new_password(&mut app, "rsapw", "rsapw");
+    press(&mut app, KeyCode::Char('y'));
+    let rsa_enc = fs::read_to_string(file("rsa-enc.pem")).unwrap();
+    assert!(rsa_enc.starts_with(
+        "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-256-CBC,"
+    ));
+
+    // 4. Re-import the encrypted legacy EC and RSA PEM files into a fresh keystore.
+    let (mut app, _) = editing(&directory);
+    import(&mut app, "ec-legacy");
+    assert!(screen(&mut app, 120, 24).contains("Password of 'ec-legacy.pem': _"));
+    type_password(&mut app, "wrong");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("Incorrect password."));
+    type_password(&mut app, "legacypw");
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Alias for the imported key pair: ec-leaf_"));
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Imported key pair as 'ec-leaf'."));
+
+    import(&mut app, "rsa-enc");
+    type_password(&mut app, "rsapw");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 120, 24).contains("Imported key pair as 'rsa-leaf'."));
 }
