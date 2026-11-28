@@ -352,7 +352,7 @@ fn separate_key_passwords_are_reused_when_converting_and_copying() {
             0,
             "k1",
             &key_protection::protect(&key, "keypass1", true, &mut rng).unwrap(),
-            &[cert1.clone()],
+            std::slice::from_ref(&cert1),
             0,
         )
         .unwrap();
