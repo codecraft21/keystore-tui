@@ -638,6 +638,7 @@ impl Document {
     /// Private keys are recovered in memory with the keystore's password,
     /// protected again as the other format does, and wiped. The result is
     /// read back and compared with `entries` before it is returned.
+    #[cfg(test)]
     pub fn convert(&self, entries: &[KeystoreEntry], target: Format) -> Result<Vec<u8>, String> {
         self.convert_with_passwords(entries, target, &[])
     }
