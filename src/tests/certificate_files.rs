@@ -151,13 +151,26 @@ fn details_export_certificates_next_to_the_opened_file() {
 
     // A chain cannot be DER; the prompt stays open with a red error.
     app.handle_key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT));
-    assert!(screen(&mut app, 120, 40).contains("Save chain to: "));
+    let rendered = screen(&mut app, 120, 40);
+    assert!(rendered.contains("Save chain to: "));
+    assert!(rendered.contains("A .p7b/.p7c name saves PKCS#7, .der DER, any other PEM"));
     app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
     type_password(&mut app, "chain.der");
     press(&mut app, KeyCode::Enter);
-    assert!(red_text(&mut app).contains("use a .pem name"));
+    assert!(red_text(&mut app).contains("use a .pem or .p7b name"));
     assert!(app.entry_details.as_ref().unwrap().exporting());
-    press(&mut app, KeyCode::Esc);
+    // A .p7b name writes the chain as DER PKCS#7 SignedData.
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    type_password(&mut app, "chain.p7b");
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.entry_details.as_ref().unwrap().exporting());
+    let p7b = fs::read(directory.path().join("chain.p7b")).unwrap();
+    assert!(!certificate_file::is_pem(&p7b));
+    let parsed = certificate_file::parse(&p7b).unwrap();
+    assert_eq!(
+        parsed.entries[0].certificates(),
+        [leaf.clone(), root.clone()]
+    );
     app.handle_key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT));
     press(&mut app, KeyCode::Enter);
     let chain = fs::read_to_string(directory.path().join("server-chain.pem")).unwrap();

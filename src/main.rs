@@ -1209,7 +1209,7 @@ impl App {
         {
             vec![
                 path_input::line("Save certificate as: ".bold(), &prompt.path, width),
-                "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Back | Ctrl+C Quit".into(),
+                "A .p7b/.p7c name saves PKCS#7, .der DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Back | Ctrl+C Quit".into(),
             ]
         } else if let Some((_, prompt)) = self
             .revoking

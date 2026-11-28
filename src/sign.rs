@@ -263,7 +263,7 @@ impl App {
         let mut rng = save::OsRng::default();
         let signed = signing::revocation_list(list, &issuer, &mut rng)?;
         rng.check()?;
-        export::save(path, &[signed], Scope::Crl.pem_label())?;
+        export::save(path, &[signed], Scope::Crl)?;
         Ok(format!(
             "Signed a revocation list of {} with '{alias}' and saved it to '{}'.",
             match list.revoked.len() {
@@ -379,7 +379,7 @@ impl App {
         if *with_chain {
             items.extend_from_slice(entry.certificates());
         }
-        export::save(path, &items, Scope::Certificate.pem_label())?;
+        export::save(path, &items, Scope::Certificate)?;
         Ok(format!(
             "Signed the request in '{}' with '{alias}' and saved the certificate to '{}'.",
             signing.file,

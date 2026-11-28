@@ -314,7 +314,7 @@ impl EntryDetails {
                 }
                 Outcome::Save(path) => {
                     let scope = prompt.scope;
-                    match export::save(&path, &self.export_items(scope), scope.pem_label()) {
+                    match export::save(&path, &self.export_items(scope), scope) {
                         Ok(()) => {
                             self.export = None;
                             self.message = Some((
@@ -734,9 +734,11 @@ impl EntryDetails {
                 &prompt.path,
                 width,
             ));
-            lines.push(Line::from(
-                "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit",
-            ));
+            lines.push(Line::from(if prompt.scope.supports_pkcs7() {
+                "A .p7b/.p7c name saves PKCS#7, .der DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit"
+            } else {
+                "A .der name saves DER, any other PEM | Enter Save | Ctrl+U Clear | Esc Cancel | Ctrl+C Quit"
+            }));
         } else {
             lines.extend(Text::from(shortcuts).lines);
         }
