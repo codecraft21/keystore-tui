@@ -760,3 +760,62 @@ fn generate_and_export_secret_key_then_quit_restores_terminal() {
     app.send(b"q");
     app.assert_restored();
 }
+
+/// SPEC: [Exporting private keys](../../docs/SPEC.md#exporting-private-keys),
+/// [Importing key pairs](../../docs/SPEC.md#importing-key-pairs),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn export_and_import_legacy_openssl_pem_restores_terminal() {
+    let directory = TempDir::new();
+    let mut app = PtyApp::spawn(directory.path(), &[]);
+    app.expect(&["No keystore selected"]);
+    app.send(b"n");
+    app.expect(&["New keystore file"]);
+    app.send(b"\x15store.p12\r");
+    app.expect(&["Password for the new keystore:"]);
+    app.send(b"smoke-pw\rsmoke-pw\r");
+    app.expect(&["Created the PKCS12 keystore"]);
+
+    // Generate an EC P-256 key pair (the default) so legacy OpenSSL PEM export is available.
+    app.send(b"g");
+    app.expect(&["Generate key pair", "EC P-256"]);
+    app.send(b"\tlegacy-ec\r");
+    app.expect(&["Alias for the generated key pair: legacy-ec_"]);
+    app.send(b"\r");
+    app.expect(&["Generated EC P-256 key pair 'legacy-ec'."]);
+
+    // Export as encrypted legacy OpenSSL PEM (.pem includes the certificate).
+    app.send(b"e");
+    app.expect(&["Export key to:"]);
+    app.send(b"\x15legacy.pem\t");
+    app.expect(&["Export key to (OpenSSL):", "Tab PKCS #8"]);
+    app.send(b"\r");
+    app.expect(&["Password for the exported key: _"]);
+    app.send(b"legacypw\r");
+    app.expect(&["Type the password again: _"]);
+    app.send(b"legacypw\r");
+    app.expect(&["Legacy OpenSSL PEM uses weaker MD5 key derivation."]);
+    app.send(b"y");
+    app.expect(&["Exported key 'legacy-ec' to"]);
+
+    let exported = fs::read_to_string(directory.join("legacy.pem")).unwrap();
+    assert!(exported.starts_with(
+        "-----BEGIN EC PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-256-CBC,"
+    ));
+    assert!(exported.contains("-----BEGIN CERTIFICATE-----"));
+
+    // Delete the entry and re-import it from the encrypted legacy PEM file.
+    app.send(b"dy");
+    app.expect(&["Deleted entry 'legacy-ec'."]);
+    app.send(b"i");
+    app.expect(&["Import certificate or key pair from file"]);
+    app.send(b"legacy.pem\r");
+    app.expect(&["Password of 'legacy.pem': _"]);
+    app.send(b"legacypw\r");
+    app.expect(&["Alias for the imported key pair: legacy-ec_"]);
+    app.send(b"\r");
+    app.expect(&["Imported key pair as 'legacy-ec'."]);
+
+    app.send(b"\x03");
+    app.assert_restored();
+}

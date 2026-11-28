@@ -3,12 +3,14 @@
 use std::path::{Path, PathBuf};
 
 use crown::{asn1::pem, rng::Rng};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use zeroize::Zeroizing;
 
 use crate::{
-    App, Confirm,
+    App, Confirm, Password,
     export::{ExportPrompt, Outcome, Scope},
     keystore::Kind,
+    legacy_pem,
     new_password::{NewPasswordPrompt, Purpose},
     path_bar, pkcs12, save,
 };
@@ -18,9 +20,9 @@ use crate::{
 pub enum Format {
     /// A PKCS12 keystore with the key and its certificates.
     Pkcs12,
-    /// PEM blocks: the key as PKCS #8, then its certificates.
+    /// PEM blocks: the key (PKCS #8 or legacy OpenSSL), then its certificates.
     PemPair,
-    /// The key alone, as a PKCS #8 PEM block.
+    /// The key alone, as a PEM block (PKCS #8 or legacy OpenSSL).
     PemKey,
     /// The key alone, as PKCS #8 DER.
     DerKey,
@@ -43,13 +45,20 @@ impl Format {
             _ => Self::PemPair,
         }
     }
+
+    pub fn is_pem(self) -> bool {
+        matches!(self, Self::PemPair | Self::PemKey)
+    }
 }
 
 /// The file content for `format`: the PKCS #8 private key `key`, encrypted
-/// with `password` unless it is empty, and its certificate `chain`. The
+/// with `password` unless it is empty, and its certificate `chain`. When
+/// `legacy` is true and `format` is PEM, writes OpenSSL's legacy
+/// `RSA PRIVATE KEY` or `EC PRIVATE KEY` format instead of PKCS #8. The
 /// encrypted key is decrypted again as a check before it is returned.
 pub fn encode(
     format: Format,
+    legacy: bool,
     alias: &str,
     key: &[u8],
     chain: &[Vec<u8>],
@@ -75,6 +84,34 @@ pub fn encode(
         }
         return writable.encode(rng).map(Zeroizing::new).map_err(failed);
     }
+    if legacy && format.is_pem() {
+        let (label, raw) = legacy_pem::from_pkcs8(key).map_err(failed)?;
+        let certificates: String = if format == Format::PemPair {
+            chain
+                .iter()
+                .map(|certificate| pem::encode("CERTIFICATE", certificate))
+                .collect()
+        } else {
+            String::new()
+        };
+        return if password.is_empty() {
+            Ok(legacy_pem::pem_block(
+                label,
+                "",
+                &raw,
+                certificates.as_bytes(),
+            ))
+        } else {
+            legacy_pem::encrypt_pem_block(
+                label,
+                &raw,
+                password.as_bytes(),
+                rng,
+                certificates.as_bytes(),
+            )
+            .map_err(failed)
+        };
+    }
     let (label, key) = if password.is_empty() {
         ("PRIVATE KEY", Zeroizing::new(key.to_vec()))
     } else {
@@ -90,56 +127,15 @@ pub fn encode(
     };
     Ok(match format {
         Format::DerKey => key,
-        Format::PemKey => pem_block(label, &key, &[]),
+        Format::PemKey => legacy_pem::pem_block(label, "", &key, &[]),
         Format::PemPair | Format::Pkcs12 => {
             let certificates: String = chain
                 .iter()
                 .map(|certificate| pem::encode("CERTIFICATE", certificate))
                 .collect();
-            pem_block(label, &key, certificates.as_bytes())
+            legacy_pem::pem_block(label, "", &key, certificates.as_bytes())
         }
     })
-}
-
-/// `data` as a PEM block labelled `label`, followed by `rest`, written
-/// into one buffer sized up front so no unwiped copy of `data` is left
-/// behind by growing it.
-fn pem_block(label: &str, data: &[u8], rest: &[u8]) -> Zeroizing<Vec<u8>> {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let encoded = data.len().div_ceil(3) * 4;
-    let lines = encoded.div_ceil(64);
-    let armour = "-----BEGIN -----\n".len() + "-----END -----\n".len() + 2 * label.len();
-    let mut out = Zeroizing::new(Vec::with_capacity(armour + encoded + lines + rest.len()));
-    out.extend_from_slice(b"-----BEGIN ");
-    out.extend_from_slice(label.as_bytes());
-    out.extend_from_slice(b"-----\n");
-    for (index, group) in data.chunks(3).enumerate() {
-        let bytes = [
-            group[0],
-            *group.get(1).unwrap_or(&0),
-            *group.get(2).unwrap_or(&0),
-        ];
-        let bits = u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]);
-        for position in 0..4 {
-            out.push(if position <= group.len() {
-                ALPHABET[(bits >> (18 - 6 * position) & 63) as usize]
-            } else {
-                b'='
-            });
-        }
-        if index % 16 == 15 {
-            out.push(b'\n');
-        }
-    }
-    if !encoded.is_multiple_of(64) {
-        out.push(b'\n');
-    }
-    out.extend_from_slice(b"-----END ");
-    out.extend_from_slice(label.as_bytes());
-    out.extend_from_slice(b"-----\n");
-    out.extend_from_slice(rest);
-    debug_assert_eq!(out.len(), out.capacity());
-    out
 }
 
 /// The file name being typed for the export of the private key at `index`
@@ -147,6 +143,21 @@ fn pem_block(label: &str, data: &[u8], rest: &[u8]) -> Zeroizing<Vec<u8>> {
 pub struct KeyExport {
     index: usize,
     pub prompt: ExportPrompt,
+    legacy_label: Option<&'static str>,
+    legacy: bool,
+}
+
+impl KeyExport {
+    /// Whether `Tab` can toggle between PKCS #8 and legacy OpenSSL PEM for
+    /// the current key and typed file name.
+    pub fn can_toggle_legacy(&self) -> bool {
+        self.legacy_label.is_some() && Format::from_name(Path::new(&self.prompt.path)).is_pem()
+    }
+
+    /// Whether the export will write legacy OpenSSL PEM.
+    pub fn use_legacy(&self) -> bool {
+        self.legacy && self.can_toggle_legacy()
+    }
 }
 
 impl App {
@@ -167,7 +178,7 @@ impl App {
         let readable = if entry.kind() == Kind::PrivateKey.label() {
             document
                 .private_key(index)
-                .map(drop)
+                .map(|key| legacy_pem::legacy_label(&key))
                 .map_err(|error| format!("Not exported: the key '{}' {error}.", entry.alias))
         } else {
             Err(
@@ -176,11 +187,13 @@ impl App {
             )
         };
         match readable {
-            Ok(()) => {
+            Ok(legacy_label) => {
                 let directory = path_bar::directory(path);
                 self.key_export = Some(KeyExport {
                     index,
                     prompt: ExportPrompt::new(Scope::KeyPair, &directory, &entry.alias),
+                    legacy_label,
+                    legacy: false,
                 });
             }
             Err(error) => self.message = Some((error, true)),
@@ -188,10 +201,14 @@ impl App {
     }
 
     /// Types the export's file name, then asks for the file's password.
-    pub(crate) fn handle_key_export(&mut self, key: ratatui::crossterm::event::KeyEvent) {
+    pub(crate) fn handle_key_export(&mut self, key: KeyEvent) {
         let Some(export) = &mut self.key_export else {
             return;
         };
+        if key.code == KeyCode::Tab && export.can_toggle_legacy() {
+            export.legacy = !export.legacy;
+            return;
+        }
         match export.prompt.handle_key(key) {
             Outcome::Editing => {}
             Outcome::Cancelled => self.key_export = None,
@@ -203,25 +220,36 @@ impl App {
             }
             Outcome::Save(path) => {
                 let index = export.index;
+                let legacy = export.use_legacy();
                 self.key_export = None;
-                self.new_password = Some(NewPasswordPrompt::new(Purpose::Export(path, index)));
+                self.new_password =
+                    Some(NewPasswordPrompt::new(Purpose::Export(path, index, legacy)));
             }
         }
     }
 
     /// Exports with the typed password. An empty one asks first, because
-    /// the key is then written unencrypted.
-    pub(crate) fn export_key_with(&mut self, path: PathBuf, index: usize, password: &str) {
-        if password.is_empty() && Format::from_name(&path) != Format::Pkcs12 {
-            self.confirm = Some(Confirm::ExportPlain(path, index));
+    /// the key is then written unencrypted; an encrypted legacy OpenSSL PEM
+    /// asks first because it uses weaker MD5 key derivation.
+    pub(crate) fn export_key_with(
+        &mut self,
+        path: PathBuf,
+        index: usize,
+        password: Password,
+        legacy: bool,
+    ) {
+        if password.0.is_empty() && Format::from_name(&path) != Format::Pkcs12 {
+            self.confirm = Some(Confirm::ExportPlain(path, index, legacy));
+        } else if legacy && Format::from_name(&path).is_pem() {
+            self.confirm = Some(Confirm::ExportLegacyEncrypted(path, index, password));
         } else {
-            self.export_key(&path, index, password);
+            self.export_key(&path, index, &password.0, legacy);
         }
     }
 
     /// Writes the private key at `index`, with its certificates if the
     /// name asks for them, to the new file `path`.
-    pub(crate) fn export_key(&mut self, path: &Path, index: usize, password: &str) {
+    pub(crate) fn export_key(&mut self, path: &Path, index: usize, password: &str, legacy: bool) {
         let Some(document) = &self.document else {
             return;
         };
@@ -234,6 +262,7 @@ impl App {
                 let mut rng = save::OsRng::default();
                 let data = encode(
                     Format::from_name(path),
+                    legacy,
                     &entry.alias,
                     &key,
                     entry.certificates(),
@@ -279,7 +308,15 @@ mod tests {
         let leaf = metadata_certificate("leaf", "ca", &[1], &[]);
         let unrelated = metadata_certificate("other", "other", &[2], &[]);
         let export = |format, chain: &[Vec<u8>]| {
-            encode(format, "alias", &key, chain, "password", &mut TestRng(1))
+            encode(
+                format,
+                false,
+                "alias",
+                &key,
+                chain,
+                "password",
+                &mut TestRng(1),
+            )
         };
         let chain = [leaf, unrelated];
         let error = export(Format::Pkcs12, &chain).unwrap_err();
@@ -297,7 +334,7 @@ mod tests {
         let certificates = pem::encode("CERTIFICATE", b"certificate");
         for length in 0..200 {
             let data: Vec<u8> = (0..length).map(|byte| byte as u8).collect();
-            let block = pem_block("PRIVATE KEY", &data, certificates.as_bytes());
+            let block = legacy_pem::pem_block("PRIVATE KEY", "", &data, certificates.as_bytes());
             let expected = pem::encode("PRIVATE KEY", &data) + &certificates;
             assert_eq!(block.as_slice(), expected.as_bytes(), "{length}");
             assert_eq!(block.len(), block.capacity(), "{length}");
@@ -309,8 +346,18 @@ mod tests {
         let key = synthetic_pkcs8(b"synthetic, not a private key");
         let chain = [metadata_certificate("leaf", "leaf", &[1], &[])];
         for password in ["", "password"] {
-            let export =
-                |format| encode(format, "alias", &key, &chain, password, &mut TestRng(1)).unwrap();
+            let export = |format| {
+                encode(
+                    format,
+                    false,
+                    "alias",
+                    &key,
+                    &chain,
+                    password,
+                    &mut TestRng(1),
+                )
+                .unwrap()
+            };
             let der = export(Format::DerKey);
             let decrypted = if password.is_empty() {
                 der.to_vec()
