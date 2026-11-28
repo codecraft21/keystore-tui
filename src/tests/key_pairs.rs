@@ -229,7 +229,7 @@ fn entries_are_copied_from_another_keystore() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Esc);
     assert!(app.copying.is_none());
-    assert_eq!(app.entries.len(), 5);
+    assert_eq!(app.entries.len(), 6);
 
     // An entry that fails stops the copy; those before it stay.
     let path = directory.path().join("open.p12");
@@ -245,10 +245,12 @@ fn entries_are_copied_from_another_keystore() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('a'));
     press(&mut app, KeyCode::Enter);
+    type_password(&mut app, "keypass");
+    press(&mut app, KeyCode::Enter);
     let (message, failed) = app.message.clone().unwrap();
     assert!(failed && app.modified);
     assert!(
-        message.starts_with("Imported 1 entry from 'source.jks'. 'shared' failed: Not imported"),
+        message.starts_with("Imported 1 entry from 'source.jks'. 'own' failed: Not imported"),
         "{message}"
     );
     // Without a list, its keys do nothing.

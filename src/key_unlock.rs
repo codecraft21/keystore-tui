@@ -18,7 +18,7 @@ enum UnlockPurpose {
     Convert { path: PathBuf, target: save::Format },
     /// Copying `picked` entries from another keystore (`selection`).
     Copy {
-        selection: copy_entries::Selection,
+        selection: Box<copy_entries::Selection>,
         picked: Vec<usize>,
     },
 }
@@ -55,7 +55,10 @@ impl KeyUnlock {
         pending: Vec<usize>,
     ) -> Self {
         Self {
-            purpose: UnlockPurpose::Copy { selection, picked },
+            purpose: UnlockPurpose::Copy {
+                selection: Box::new(selection),
+                picked,
+            },
             pending: pending.into(),
             tried: Vec::new(),
             unlocked: Vec::new(),
@@ -135,7 +138,7 @@ impl App {
                 if let UnlockPurpose::Copy { selection, .. } = unlock.purpose
                     && selection.entries().len() > 1
                 {
-                    self.copying = Some(selection);
+                    self.copying = Some(*selection);
                 }
             }
             KeyCode::Backspace => {
@@ -170,7 +173,7 @@ impl App {
                 if let UnlockPurpose::Copy { selection, .. } = unlock.purpose
                     && selection.entries().len() > 1
                 {
-                    self.copying = Some(selection);
+                    self.copying = Some(*selection);
                 }
                 return;
             }
@@ -203,7 +206,7 @@ impl App {
                         if let UnlockPurpose::Copy { selection, .. } = unlock.purpose
                             && selection.entries().len() > 1
                         {
-                            self.copying = Some(selection);
+                            self.copying = Some(*selection);
                         }
                         return;
                     }
@@ -230,7 +233,7 @@ impl App {
                 self.finish_converted(path, target, &passwords);
             }
             UnlockPurpose::Copy { selection, picked } => {
-                self.finish_copy(selection, picked, &passwords);
+                self.finish_copy(*selection, picked, &passwords);
             }
         }
     }

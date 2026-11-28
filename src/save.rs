@@ -617,7 +617,7 @@ impl Document {
             }
             if to_java {
                 let alias = entry.alias.to_lowercase();
-                if seen_aliases.iter().any(|other| other == &alias) {
+                if seen_aliases.contains(&alias) {
                     return Err(format!(
                         "Not converted: two entries would share the alias '{alias}'."
                     ));
