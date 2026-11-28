@@ -424,7 +424,7 @@ fn separate_key_passwords_are_reused_when_converting_and_copying() {
     for index in 0..3 {
         assert_eq!(doc.private_key(index).unwrap().as_slice(), key.as_slice());
     }
-    assert_eq!(doc.secret_key(3).unwrap(), secret);
+    assert!(doc.secret_key(3) == Ok(secret.clone()));
 
     // Copying from multi.jceks into a fresh JCEKS reuses typed key passwords,
     // and Esc cancels atomically without importing anything.
@@ -468,7 +468,7 @@ fn separate_key_passwords_are_reused_when_converting_and_copying() {
     for index in 0..3 {
         assert_eq!(doc.private_key(index).unwrap().as_slice(), key.as_slice());
     }
-    assert_eq!(doc.secret_key(3).unwrap(), secret);
+    assert!(doc.secret_key(3) == Ok(secret));
 
     // Single-entry source keystore with a separate key password skips the list,
     // prompts for the key password, and goes to the alias prompt.
