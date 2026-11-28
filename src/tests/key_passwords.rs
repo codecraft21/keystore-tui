@@ -387,7 +387,7 @@ fn separate_key_passwords_are_reused_when_converting_and_copying() {
 
     // Open multi.jceks and check pre-validation runs before prompting.
     let mut app = App::default();
-    app.open_file(source_path.clone());
+    app.open_file(source_path);
     type_password(&mut app, "changeit");
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.entries.len(), 4);
