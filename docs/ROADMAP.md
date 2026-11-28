@@ -87,7 +87,7 @@ Planned extensions to the completed 1.1 scope. The write rules above apply
 here too.
 
 1. **Optional backup** when saving a keystore.
-2. **Legacy OpenSSL PEM:** import keys encrypted in OpenSSL's older PEM
+2. **Legacy OpenSSL PEM** (done): import keys encrypted in OpenSSL's older PEM
    format, and export `RSA PRIVATE KEY` and `EC PRIVATE KEY` PEM files,
    optionally encrypted.
 3. **Separate key passwords when copying or converting:** prompt for

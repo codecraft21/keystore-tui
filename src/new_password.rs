@@ -24,8 +24,9 @@ pub enum Purpose {
     /// the password given, or with the keystore's when there is none.
     KeyChange(usize, Option<Password>),
     /// Protect the private key at this index in the new file it is exported
-    /// to. An empty password leaves the key unencrypted.
-    Export(PathBuf, usize),
+    /// to. An empty password leaves the key unencrypted. The bool selects
+    /// OpenSSL's legacy PEM format.
+    Export(PathBuf, usize, bool),
 }
 
 /// A new password being typed, then typed again to rule out a typing error.
@@ -199,8 +200,8 @@ impl App {
                             Purpose::KeyChange(index, current) => {
                                 self.change_key_password(index, current, &typed.0);
                             }
-                            Purpose::Export(path, index) => {
-                                self.export_key_with(path, index, &typed.0);
+                            Purpose::Export(path, index, legacy) => {
+                                self.export_key_with(path, index, typed, legacy);
                             }
                             Purpose::KeyCurrent(_) => {}
                         }
