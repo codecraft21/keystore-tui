@@ -167,10 +167,12 @@ fn details_export_certificates_next_to_the_opened_file() {
     let p7b = fs::read(directory.path().join("chain.p7b")).unwrap();
     assert!(!certificate_file::is_pem(&p7b));
     let parsed = certificate_file::parse(&p7b).unwrap();
-    assert_eq!(
-        parsed.entries[0].certificates(),
-        [leaf.clone(), root.clone()]
-    );
+    let leaf_entry = parsed
+        .entries
+        .iter()
+        .find(|entry| entry.certificates().len() == 2)
+        .unwrap();
+    assert_eq!(leaf_entry.certificates(), [leaf.clone(), root.clone()]);
     app.handle_key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT));
     press(&mut app, KeyCode::Enter);
     let chain = fs::read_to_string(directory.path().join("server-chain.pem")).unwrap();

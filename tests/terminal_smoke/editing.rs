@@ -737,6 +737,13 @@ fn sign_request_and_key_pair_then_quit_restores_terminal() {
     app.expect(&["Signed the request in 'device.csr' with 'ca'"]);
     let p7b = fs::read(directory.join("reply.p7b")).unwrap();
     assert_eq!(p7b.first(), Some(&0x30));
+    let signed_data_oid = [
+        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02,
+    ];
+    assert!(
+        p7b.windows(signed_data_oid.len())
+            .any(|window| window == signed_data_oid)
+    );
 
     app.send(b"Sg");
     app.expect(&["Generate key pair signed by 'ca'"]);
