@@ -61,25 +61,40 @@ impl Writable {
             .collect();
     }
 
-    fn remove_bags(&mut self, index: usize) {
-        let listed: Vec<usize> = self.sources.iter().flatten().copied().collect();
-        let removed = &self.sources[index];
+    fn remove_bags(&mut self, index: usize) -> Option<Vec<(KeystoreEntry, Vec<usize>)>> {
+        let mut was_listed = vec![false; self.bags.len()];
+        for &bag in self.sources.iter().flatten() {
+            was_listed[bag] = true;
+        }
+        let mut is_removed = vec![false; self.bags.len()];
+        for &bag in &self.sources[index] {
+            is_removed[bag] = true;
+        }
         let kept: Vec<usize> = (0..self.bags.len())
-            .filter(|bag| !removed.contains(bag))
+            .filter(|&bag| !is_removed[bag])
             .collect();
         self.keep(&kept);
         // A bag that was in no entry before and is in one now was only
         // there as part of the removed key's chain.
-        let orphans: Vec<usize> = list(&self.bags)
-            .0
-            .into_iter()
-            .filter(|(_, sources)| sources.iter().any(|&bag| !listed.contains(&kept[bag])))
-            .flat_map(|(_, sources)| sources)
-            .collect();
+        let listed = list(&self.bags).0;
+        let mut is_orphan = vec![false; self.bags.len()];
+        let mut has_orphans = false;
+        for (_, sources) in &listed {
+            if sources.iter().any(|&bag| !was_listed[kept[bag]]) {
+                has_orphans = true;
+                for &bag in sources {
+                    is_orphan[bag] = true;
+                }
+            }
+        }
+        if !has_orphans {
+            return Some(listed);
+        }
         let kept: Vec<usize> = (0..self.bags.len())
-            .filter(|bag| !orphans.contains(bag))
+            .filter(|&bag| !is_orphan[bag])
             .collect();
         self.keep(&kept);
+        None
     }
 
     /// Removes the entry listed at `index` and returns the new listing. A
@@ -87,8 +102,13 @@ impl Writable {
     /// certificates no other entry uses, which would otherwise turn into
     /// entries of their own.
     pub fn remove(&mut self, index: usize) -> Vec<KeystoreEntry> {
-        self.remove_bags(index);
-        self.relist()
+        if let Some(listed) = self.remove_bags(index) {
+            let (entries, sources) = listed.into_iter().unzip();
+            self.sources = sources;
+            entries
+        } else {
+            self.relist()
+        }
     }
 
     /// Gives the entry listed at `index` the friendly name `alias`, on its

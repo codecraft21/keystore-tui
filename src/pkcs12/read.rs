@@ -220,52 +220,80 @@ pub(super) struct Contents {
 /// Lists the entries that `bags` hold, sorted by alias, each with the indices
 /// of the bags it comes from, and whether any bag could not be listed.
 pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, bool) {
+    use std::collections::{HashMap, HashSet, VecDeque};
+
+    struct BagMeta {
+        is_trusted: bool,
+        local_key_id: Option<Vec<u8>>,
+        friendly_name: Option<String>,
+    }
+
+    fn pop_unclaimed(queue: &mut VecDeque<usize>, claimed: &mut [bool]) -> Option<usize> {
+        while let Some(index) = queue.pop_front() {
+            if !claimed[index] {
+                claimed[index] = true;
+                return Some(index);
+            }
+        }
+        None
+    }
+
     let pool: Vec<_> = bags
         .iter()
         .filter_map(|bag| bag.certificate_der.as_deref())
         .collect();
     let pool = certificate::details::ParsedPool::new(&pool);
-    let is_key = |entry: &KeystoreEntry| {
-        matches!(
-            entry.content,
-            Content::Certificates {
-                kind: Kind::PrivateKey,
-                ..
-            }
-        )
-    };
-    let is_trusted = |bag: &MetadataBag| {
-        bag.attributes
-            .iter()
-            .any(|attr| attr.oid.matches(TRUSTED_KEY_USAGE))
-    };
+    let meta: Vec<BagMeta> = bags
+        .iter()
+        .map(|bag| BagMeta {
+            is_trusted: bag
+                .attributes
+                .iter()
+                .any(|attr| attr.oid.matches(TRUSTED_KEY_USAGE)),
+            local_key_id: bag.local_key_id(),
+            friendly_name: bag.friendly_name(),
+        })
+        .collect();
     let mut incomplete = false;
-    let mut entries: Vec<(KeystoreEntry, Vec<usize>)> = Vec::new();
+    let mut key_entries: Vec<(KeystoreEntry, Vec<usize>)> = Vec::new();
     let mut unnamed_keys = 0;
 
     // Match each private key to at most one non-trusted certificate bag sharing
     // its localKeyId. Prefer a matching friendlyName first, then a non-conflicting
     // name, then any remaining unclaimed non-trusted bag with that localKeyId.
     let mut claimed_certs = vec![false; bags.len()];
-    let mut key_leaves: Vec<(usize, Option<usize>)> = bags
-        .iter()
-        .enumerate()
-        .filter(|(_, bag)| matches!(bag.bag, Bag::ShroudedKey(_)))
-        .map(|(index, _)| (index, None))
-        .collect();
+    let mut certs_by_id: HashMap<&[u8], VecDeque<usize>> = HashMap::new();
+    let mut unnamed_certs_by_id: HashMap<&[u8], VecDeque<usize>> = HashMap::new();
+    let mut certs_by_id_and_name: HashMap<(&[u8], &str), VecDeque<usize>> = HashMap::new();
+    let mut key_leaves: Vec<(usize, Option<usize>)> = Vec::new();
+    for (index, (bag, info)) in bags.iter().zip(&meta).enumerate() {
+        if matches!(bag.bag, Bag::ShroudedKey(_)) {
+            key_leaves.push((index, None));
+        } else if bag.certificate_der.is_some()
+            && !info.is_trusted
+            && let Some(id) = info.local_key_id.as_deref()
+        {
+            certs_by_id.entry(id).or_default().push_back(index);
+            if let Some(name) = info.friendly_name.as_deref() {
+                certs_by_id_and_name
+                    .entry((id, name))
+                    .or_default()
+                    .push_back(index);
+            } else {
+                unnamed_certs_by_id.entry(id).or_default().push_back(index);
+            }
+        }
+    }
     for (key_index, leaf_slot) in &mut key_leaves {
-        let key_bag = &bags[*key_index];
-        let (Some(id), Some(name)) = (key_bag.local_key_id(), key_bag.friendly_name()) else {
+        let info = &meta[*key_index];
+        let (Some(id), Some(name)) = (info.local_key_id.as_deref(), info.friendly_name.as_deref())
+        else {
             continue;
         };
-        if let Some(cert_index) = bags.iter().enumerate().position(|(i, other)| {
-            !claimed_certs[i]
-                && other.certificate_der.is_some()
-                && !is_trusted(other)
-                && other.local_key_id().as_ref() == Some(&id)
-                && other.friendly_name().as_deref() == Some(name.as_str())
-        }) {
-            claimed_certs[cert_index] = true;
+        if let Some(cert_index) = certs_by_id_and_name
+            .get_mut(&(id, name))
+            .and_then(|queue| pop_unclaimed(queue, &mut claimed_certs))
+        {
             *leaf_slot = Some(cert_index);
         }
     }
@@ -273,41 +301,35 @@ pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, b
         if leaf_slot.is_some() {
             continue;
         }
-        let key_bag = &bags[*key_index];
-        let Some(id) = key_bag.local_key_id() else {
+        let info = &meta[*key_index];
+        let Some(id) = info.local_key_id.as_deref() else {
             continue;
         };
-        let key_name = key_bag.friendly_name();
-        let found = bags
-            .iter()
-            .enumerate()
-            .position(|(i, other)| {
-                !claimed_certs[i]
-                    && other.certificate_der.is_some()
-                    && !is_trusted(other)
-                    && other.local_key_id().as_ref() == Some(&id)
-                    && (key_name.is_none() || other.friendly_name().is_none())
-            })
-            .or_else(|| {
-                bags.iter().enumerate().position(|(i, other)| {
-                    !claimed_certs[i]
-                        && other.certificate_der.is_some()
-                        && !is_trusted(other)
-                        && other.local_key_id().as_ref() == Some(&id)
+        let found = if info.friendly_name.is_some() {
+            unnamed_certs_by_id
+                .get_mut(id)
+                .and_then(|queue| pop_unclaimed(queue, &mut claimed_certs))
+                .or_else(|| {
+                    certs_by_id
+                        .get_mut(id)
+                        .and_then(|queue| pop_unclaimed(queue, &mut claimed_certs))
                 })
-            });
+        } else {
+            certs_by_id
+                .get_mut(id)
+                .and_then(|queue| pop_unclaimed(queue, &mut claimed_certs))
+        };
         if let Some(cert_index) = found {
-            claimed_certs[cert_index] = true;
             *leaf_slot = Some(cert_index);
         }
     }
 
     for (index, leaf_index) in key_leaves {
-        let bag = &bags[index];
         let leaf = leaf_index.and_then(|leaf| bags[leaf].certificate_der.as_deref());
         // OpenSSL only stores a friendly name when given one.
-        let alias = bag
-            .friendly_name()
+        let alias = meta[index]
+            .friendly_name
+            .clone()
             .or_else(|| leaf.and_then(certificate_file::subject_name))
             .unwrap_or_else(|| {
                 unnamed_keys += 1;
@@ -315,7 +337,7 @@ pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, b
             });
         let (certificates, chain_warning) =
             leaf.map_or_else(|| (vec![], None), |leaf| pool.chain(leaf));
-        entries.push((
+        key_entries.push((
             KeystoreEntry {
                 alias,
                 certificate: leaf.and_then(certificate::summarize),
@@ -328,12 +350,19 @@ pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, b
             std::iter::once(index).chain(leaf_index).collect(),
         ));
     }
+
+    let key_chain_certs: HashSet<&[u8]> = key_entries
+        .iter()
+        .flat_map(|(entry, _)| entry.certificates().iter().map(Vec::as_slice))
+        .collect();
+    let mut other_entries: Vec<(KeystoreEntry, Vec<usize>)> = Vec::new();
+    let mut trusted_entries: HashMap<(&str, &[u8]), usize> = HashMap::new();
     let mut unnamed_certificates = 0;
-    for (index, bag) in bags.iter().enumerate() {
+    for (index, (bag, info)) in bags.iter().zip(&meta).enumerate() {
         match &bag.bag {
             Bag::Secret { .. } => {
-                if let Some(alias) = bag.friendly_name() {
-                    entries.push((
+                if let Some(alias) = info.friendly_name.clone() {
+                    other_entries.push((
                         KeystoreEntry {
                             alias,
                             certificate: None,
@@ -358,23 +387,20 @@ pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, b
                 // attribute. Other tools store plain certificates: unnamed
                 // chain certificates are hidden while part of a key's chain,
                 // whereas standalone named certificates stay visible.
-                if !is_trusted(bag) {
-                    if bag.friendly_name().is_none()
-                        && entries.iter().any(|(entry, _)| {
-                            is_key(entry) && entry.certificates().iter().any(|stored| stored == der)
-                        })
-                    {
+                if !info.is_trusted {
+                    if info.friendly_name.is_none() && key_chain_certs.contains(der) {
                         continue;
                     }
-                    let alias = bag
-                        .friendly_name()
+                    let alias = info
+                        .friendly_name
+                        .clone()
                         .or_else(|| certificate_file::subject_name(der))
                         .unwrap_or_else(|| {
                             unnamed_certificates += 1;
                             format!("Certificate {unnamed_certificates}")
                         });
                     let (certificates, chain_warning) = pool.chain(der);
-                    entries.push((
+                    other_entries.push((
                         KeystoreEntry {
                             alias,
                             certificate: certificate::summarize(der),
@@ -388,27 +414,18 @@ pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, b
                     ));
                     continue;
                 }
-                if let Some(alias) = bag.friendly_name() {
+                if let Some(alias) = info.friendly_name.as_deref() {
                     // An identical copy of a trusted certificate already
                     // listed under the same name adds nothing.
-                    if let Some((_, sources)) = entries.iter_mut().find(|(entry, _)| {
-                        entry.alias == alias
-                            && matches!(
-                                entry.content,
-                                Content::Certificates {
-                                    kind: Kind::TrustedCertificate,
-                                    ..
-                                }
-                            )
-                            && entry.certificates().first().map(Vec::as_slice) == Some(der)
-                    }) {
-                        sources.push(index);
+                    if let Some(&entry_index) = trusted_entries.get(&(alias, der)) {
+                        other_entries[entry_index].1.push(index);
                         continue;
                     }
                     let (certificates, chain_warning) = pool.chain(der);
-                    entries.push((
+                    trusted_entries.insert((alias, der), other_entries.len());
+                    other_entries.push((
                         KeystoreEntry {
-                            alias,
+                            alias: alias.to_owned(),
                             certificate: certificate::summarize(der),
                             content: Content::Certificates {
                                 kind: Kind::TrustedCertificate,
@@ -426,6 +443,8 @@ pub(super) fn list(bags: &[MetadataBag]) -> (Vec<(KeystoreEntry, Vec<usize>)>, b
             _ => incomplete = true,
         }
     }
-    entries.sort_by(|a, b| a.0.alias.cmp(&b.0.alias));
-    (entries, incomplete)
+    drop(key_chain_certs);
+    key_entries.extend(other_entries);
+    key_entries.sort_by(|a, b| a.0.alias.cmp(&b.0.alias));
+    (key_entries, incomplete)
 }

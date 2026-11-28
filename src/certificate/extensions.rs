@@ -133,7 +133,7 @@ pub(crate) fn name(oid: &ObjectIdentifier) -> Option<&'static str> {
         .map(|(_, name, _)| *name)
 }
 
-fn fields(encoding: &[u8]) -> CryptoResult<(ObjectIdentifier, bool, &[u8])> {
+pub(super) fn fields(encoding: &[u8]) -> CryptoResult<(ObjectIdentifier, bool, &[u8])> {
     let mut extension = single_sequence(encoding)?;
     let oid = extension.read_oid()?;
     let critical = if extension.peek_tag()? == der::BOOLEAN {
