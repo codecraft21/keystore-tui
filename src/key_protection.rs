@@ -66,19 +66,27 @@ pub fn protect(
             encrypted_data: data,
         }
     } else {
-        let mut salt = [0; SHA1_SIZE];
-        rng.fill_bytes(&mut salt);
-        let password = jks_password(password);
-        let mut data = salt.to_vec();
-        data.extend_from_slice(key);
-        jks_keystream(&password, &salt, &mut data[SHA1_SIZE..]);
-        data.extend_from_slice(&jks_digest(&password, key));
         EncryptedPrivateKeyInfo {
             algorithm: AlgorithmIdentifier::with_null(object_id(JKS_PROTECTOR)),
-            encrypted_data: data,
+            encrypted_data: jks_protect_data(key, password, rng),
         }
     };
     Ok(info.encode())
+}
+
+/// Protects `key` with Java's JKS key protector in one pre-sized buffer so
+/// reallocating cannot leave an unwiped copy of the plaintext key behind.
+fn jks_protect_data(key: &[u8], password: &str, rng: &mut impl Rng) -> Vec<u8> {
+    let mut salt = [0; SHA1_SIZE];
+    rng.fill_bytes(&mut salt);
+    let password = jks_password(password);
+    let mut data = Zeroizing::new(Vec::with_capacity(SHA1_SIZE + key.len() + SHA1_SIZE));
+    data.extend_from_slice(&salt);
+    data.extend_from_slice(key);
+    jks_keystream(&password, &salt, &mut data[SHA1_SIZE..]);
+    data.extend_from_slice(&jks_digest(&password, key));
+    debug_assert_eq!(data.len(), data.capacity());
+    std::mem::take(&mut *data)
 }
 
 /// Encrypts `plain` with `PBEWithMD5AndTripleDES` under `password` and a
@@ -442,6 +450,17 @@ mod tests {
         assert!(!ct_eq(&[1, 2, 3, 4], &[0, 2, 3, 4]));
         assert!(!ct_eq(&[1, 2, 3, 4], &[1, 2, 3, 5]));
         assert!(!ct_eq(&[1, 2, 3], &[1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn jks_protect_data_preallocates_exact_capacity() {
+        for len in [0, 1, 20, 64, 1024] {
+            let key = vec![0xab; len];
+            let data = jks_protect_data(&key, "changeit", &mut TestRng(0));
+            let expected_len = SHA1_SIZE + len + SHA1_SIZE;
+            assert_eq!(data.len(), expected_len);
+            assert_eq!(data.capacity(), expected_len);
+        }
     }
 
     #[test]

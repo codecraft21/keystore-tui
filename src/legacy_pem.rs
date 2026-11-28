@@ -251,10 +251,10 @@ pub fn parse_key_blocks(text: &str) -> Result<Vec<PemKeyBlock>, ParseError> {
             ParseError::OtherBlock
         };
         let mut headers: Vec<(String, String)> = Vec::new();
-        let mut body = Zeroizing::new(String::new());
+        let mut body: Option<Zeroizing<String>> = None;
         let mut in_body = false;
         let mut closed = false;
-        for line in lines.by_ref() {
+        while let Some(line) = lines.next() {
             let trimmed = line.trim();
             if let Some(rest) = trimmed.strip_prefix("-----END ") {
                 let end_label = rest.strip_suffix("-----").ok_or(malformed)?;
@@ -287,17 +287,39 @@ pub fn parse_key_blocks(text: &str) -> Result<Vec<PemKeyBlock>, ParseError> {
                 }
                 in_body = true;
             }
-            for ch in trimmed.chars() {
-                if !ch.is_whitespace() {
-                    body.push(ch);
+            let body = body.get_or_insert_with(|| {
+                let mut capacity = non_whitespace_len(trimmed);
+                for rest_line in lines.clone() {
+                    let rest_trimmed = rest_line.trim();
+                    if rest_trimmed.starts_with("-----END ") {
+                        break;
+                    }
+                    capacity += non_whitespace_len(rest_trimmed);
                 }
+                Zeroizing::new(String::with_capacity(capacity))
+            });
+            if trimmed.chars().any(char::is_whitespace) {
+                for ch in trimmed.chars() {
+                    if !ch.is_whitespace() {
+                        body.push(ch);
+                    }
+                }
+            } else {
+                body.push_str(trimmed);
             }
         }
         if !closed {
             return Err(malformed);
         }
         if is_key {
-            let data = base64_decode(&body).ok_or(malformed)?;
+            let body_text = match &body {
+                Some(body) => {
+                    debug_assert_eq!(body.len(), body.capacity());
+                    body.as_str()
+                }
+                None => "",
+            };
+            let data = base64_decode(body_text).ok_or(malformed)?;
             blocks.push(PemKeyBlock {
                 label: label.to_owned(),
                 headers,
@@ -306,6 +328,18 @@ pub fn parse_key_blocks(text: &str) -> Result<Vec<PemKeyBlock>, ParseError> {
         }
     }
     Ok(blocks)
+}
+
+fn non_whitespace_len(trimmed: &str) -> usize {
+    if !trimmed.chars().any(char::is_whitespace) {
+        trimmed.len()
+    } else {
+        trimmed
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .map(char::len_utf8)
+            .sum()
+    }
 }
 
 /// The legacy OpenSSL PEM label for `pkcs8_der` (`RSA PRIVATE KEY` or
@@ -826,6 +860,29 @@ mod tests {
         assert_eq!(
             parse_key_blocks(bad_begin).err(),
             Some(ParseError::OtherBlock)
+        );
+    }
+
+    #[test]
+    fn parse_key_blocks_handles_empty_whitespace_and_multiline_bodies() {
+        // Empty body (no allocation needed).
+        let empty = "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n";
+        let blocks = parse_key_blocks(empty).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].data.is_empty());
+
+        // Multi-line body with internal whitespace, blank lines, and clean lines.
+        let mixed =
+            "-----BEGIN PRIVATE KEY-----\nTW Fu\n\n\tTW\tFu\nTWFu\n-----END PRIVATE KEY-----\n";
+        let blocks = parse_key_blocks(mixed).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].data.as_slice(), b"ManManMan");
+
+        // Malformed non-ASCII body is still sized accurately and rejected.
+        let non_ascii = "-----BEGIN PRIVATE KEY-----\nä ö\n-----END PRIVATE KEY-----\n";
+        assert_eq!(
+            parse_key_blocks(non_ascii).err(),
+            Some(ParseError::KeyBlock)
         );
     }
 }
