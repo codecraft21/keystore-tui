@@ -870,13 +870,16 @@ any existing incomplete-entry warnings.
   exists)`, or `(alias exists, key password needed)` when both apply.
 - `Enter` imports the chosen entries, or the highlighted one when none is
   chosen. When any entry that will be imported needs its own key password
-  (excluding entries that will be skipped because their alias already exists),
-  a prompt asks `Password of key '<alias>':`, as for a key password. A wrong
-  password shows `Incorrect password.` and leaves the prompt open. A password
-  entered for one key is tried automatically on remaining locked keys in the
-  same copy before prompting again. `Esc` cancels the copy without importing
-  anything and returns to the entry list (or closes the prompt when the source
-  has a single entry):
+  (excluding entries that will be skipped because their alias already exists,
+  in the open keystore or earlier in the same copy), a prompt asks
+  `Password of key '<alias>':`, as for a key password. A wrong password shows
+  `Incorrect password.` and leaves the prompt open. A password entered for one
+  key is tried automatically on remaining locked keys in the same copy before
+  prompting again. `Esc` cancels the copy without importing anything and
+  returns to the entry list (or closes the prompt when the source has a single
+  entry). When a password opens a key that still cannot be copied, a copy of
+  several entries stops there as when an entry fails, importing the entries
+  before it; a single entry is not copied, with a red message, as on `Esc`:
   - A single entry goes through the alias prompt of a [certificate
     import](#importing-certificates) or a [key pair
     import](#importing-key-pairs), which suggests its alias in lower case.
@@ -1094,8 +1097,11 @@ any existing incomplete-entry warnings.
 - The opened file is not changed. Unsaved changes go into the converted file.
 - Each private or secret key is recovered in memory with the keystore's
   password, or with its own password when the keystore's does not unlock it:
-  after non-password checks pass, a prompt asks `Password of key '<alias>':`,
-  as for a key password. A wrong password shows `Incorrect password.` and
+  once the checks that need none of these keys pass (an existing file, the
+  password, aliases, secret keys for JKS, and the keys that the keystore's
+  password unlocks), a prompt asks `Password of key '<alias>':`, as for a key
+  password. The keys it unlocks, and the read-back check below, are checked
+  after the prompts. A wrong password shows `Incorrect password.` and
   leaves the prompt open. A password entered for one key is tried automatically
   on remaining locked keys before prompting again. `Esc` cancels the
   conversion without writing anything and returns to the "save as" prompt.

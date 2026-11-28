@@ -502,3 +502,115 @@ fn separate_key_passwords_are_reused_when_converting_and_copying() {
     press(&mut app, KeyCode::Enter);
     assert!(screen(&mut app, 200, 24).contains("Imported key pair as 'solo'."));
 }
+
+/// A fresh JKS keystore `dest.jks`, opened, and a JKS source `name` holding
+/// `entries` under the password `changeit`.
+fn copy_source(
+    directory: &TestDirectory,
+    name: &str,
+    entries: impl FnOnce(&mut keystore::Writable),
+) -> App {
+    let mut source = keystore::Writable::empty(false);
+    entries(&mut source);
+    fs::write(directory.path().join(name), source.encode("changeit")).unwrap();
+    let dest_path = directory.path().join("dest.jks");
+    fs::write(
+        &dest_path,
+        keystore::Writable::empty(false).encode("destpw"),
+    )
+    .unwrap();
+    let mut app = App::default();
+    app.open_file(dest_path);
+    type_password(&mut app, "destpw");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.entries.is_empty());
+    app
+}
+
+#[test]
+fn a_key_skipped_for_an_alias_earlier_in_the_copy_is_not_asked_for() {
+    use crate::test_support::{TestRng, metadata_certificate, synthetic_pkcs8};
+
+    let directory = TestDirectory::new();
+    let key = synthetic_pkcs8(b"synthetic, not a private key");
+    let mut app = copy_source(&directory, "dup.jks", |source| {
+        let mut rng = TestRng(0);
+        let certificate = metadata_certificate("CN=A", "CN=A", &[1], &[]);
+        source
+            .insert_trusted_certificate(0, "A", &certificate, 0)
+            .unwrap();
+        let protected = key_protection::protect(&key, "keypass", false, &mut rng).unwrap();
+        source
+            .insert_private_key(1, "a", &protected, &[certificate], 0)
+            .unwrap();
+    });
+    import(&mut app, "dup");
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("(key password needed)"));
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Enter);
+    // `a` would be skipped after `A` is imported, so no password is asked.
+    assert!(app.key_unlock.is_none());
+    assert_eq!(
+        app.message,
+        Some((
+            "Imported 1 entry from 'dup.jks'. Skipped, alias exists: a.".into(),
+            false
+        ))
+    );
+}
+
+#[test]
+fn a_key_unlocked_but_not_copyable_stops_the_copy_there() {
+    use crate::test_support::{TestRng, metadata_certificate, synthetic_pkcs8};
+
+    let directory = TestDirectory::new();
+    let key = synthetic_pkcs8(b"synthetic, not a private key");
+    let mut app = copy_source(&directory, "bad.jks", |source| {
+        let mut rng = TestRng(0);
+        let certificate = metadata_certificate("CN=C", "CN=C", &[1], &[]);
+        source
+            .insert_trusted_certificate(0, "a1", &certificate, 0)
+            .unwrap();
+        // Synthetic bytes that are not a PKCS #8 key.
+        let protected =
+            key_protection::protect(b"not a PKCS #8 key", "keypass", false, &mut rng).unwrap();
+        source
+            .insert_private_key(1, "bad", &protected, std::slice::from_ref(&certificate), 0)
+            .unwrap();
+        let protected = key_protection::protect(&key, "keypass", false, &mut rng).unwrap();
+        source
+            .insert_private_key(2, "k2", &protected, &[certificate], 0)
+            .unwrap();
+    });
+
+    // A single chosen entry is not copied, and the list stays open.
+    import(&mut app, "bad");
+    type_password(&mut app, "changeit");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'bad': _"));
+    type_password(&mut app, "keypass");
+    press(&mut app, KeyCode::Enter);
+    assert!(red_text(&mut app).contains("'bad' is not copied: is not a PKCS #8 key."));
+    assert!(app.key_unlock.is_none() && app.copying.is_some());
+    assert!(app.entries.is_empty());
+
+    // With several entries, those before it are imported and it is named.
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app, 200, 24).contains("Password of key 'bad': _"));
+    type_password(&mut app, "keypass");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.key_unlock.is_none() && app.copying.is_none());
+    assert_eq!(
+        app.message,
+        Some((
+            "Imported 1 entry from 'bad.jks'. 'bad' failed: is not a PKCS #8 key".into(),
+            true
+        ))
+    );
+    assert_eq!(app.entries.len(), 1);
+}

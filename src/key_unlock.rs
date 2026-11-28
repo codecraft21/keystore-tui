@@ -138,15 +138,9 @@ impl App {
             return;
         };
         match key.code {
-            KeyCode::Esc => {
-                // Cancel atomically: drop all collected passwords and return
-                // to the previous prompt (Selection list or Save As).
-                if let UnlockPurpose::Copy { selection, .. } = unlock.purpose
-                    && selection.entries().len() > 1
-                {
-                    self.copying = Some(*selection);
-                }
-            }
+            // Cancel atomically: drop all collected passwords and return to
+            // the previous prompt (the entry list or "save as").
+            KeyCode::Esc => self.abandon_unlock(unlock),
             KeyCode::Backspace => {
                 unlock.current.pop();
                 self.key_unlock = Some(unlock);
@@ -175,12 +169,7 @@ impl App {
                 return;
             }
             Err(VerifyError::Failed(message)) => {
-                self.message = Some((message, true));
-                if let UnlockPurpose::Copy { selection, .. } = unlock.purpose
-                    && selection.entries().len() > 1
-                {
-                    self.copying = Some(*selection);
-                }
+                self.unusable_key(unlock, index, candidate, message);
                 return;
             }
             Ok(()) => {
@@ -208,12 +197,8 @@ impl App {
                     }
                     Err(VerifyError::Password) => {}
                     Err(VerifyError::Failed(message)) => {
-                        self.message = Some((message, true));
-                        if let UnlockPurpose::Copy { selection, .. } = unlock.purpose
-                            && selection.entries().len() > 1
-                        {
-                            self.copying = Some(*selection);
-                        }
+                        let password = clone_password(password);
+                        self.unusable_key(unlock, next_index, password, message);
                         return;
                     }
                 }
@@ -227,6 +212,11 @@ impl App {
             }
         }
 
+        self.finish_unlock(unlock);
+    }
+
+    /// Goes on with the copy or conversion once no key is left to unlock.
+    fn finish_unlock(&mut self, unlock: KeyUnlock) {
         let KeyUnlock {
             purpose, unlocked, ..
         } = unlock;
@@ -242,6 +232,40 @@ impl App {
                 self.finish_copy(*selection, picked, &passwords);
             }
         }
+    }
+
+    /// Cancels the copy or conversion, dropping every password typed. A
+    /// copy returns to the entry list, unless the source has a single entry;
+    /// a conversion leaves the "save as" prompt open.
+    fn abandon_unlock(&mut self, unlock: KeyUnlock) {
+        if let UnlockPurpose::Copy { selection, .. } = unlock.purpose
+            && selection.entries().len() > 1
+        {
+            self.copying = Some(*selection);
+        }
+    }
+
+    /// Handles the key at `index`, which `password` opened but which cannot
+    /// be copied or converted. A copy of several entries goes on as a copy
+    /// does when an entry fails: the entries before it are imported and the
+    /// message names it. Anything else is cancelled with `message`.
+    fn unusable_key(
+        &mut self,
+        mut unlock: KeyUnlock,
+        index: usize,
+        password: Password,
+        message: String,
+    ) {
+        if let UnlockPurpose::Copy { picked, .. } = &unlock.purpose
+            && picked.len() > 1
+        {
+            unlock.pending.clear();
+            unlock.unlocked.push((index, password));
+            self.finish_unlock(unlock);
+            return;
+        }
+        self.message = Some((message, true));
+        self.abandon_unlock(unlock);
     }
 
     fn check_unlock(
