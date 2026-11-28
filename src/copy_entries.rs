@@ -332,8 +332,7 @@ impl App {
         let password_for = |index: usize| {
             key_passwords
                 .iter()
-                .find(|&&(at, _)| at == index)
-                .map(|&(_, password)| password)
+                .find_map(|&(at, password)| (at == index).then_some(password))
         };
         if let [index] = picked[..] {
             let entry = &selection.entries[index];

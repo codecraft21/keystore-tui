@@ -657,8 +657,7 @@ impl Document {
         for (index, entry) in entries.iter().enumerate() {
             let key_password = key_passwords
                 .iter()
-                .find(|&&(at, _)| at == index)
-                .map(|&(_, password)| password);
+                .find_map(|&(at, password)| (at == index).then_some(password));
             let key = match &entry.content {
                 Content::Certificates {
                     kind: Kind::PrivateKey,
