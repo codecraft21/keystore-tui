@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// Which operation is waiting for separate key passwords.
-pub enum UnlockPurpose {
+enum UnlockPurpose {
     /// Converting the open keystore into a new file of `target` format.
     Convert { path: PathBuf, target: save::Format },
     /// Copying `picked` entries from another keystore (`selection`).
@@ -26,8 +26,8 @@ pub enum UnlockPurpose {
 /// Prompts for one or more keys whose own password differs from the source
 /// keystore's password. Passwords typed in this operation are tried
 /// automatically on remaining locked keys, and all buffers are wiped on drop.
-pub struct KeyUnlock {
-    pub purpose: UnlockPurpose,
+pub(crate) struct KeyUnlock {
+    purpose: UnlockPurpose,
     /// Entry indices still waiting to be unlocked; the front is prompted next.
     pending: VecDeque<usize>,
     /// Passwords entered so far in this operation, tried on later keys.
@@ -35,7 +35,7 @@ pub struct KeyUnlock {
     /// Unlocked entry indices paired with the password that opened each one.
     unlocked: Vec<(usize, Password)>,
     /// The password currently being typed.
-    pub current: Password,
+    pub(crate) current: Password,
 }
 
 impl KeyUnlock {
@@ -139,11 +139,11 @@ impl App {
                 }
             }
             KeyCode::Backspace => {
-                unlock.current.0.pop();
+                unlock.current.pop();
                 self.key_unlock = Some(unlock);
             }
             KeyCode::Char(character) if is_text_input(key.modifiers) => {
-                unlock.current.0.push(character);
+                unlock.current.push(character);
                 self.key_unlock = Some(unlock);
             }
             KeyCode::Enter => self.submit_key_unlock(unlock),
