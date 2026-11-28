@@ -182,7 +182,7 @@ fn entries_are_copied_from_another_keystore() {
         ["cert", "own", "root-cert", "server-key", "shared"]
     );
     assert_eq!(saved_key(&path, 1, "changeit"), Ok(key.clone()));
-    assert_eq!(saved_key(&path, 4, "changeit"), Ok(key.clone()));
+    assert_eq!(saved_key(&path, 4, "changeit"), Ok(key));
     assert_eq!(
         app.entries,
         keystore::load_entries(&fs::read(&path).unwrap(), "changeit").unwrap()

@@ -105,19 +105,25 @@ fn verify_key(
                 Ok(())
             }
             Err(KeyAccessError::Password) => Err(VerifyError::Password),
-            Err(KeyAccessError::Other(error)) => Err(VerifyError::Failed(match convert_target {
-                Some(_) => format!("Not converted: the secret key '{}' {error}.", entry.alias),
-                None => format!("'{}' is not copied: {error}.", entry.alias),
-            })),
+            Err(KeyAccessError::Other(error)) => {
+                Err(VerifyError::Failed(if convert_target.is_some() {
+                    format!("Not converted: the secret key '{}' {error}.", entry.alias)
+                } else {
+                    format!("'{}' is not copied: {error}.", entry.alias)
+                }))
+            }
         }
     } else {
         match document.private_key_with(index, Some(password)) {
             Ok(_) => Ok(()),
             Err(KeyAccessError::Password) => Err(VerifyError::Password),
-            Err(KeyAccessError::Other(error)) => Err(VerifyError::Failed(match convert_target {
-                Some(_) => format!("Not converted: the key '{}' {error}.", entry.alias),
-                None => format!("'{}' is not copied: {error}.", entry.alias),
-            })),
+            Err(KeyAccessError::Other(error)) => {
+                Err(VerifyError::Failed(if convert_target.is_some() {
+                    format!("Not converted: the key '{}' {error}.", entry.alias)
+                } else {
+                    format!("'{}' is not copied: {error}.", entry.alias)
+                }))
+            }
         }
     }
 }
