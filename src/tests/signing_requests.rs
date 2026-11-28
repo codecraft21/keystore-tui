@@ -118,7 +118,9 @@ fn a_certificate_request_is_signed_into_a_new_certificate_file() {
     let expected = file("device.pem");
     let rendered = screen(&mut app, 200, 30);
     assert!(rendered.contains(&format!("Save certificate as: {} ", expected.display())));
-    assert!(rendered.contains("A .der name saves DER, any other PEM | Enter Save"));
+    assert!(
+        rendered.contains("A .p7b/.p7c name saves PKCS#7, .der DER, any other PEM | Enter Save")
+    );
     press(&mut app, KeyCode::Esc);
     assert!(screen(&mut app, 120, 30).contains("Serial number (hex)  01a4_"));
     press(&mut app, KeyCode::Enter);
@@ -179,7 +181,7 @@ fn a_certificate_request_is_signed_into_a_new_certificate_file() {
     sign_request(&mut app, "device");
     press(&mut app, KeyCode::Enter);
     type_alias(&mut app, "only.der");
-    assert!(red_text(&mut app).contains("use a .pem name for the chain"));
+    assert!(red_text(&mut app).contains("use a .pem or .p7b name for the chain"));
     assert!(app.signing.is_some());
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Down);
@@ -191,6 +193,70 @@ fn a_certificate_request_is_signed_into_a_new_certificate_file() {
     let only = Certificate::parse(&fs::read(file("only.der")).unwrap()).unwrap();
     assert_eq!(only.verify_signature(authority.public_key()), Ok(true));
     assert_eq!(only.serial_number().len(), 16);
+
+    // A .p7b or .p7c name writes a DER PKCS#7 bundle, with the signer's chain
+    // or the certificate alone.
+    sign_request(&mut app, "device");
+    press(&mut app, KeyCode::Enter);
+    type_alias(&mut app, "reply.p7b");
+    assert!(app.signing.is_none(), "{:?}", app.message);
+    let p7b = fs::read(file("reply.p7b")).unwrap();
+    assert!(!certificate_file::is_pem(&p7b));
+    let parsed = certificate_file::parse(&p7b).unwrap();
+    assert_eq!(parsed.entries.len(), 2);
+    assert_eq!(parsed.entries[0].certificates().len(), 2);
+    assert_eq!(parsed.entries[0].certificates()[1], ca);
+    let p7b_leaf = Certificate::parse(&parsed.entries[0].certificates()[0]).unwrap();
+    assert_eq!(p7b_leaf.verify_signature(authority.public_key()), Ok(true));
+
+    sign_request(&mut app, "device");
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Enter);
+    type_alias(&mut app, "single.p7c");
+    assert!(app.signing.is_none(), "{:?}", app.message);
+    let p7c = fs::read(file("single.p7c")).unwrap();
+    assert!(!certificate_file::is_pem(&p7c));
+    let parsed = certificate_file::parse(&p7c).unwrap();
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(parsed.entries[0].certificates().len(), 1);
+
+    // A .p7b reply can be imported straight back as a CA reply for its key.
+    let subject_key = test_support::ed25519_pkcs8(7);
+    let subject_cert = test_support::ed25519_certificate("subject", "subject", 7, 7);
+    let subject_csr = test_support::ed25519_request("subject", &[]);
+    fs::write(file("subject.csr"), &subject_csr).unwrap();
+    let to = app
+        .document
+        .as_mut()
+        .unwrap()
+        .import_key_pair(
+            &mut app.entries,
+            "subject".into(),
+            &subject_key,
+            &[subject_cert],
+        )
+        .unwrap();
+    app.select_changed(to);
+    select(&mut app, "ca");
+    sign_request(&mut app, "subject.csr");
+    press(&mut app, KeyCode::Enter);
+    type_alias(&mut app, "subject-reply.p7b");
+    assert!(app.signing.is_none(), "{:?}", app.message);
+    select(&mut app, "subject");
+    reply(&mut app, "subject-reply.p7b");
+    assert_eq!(
+        app.message,
+        Some((
+            "Replaced the certificate chain of 'subject' with the 2 certificates from 'subject-reply.p7b'.".into(),
+            false
+        ))
+    );
+    let subject_entry = app.entries.iter().find(|e| e.alias == "subject").unwrap();
+    assert_eq!(subject_entry.certificates().len(), 2);
+    assert_eq!(subject_entry.certificates()[1], ca);
+    select(&mut app, "ca");
 
     // An existing file is never replaced.
     sign_request(&mut app, "device");

@@ -724,11 +724,19 @@ fn sign_request_and_key_pair_then_quit_restores_terminal() {
         "Left/Right Space Change",
     ]);
     app.send(b"\r");
-    app.expect(&["Save certificate as:"]);
+    app.expect(&["Save certificate as:", "A .p7b/.p7c name saves PKCS#7"]);
     app.send(b"\x15q.pem\r"); // Ctrl+U clears the suggested absolute path.
     app.expect(&["Signed the request in 'device.csr' with 'ca'"]);
     let saved = fs::read_to_string(directory.join("q.pem")).unwrap();
     assert_eq!(saved.matches("-----BEGIN CERTIFICATE-----").count(), 2);
+
+    // Save a PKCS#7 CA reply as .p7b.
+    app.send(b"Srdevice\r\r");
+    app.expect(&["Save certificate as:"]);
+    app.send(b"\x15reply.p7b\r");
+    app.expect(&["Signed the request in 'device.csr' with 'ca'"]);
+    let p7b = fs::read(directory.join("reply.p7b")).unwrap();
+    assert_eq!(p7b.first(), Some(&0x30));
 
     app.send(b"Sg");
     app.expect(&["Generate key pair signed by 'ca'"]);

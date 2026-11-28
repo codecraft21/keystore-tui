@@ -50,7 +50,8 @@ files) have no document.
 
 Pure data handling with no UI or terminal knowledge: reading, verifying, and
 writing JKS, JCEKS, and PKCS12 keystores; reading certificates, requests, and
-revocation lists from PEM, DER, and PKCS#7; describing and checking X.509
+revocation lists from PEM, DER, and PKCS#7, and encoding PKCS#7 certificate
+bundles; describing and checking X.509
 objects; and creating keys, certificates, requests, and revocation lists.
 It presents everything through one entry model shared by every keystore
 format, so the layers above do not depend on the file format.

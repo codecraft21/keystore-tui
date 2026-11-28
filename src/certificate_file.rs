@@ -149,6 +149,32 @@ fn pkcs7_certificates(data: &[u8]) -> Result<Vec<Vec<u8>>, &'static str> {
     Ok(certificates)
 }
 
+/// Encodes `certificates` as a DER-encoded degenerate PKCS#7 SignedData:
+/// `ContentInfo` holding `id-signedData` with version 1, empty digest
+/// algorithms, `id-data` content info, `[0] IMPLICIT` certificates in the
+/// given order (when non-empty), and empty signer infos.
+pub fn encode_pkcs7<T: AsRef<[u8]>>(certificates: &[T]) -> Vec<u8> {
+    let mut signed = Vec::new();
+    signed.extend(der::integer_i64(1));
+    signed.extend(der::set(&[]));
+    signed.extend(der::sequence(&der::oid(
+        &oid::ObjectIdentifier::new(oid::OID_PKCS7_DATA).expect("constant OID"),
+    )));
+    if !certificates.is_empty() {
+        let mut concat = Vec::new();
+        for cert in certificates {
+            concat.extend_from_slice(cert.as_ref());
+        }
+        signed.extend(der::implicit(0, true, &concat));
+    }
+    signed.extend(der::set(&[]));
+    ContentInfo {
+        content_type: oid::ObjectIdentifier::new(oid::OID_PKCS7_SIGNED_DATA).expect("constant OID"),
+        content: der::sequence(&signed),
+    }
+    .encode()
+}
+
 /// Comparable issuer and subject names, used to link chains.
 fn names(der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     let mut tbs = Reader::new(der)
@@ -272,26 +298,6 @@ mod tests {
     use super::*;
     use crate::test_support::{fixture_certificate_der, metadata_certificate};
 
-    fn signed_data(certificates: &[Vec<u8>]) -> Vec<u8> {
-        let content = der::sequence(
-            &[
-                der::integer_i64(1),
-                der::set(&[]),
-                der::sequence(&der::oid(
-                    &oid::ObjectIdentifier::new(oid::OID_PKCS7_DATA).unwrap(),
-                )),
-                der::implicit(0, true, &certificates.concat()),
-                der::set(&[]),
-            ]
-            .concat(),
-        );
-        ContentInfo {
-            content_type: oid::ObjectIdentifier::new(oid::OID_PKCS7_SIGNED_DATA).unwrap(),
-            content,
-        }
-        .encode()
-    }
-
     fn aliases(file: &CertificateFile) -> Vec<&str> {
         file.entries
             .iter()
@@ -356,7 +362,7 @@ mod tests {
     fn reads_der_and_pem_pkcs7_bundles() {
         let root = metadata_certificate("root", "root", &[1], &[]);
         let leaf = metadata_certificate("leaf", "root", &[2], &[]);
-        let bundle = signed_data(&[leaf.clone(), root.clone()]);
+        let bundle = encode_pkcs7(&[leaf.clone(), root.clone()]);
         for data in [bundle.clone(), pem::encode("PKCS7", &bundle).into_bytes()] {
             let file = parse(&data).unwrap();
             assert_eq!(aliases(&file), ["leaf", "root"]);
@@ -456,7 +462,7 @@ mod tests {
 
     #[test]
     fn rejects_files_without_certificates() {
-        assert!(parse(&signed_data(&[])).is_err());
+        assert!(parse(&encode_pkcs7::<&[u8]>(&[])).is_err());
         assert!(parse(pem::encode("PRIVATE KEY", b"synthetic").as_bytes()).is_err());
         assert!(parse(b"-----BEGIN CERTIFICATE-----\nnot base64!\n").is_err());
         assert!(parse(b"\x30\x03\x02\x01\x01").is_err());

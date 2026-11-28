@@ -211,9 +211,11 @@ empty password, press `p` to set a password.
   asks for is listed: `Space` (or `Left` / `Right`) marks the ones the
   certificate gets. A request for a certificate authority starts unmarked. Then
   edit the file name (`Esc` returns to the form) and press `Enter`. The
-  certificate is written to a new PEM file, or as DER under a `.der` name when
-  saving the certificate only; the keystore is not changed. Check the result
-  with `openssl verify -CAfile ca.pem issued.pem`.
+  certificate is written to a new PEM file, as DER-encoded PKCS#7 under a
+  `.p7b` or `.p7c` name (with or without the signer's chain), or as DER under a
+  `.der` name when saving the certificate only; the keystore is not changed.
+  Check the result with `openssl verify -CAfile ca.pem issued.pem` or
+  `openssl pkcs7 -inform DER -in issued.p7b -print_certs -noout`.
 - **Generate a key pair signed by another key:** press `S` on the signing
   private key, then `g`, and fill in the form as for `g`. The new entry's
   chain is its certificate followed by the signer's chain.
@@ -420,8 +422,11 @@ show the request's [ASN.1 structure and PEM encoding](#asn1-and-pem-views).
 Press `x`, `X`, or `K` in the detail view, then edit the suggested file name and press
 `Enter`. The suggestion is `<alias>.pem` (or `<alias>-chain.pem`) next to the
 open file, `<alias>-public-key.pem` for a public key, `<alias>.csr` for a
-certificate request, or `<alias>.crl` for a revocation list. A name ending in `.der`
-saves a single certificate, public key, request, or revocation list as DER; any other name saves PEM. Relative names are saved next to the open file. Every key,
+certificate request, or `<alias>.crl` for a revocation list. A name ending in
+`.p7b` or `.p7c` saves a certificate or chain as a DER-encoded PKCS#7 bundle; a
+name ending in `.der` saves a single certificate, public key, request, or
+revocation list as DER; any other name saves PEM. Relative names are saved next
+to the open file. Every key,
 including `q`, is typed into the name at the cursor; `Left`/`Right` and
 `Home`/`End` move the cursor, `Backspace` deletes the character before it,
 `Delete` the character under it, `Ctrl+U` clears the name, and `Esc` cancels.
