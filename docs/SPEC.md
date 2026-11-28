@@ -435,12 +435,15 @@ any existing incomplete-entry warnings.
 - The file chosen with `i` starts a key pair import when it is one of:
   - A PEM file with one private key block: `PRIVATE KEY` (PKCS #8),
     `ENCRYPTED PRIVATE KEY`, `RSA PRIVATE KEY`, or `EC PRIVATE KEY` (OpenSSL's
-    own formats; the EC key must name its curve). It may also hold the
-    certificates.
+    own formats, plain or encrypted with `Proc-Type: 4,ENCRYPTED` and
+    `DEK-Info` using `AES-128-CBC`, `AES-192-CBC`, `AES-256-CBC`,
+    `DES-EDE3-CBC`, or `DES-CBC`; the EC key must name its curve). It may also
+    hold the certificates.
   - A DER file holding a PKCS #8 key, plain or encrypted.
-- A PEM file with several private keys, with a key encrypted in OpenSSL's old
-  format (a `Proc-Type: 4,ENCRYPTED` header), with a malformed key, or with
-  any other `... PRIVATE KEY` block is refused with a red message.
+- A PEM file with several private keys, with malformed legacy encryption
+  headers or an unsupported legacy cipher, with a malformed key, or with any
+  other `... PRIVATE KEY` block (plain or encrypted) is refused with a red
+  message.
 - For an encrypted key, a prompt asks `Password of
   '<file name>':`, masked like the keystore password. A wrong password shows
   `Incorrect password.` and leaves the prompt open; `Esc` cancels. The
@@ -894,22 +897,34 @@ any existing incomplete-entry warnings.
   - `.p12` or `.pfx`: a PKCS12 keystore holding the key and its certificate
     chain under the entry's alias, written like [any PKCS12
     keystore](#writing-pkcs12-keystores).
-  - `.key`: the key alone, as a PKCS #8 PEM block.
+  - `.key`: the key alone, as a PKCS #8 PEM block (or, when toggled with `Tab`
+    for an RSA or EC key, an `RSA PRIVATE KEY` or `EC PRIVATE KEY` block).
   - `.p8` or `.der`: the key alone, as PKCS #8 DER.
-  - Any other name, such as `.pem`: the key as a PKCS #8 PEM block, followed
-    by its certificates as `CERTIFICATE` blocks, leaf first.
+  - Any other name, such as `.pem`: the key as a PKCS #8 PEM block (or, when
+    toggled with `Tab` for an RSA or EC key, an `RSA PRIVATE KEY` or
+    `EC PRIVATE KEY` block), followed by its certificates as `CERTIFICATE`
+    blocks, leaf first.
+- For an RSA or EC key with a PEM file name (not `.p12`, `.pfx`, `.p8`, or
+  `.der`), `Tab` toggles between PKCS #8 and OpenSSL's legacy PEM format; the
+  prompt shows `Export key to (OpenSSL):` when legacy mode is active.
 - A name that already exists is refused with a red message and the prompt
   stays open. Then a prompt asks `Password for the exported key:`, typed
   twice like a [new keystore password](#changing-the-password).
-- With a password, the key is encrypted with PBES2 (AES-256-CBC, PBKDF2 with
-  HMAC-SHA256, 10,000 iterations) as an `ENCRYPTED PRIVATE KEY`, and is
-  decrypted again as a check before the file is written. A PKCS12 file is
-  also read back, and is not written if its certificate chain would differ,
-  as when the chain is not linked by issuer names.
+- With a password, PKCS #8 keys are encrypted with PBES2 (AES-256-CBC, PBKDF2
+  with HMAC-SHA256, 10,000 iterations) as an `ENCRYPTED PRIVATE KEY`, and
+  legacy OpenSSL PEM keys are encrypted with `AES-256-CBC` using
+  `EVP_BytesToKey` (MD5) with `Proc-Type: 4,ENCRYPTED` and `DEK-Info` headers.
+  An encrypted legacy OpenSSL export first asks, in yellow, `Legacy OpenSSL PEM
+  uses weaker MD5 key derivation. Write '<alias>' in this format?`; only `y`
+  writes it. Every encrypted key is decrypted again as a check before the file
+  is written. A PKCS12 file is also read back, and is not written if its
+  certificate chain would differ, as when the chain is not linked by issuer
+  names.
 - An empty password is refused for a PKCS12 file. For the other files the
   prompt's shortcuts start with `Empty: unencrypted`, and an empty password
   asks, in yellow, `Write the private key '<alias>' unencrypted?`; only `y`
-  writes the key, as a plain `PRIVATE KEY`.
+  writes the key, as a plain `PRIVATE KEY` (or plain `RSA PRIVATE KEY` /
+  `EC PRIVATE KEY` in legacy OpenSSL mode).
 - The file is new and is never replaced. On Unix only its owner can read or
   write it. A green message names it. The keystore is not changed.
 
