@@ -718,7 +718,7 @@ any existing incomplete-entry warnings.
   [certificate export](#exporting) does. `Esc` returns to the form as it was
   filled in. A `.p7b` or `.p7c` name (case-insensitive) writes a DER-encoded
   PKCS#7 `SignedData` bundle holding the new certificate and, when asked for,
-  the signer's chain (in canonical DER `SET OF` order); a `.der` name writes
+  the signer's chain, the new certificate first; a `.der` name writes
   the certificate alone as DER, and is refused with the signer's chain; any
   other name writes PEM `CERTIFICATE` blocks, the new certificate first and
   then the signer's chain when asked for. An existing file is never replaced:
@@ -1354,8 +1354,9 @@ any existing incomplete-entry warnings.
   the same way. `Ctrl+C` still quits.
 - A relative name is resolved against the open file's directory.
 - A `.p7b` or `.p7c` name (case-insensitive) for a certificate or chain saves a
-  DER-encoded PKCS#7 `SignedData` bundle holding the certificate(s) in
-  canonical DER `SET OF` order.
+  DER-encoded PKCS#7 `SignedData` bundle holding the certificate(s) in the
+  chain's order, leaf first. A public key, revocation list, or request is
+  refused under a `.p7b` or `.p7c` name.
   A `.der` name (case-insensitive) saves one certificate, the public key,
   the revocation list, or
   the request as raw DER; a chain cannot be saved as DER. Any other name saves
@@ -1363,6 +1364,8 @@ any existing incomplete-entry warnings.
   CRL` block for a revocation list, or a
   `CERTIFICATE REQUEST` block for a request, with 64-character
   lines. The DER is written byte for byte as stored.
+- An export with nothing to save, such as a public key that cannot be read
+  from its certificate, is refused and no file is created.
 - The file must not exist yet; it is never replaced. On success a green message
   names the saved file and the prompt closes. On failure a red message explains
   why and the prompt stays open to correct the name. The message clears on the

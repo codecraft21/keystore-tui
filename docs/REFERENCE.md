@@ -423,7 +423,8 @@ Press `x`, `X`, or `K` in the detail view, then edit the suggested file name and
 `Enter`. The suggestion is `<alias>.pem` (or `<alias>-chain.pem`) next to the
 open file, `<alias>-public-key.pem` for a public key, `<alias>.csr` for a
 certificate request, or `<alias>.crl` for a revocation list. A name ending in
-`.p7b` or `.p7c` saves a certificate or chain as a DER-encoded PKCS#7 bundle; a
+`.p7b` or `.p7c` saves a certificate or chain as a DER-encoded PKCS#7 bundle,
+leaf first (other exports are refused under these names); a
 name ending in `.der` saves a single certificate, public key, request, or
 revocation list as DER; any other name saves PEM. Relative names are saved next
 to the open file. Every key,

@@ -25,7 +25,10 @@ All notable changes to keystore-tui are listed here. Versions follow
   password.
 - Write DER-encoded PKCS #7 `SignedData` bundles (`.p7b` and `.p7c`,
   case-insensitive) when saving signed CSR replies (`S` → `r`) and when
-  exporting certificates or chains (`x` / `X`).
+  exporting certificates or chains (`x` / `X`), keeping the chain's order
+  with the leaf first. Public keys, requests, and revocation lists are refused
+  under these names, and an export with nothing to save is refused instead of
+  creating an empty file.
 
 ## 1.1.1
 

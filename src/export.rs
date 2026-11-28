@@ -169,8 +169,9 @@ pub fn is_pkcs7(path: &Path) -> bool {
 }
 
 /// Encodes `items` for `path` and `scope`: DER PKCS#7 `SignedData` for `.p7b`
-/// or `.p7c` when `scope` holds certificates, raw DER for a single item under
-/// `.der`, and concatenated PEM blocks labelled `scope.pem_label()` otherwise.
+/// or `.p7c` when `scope` holds certificates (refused for any other scope),
+/// raw DER for a single item under `.der`, and concatenated PEM blocks
+/// labelled `scope.pem_label()` otherwise.
 pub fn encode<'a, T: AsRef<[u8]>>(
     items: &'a [T],
     path: &Path,
@@ -179,8 +180,12 @@ pub fn encode<'a, T: AsRef<[u8]>>(
     if items.is_empty() {
         return Err("There is nothing to save.");
     }
-    if scope.supports_pkcs7() && is_pkcs7(path) {
-        Ok(Cow::Owned(certificate_file::encode_pkcs7(items)))
+    if is_pkcs7(path) {
+        if scope.supports_pkcs7() {
+            Ok(Cow::Owned(certificate_file::encode_pkcs7(items)))
+        } else {
+            Err("A PKCS#7 file holds certificates; use a .pem or .der name.")
+        }
     } else if is_der(path) {
         match items {
             [item] => Ok(Cow::Borrowed(item.as_ref())),
@@ -373,17 +378,24 @@ mod tests {
             assert!(!path.exists());
         }
 
-        // Non-certificate scopes still write PEM even under a .p7b name.
-        for (name, scope, label) in [
-            ("request.csr", Scope::Request, "CERTIFICATE REQUEST"),
-            ("request.p7b", Scope::Request, "CERTIFICATE REQUEST"),
-            ("key.p7b", Scope::PublicKey, "PUBLIC KEY"),
-            ("list.p7c", Scope::Crl, "X509 CRL"),
+        let request = directory.path().join("request.csr");
+        save(&request, &chain[..1], Scope::Request).unwrap();
+        let blocks = pem::parse(&fs::read_to_string(&request).unwrap()).unwrap();
+        assert_eq!(blocks[0].label, "CERTIFICATE REQUEST");
+
+        // Only certificates can be saved under a .p7b or .p7c name.
+        for (name, scope) in [
+            ("request.p7b", Scope::Request),
+            ("key.P7B", Scope::PublicKey),
+            ("list.p7c", Scope::Crl),
         ] {
             let path = directory.path().join(name);
-            save(&path, &chain[..1], scope).unwrap();
-            let blocks = pem::parse(&fs::read_to_string(&path).unwrap()).unwrap();
-            assert_eq!(blocks[0].label, label);
+            assert!(
+                save(&path, &chain[..1], scope)
+                    .unwrap_err()
+                    .contains("PKCS#7 file holds certificates")
+            );
+            assert!(!path.exists());
         }
 
         let rejected = directory.path().join("chain.der");

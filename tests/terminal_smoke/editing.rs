@@ -9,6 +9,28 @@ use crate::fixtures::{
 };
 use crate::pty::PtyApp;
 
+/// The certificates of a DER PKCS#7 `SignedData` file, in file order.
+fn pkcs7_certificates(data: &[u8]) -> Vec<Vec<u8>> {
+    use crown::{
+        asn1::{Reader, der, oid},
+        pkcs7::ContentInfo,
+    };
+    let info = ContentInfo::parse(data).unwrap();
+    assert!(info.content_type.matches(oid::OID_PKCS7_SIGNED_DATA));
+    let mut reader = Reader::new(&info.content);
+    let mut signed = reader.read_sequence().unwrap();
+    for _ in 0..3 {
+        signed.read_raw_tlv().unwrap(); // Version, digests, content.
+    }
+    assert_eq!(signed.peek_tag().unwrap(), der::Tag::context_constructed(0));
+    let mut set = signed.read_implicit_constructed(0).unwrap();
+    let mut certificates = Vec::new();
+    while !set.is_empty() {
+        certificates.push(set.read_raw_tlv().unwrap().to_vec());
+    }
+    certificates
+}
+
 /// SPEC: [Deleting entries](../../docs/SPEC.md#deleting-entries),
 /// [Saving](../../docs/SPEC.md#saving),
 /// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
@@ -735,15 +757,14 @@ fn sign_request_and_key_pair_then_quit_restores_terminal() {
     app.expect(&["Save certificate as:"]);
     app.send(b"\x15reply.p7b\r");
     app.expect(&["Signed the request in 'device.csr' with 'ca'"]);
-    let p7b = fs::read(directory.join("reply.p7b")).unwrap();
-    assert_eq!(p7b.first(), Some(&0x30));
-    let signed_data_oid = [
-        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02,
-    ];
-    assert!(
-        p7b.windows(signed_data_oid.len())
-            .any(|window| window == signed_data_oid)
-    );
+    // It holds a new certificate for the request first, then the CA.
+    let pem_chain = crown::asn1::pem::parse(&saved).unwrap();
+    let ca = &pem_chain[1].data;
+    let p7b = pkcs7_certificates(&fs::read(directory.join("reply.p7b")).unwrap());
+    assert_eq!(p7b.len(), 2);
+    assert_eq!(&p7b[1], ca);
+    assert_ne!(&p7b[0], ca);
+    assert_ne!(p7b[0], pem_chain[0].data, "a newly signed certificate");
 
     app.send(b"Sg");
     app.expect(&["Generate key pair signed by 'ca'"]);

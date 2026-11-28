@@ -152,8 +152,8 @@ fn pkcs7_certificates(data: &[u8]) -> Result<Vec<Vec<u8>>, &'static str> {
 /// Encodes `certificates` as a DER-encoded degenerate PKCS#7 SignedData:
 /// `ContentInfo` holding `id-signedData` with version 1, empty digest
 /// algorithms, `id-data` content info, `[0] IMPLICIT` `CertificateSet`
-/// (when non-empty, sorted in canonical DER `SET OF` order), and empty
-/// signer infos.
+/// (when non-empty, in the given order, so a chain keeps its leaf first, as
+/// OpenSSL and keytool write it), and empty signer infos.
 pub fn encode_pkcs7<T: AsRef<[u8]>>(certificates: &[T]) -> Vec<u8> {
     let mut signed = Vec::new();
     signed.extend(der::integer_i64(1));
@@ -162,11 +162,9 @@ pub fn encode_pkcs7<T: AsRef<[u8]>>(certificates: &[T]) -> Vec<u8> {
         &oid::ObjectIdentifier::new(oid::OID_PKCS7_DATA).expect("constant OID"),
     )));
     if !certificates.is_empty() {
-        let mut sorted: Vec<&[u8]> = certificates.iter().map(AsRef::as_ref).collect();
-        sorted.sort_unstable();
         let mut concat = Vec::new();
-        for cert in sorted {
-            concat.extend_from_slice(cert);
+        for cert in certificates {
+            concat.extend_from_slice(cert.as_ref());
         }
         signed.extend(der::implicit(0, true, &concat));
     }
@@ -366,16 +364,19 @@ mod tests {
         let root = metadata_certificate("root", "root", &[1], &[]);
         let leaf = metadata_certificate("leaf", "root", &[2], &[]);
         let bundle = encode_pkcs7(&[leaf.clone(), root.clone()]);
-        // Canonical DER SET OF order does not depend on input order.
-        assert_eq!(bundle, encode_pkcs7(&[root.clone(), leaf.clone()]));
-        let mut expected_der = vec![leaf.clone(), root.clone()];
-        expected_der.sort();
-        assert_eq!(pkcs7_certificates(&bundle).unwrap(), expected_der);
+        // The certificates keep the given order, leaf first.
+        assert_eq!(
+            pkcs7_certificates(&bundle).unwrap(),
+            [leaf.clone(), root.clone()]
+        );
+        assert_eq!(
+            pkcs7_certificates(&encode_pkcs7(&[root.clone(), leaf.clone()])).unwrap(),
+            [root.clone(), leaf.clone()]
+        );
         for data in [bundle.clone(), pem::encode("PKCS7", &bundle).into_bytes()] {
             let file = parse(&data).unwrap();
-            assert_eq!(file.entries.len(), 2);
-            let leaf_entry = file.entries.iter().find(|e| e.alias == "leaf").unwrap();
-            assert_eq!(leaf_entry.certificates(), [leaf.clone(), root.clone()]);
+            assert_eq!(aliases(&file), ["leaf", "root"]);
+            assert_eq!(file.entries[0].certificates(), [leaf.clone(), root.clone()]);
         }
     }
 
