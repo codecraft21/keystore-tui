@@ -835,6 +835,17 @@ fn legacy_openssl_pem_export_and_import() {
     let rendered = screen(&mut app, 200, 24);
     assert!(rendered.contains("Export key to (OpenSSL):"));
     assert!(rendered.contains("Tab PKCS #8"));
+    // A name that cannot be legacy PEM turns the toggle off for good.
+    clear(&mut app);
+    type_password(&mut app, "ec-legacy.p8");
+    assert!(!screen(&mut app, 200, 24).contains("OpenSSL"));
+    clear(&mut app);
+    type_password(&mut app, "ec-legacy.pem");
+    let rendered = screen(&mut app, 200, 24);
+    assert!(!rendered.contains("Export key to (OpenSSL):"));
+    assert!(rendered.contains("Tab OpenSSL"));
+    press(&mut app, KeyCode::Tab);
+    assert!(screen(&mut app, 200, 24).contains("Export key to (OpenSSL):"));
     press(&mut app, KeyCode::Enter);
     type_new_password(&mut app, "legacypw", "legacypw");
     // Encrypted legacy OpenSSL PEM asks for MD5 confirmation.

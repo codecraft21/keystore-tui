@@ -13,6 +13,10 @@ All notable changes to keystore-tui are listed here. Versions follow
   `EC PRIVATE KEY`), optionally encrypted with `AES-256-CBC` (toggled with
   `Tab` in the `Export key to:` prompt for PEM file names, with a confirmation
   warning about weaker MD5 key derivation when encrypted).
+- Fix legacy OpenSSL PEM handling: offer the `Tab` toggle only for keys it
+  can write, turn the toggle off when the name stops being PEM, report a
+  damaged private key block as malformed, read folded PEM header lines, and
+  refuse key blocks that are not padded base64.
 - Prompt for a key's own password when copying entries from another keystore
   (`i`) or converting a keystore to another format (`W`) if the source
   keystore's password cannot unlock a private or JCEKS secret key, reusing
