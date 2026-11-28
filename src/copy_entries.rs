@@ -300,18 +300,23 @@ impl App {
             self.finish_copy(selection, vec![index], &[]);
             return;
         }
+        // Entries skipped because their alias exists, in the open keystore or
+        // earlier in this copy, are not asked for.
+        let mut aliases: Vec<String> = self
+            .entries
+            .iter()
+            .map(|entry| entry.alias.to_lowercase())
+            .collect();
         let pending: Vec<usize> = picked
             .iter()
             .copied()
             .filter(|&index| {
-                if selection.availability[index] != Availability::NeedsPassword {
+                let alias = selection.entries[index].alias.to_lowercase();
+                if aliases.contains(&alias) {
                     return false;
                 }
-                let alias = selection.entries[index].alias.to_lowercase();
-                !self
-                    .entries
-                    .iter()
-                    .any(|entry| entry.alias.to_lowercase() == alias)
+                aliases.push(alias);
+                selection.availability[index] == Availability::NeedsPassword
             })
             .collect();
         if !pending.is_empty() {

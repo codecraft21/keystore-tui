@@ -646,6 +646,47 @@ fn copy_entries_save_and_quit_restores_terminal() {
     app.assert_restored();
 }
 
+/// SPEC: [Copying entries from another keystore](../../docs/SPEC.md#copying-entries-from-another-keystore),
+/// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
+#[test]
+fn copy_key_with_separate_password_and_quit_restores_terminal() {
+    let directory = TempDir::new();
+    let path = directory.join("store.jks");
+    let original = empty_password_fixture();
+    fs::write(&path, &original).unwrap();
+    fs::write(directory.join("keys.jks"), key_keystore("keypass")).unwrap();
+    let mut app = PtyApp::spawn(directory.path(), &[OsStr::new("store.jks")]);
+    app.expect(&["root-cert", "i Import"]);
+    // A single-entry source skips the list and asks for the key's password.
+    app.send(b"i");
+    app.expect(&["Import certificate or key pair from file", "keys.jks"]);
+    app.send(b"keys\r");
+    app.expect(&["Password of 'keys.jks': _"]);
+    app.send(b"\r");
+    app.expect(&["Password of key 'server': _"]);
+    app.send(b"wrong\r");
+    app.expect(&["Incorrect password.", "Password of key 'server': _"]);
+    // Esc cancels the copy without importing anything.
+    app.send(b"\x1b");
+    app.expect(&["root-cert", "i Import"]);
+    app.send(b"i");
+    app.expect(&["Import certificate or key pair from file", "keys.jks"]);
+    app.send(b"keys\r");
+    app.expect(&["Password of 'keys.jks': _"]);
+    app.send(b"\r");
+    app.expect(&["Password of key 'server': _"]);
+    app.send(b"keypass\r");
+    app.expect(&["Alias for the imported key pair: server_"]);
+    app.send(b"\r");
+    app.expect(&["Imported key pair as 'server'.", "[modified]"]);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    app.send(b"w");
+    app.expect(&["Saved"]);
+    assert_eq!(&fs::read(&path).unwrap()[8..12], &2_u32.to_be_bytes());
+    app.send(b"q");
+    app.assert_restored();
+}
+
 /// SPEC: [Signing certificates](../../docs/SPEC.md#signing-certificates),
 /// [Generating key pairs](../../docs/SPEC.md#generating-key-pairs),
 /// [Quitting and terminal restoration](../../docs/SPEC.md#quitting-and-terminal-restoration).
