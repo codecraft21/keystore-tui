@@ -61,11 +61,7 @@ impl Writable {
             .collect();
     }
 
-    /// Removes the entry listed at `index` and returns the new listing. A
-    /// private key goes with its certificate, and with the chain
-    /// certificates no other entry uses, which would otherwise turn into
-    /// entries of their own.
-    pub fn remove(&mut self, index: usize) -> Vec<KeystoreEntry> {
+    fn remove_bags(&mut self, index: usize) {
         let listed: Vec<usize> = self.sources.iter().flatten().copied().collect();
         let removed = &self.sources[index];
         let kept: Vec<usize> = (0..self.bags.len())
@@ -84,6 +80,14 @@ impl Writable {
             .filter(|bag| !orphans.contains(bag))
             .collect();
         self.keep(&kept);
+    }
+
+    /// Removes the entry listed at `index` and returns the new listing. A
+    /// private key goes with its certificate, and with the chain
+    /// certificates no other entry uses, which would otherwise turn into
+    /// entries of their own.
+    pub fn remove(&mut self, index: usize) -> Vec<KeystoreEntry> {
+        self.remove_bags(index);
         self.relist()
     }
 
@@ -107,6 +111,28 @@ impl Writable {
         Ok(self.relist())
     }
 
+    /// Adds a certificate bag that Java reads as a trusted certificate, without
+    /// rebuilding the entry listing; for bulk construction before [`encode`](Self::encode).
+    pub(crate) fn add_trusted_certificate(
+        &mut self,
+        alias: &str,
+        certificate: &[u8],
+    ) -> Result<(), WriteError> {
+        let attributes = vec![
+            friendly_name_attribute(alias),
+            attribute(
+                TRUSTED_KEY_USAGE,
+                &der::oid(&object_id(ANY_EXTENDED_KEY_USAGE)),
+            ),
+        ];
+        let mut safes = self.safes.clone();
+        let safe = Self::certificate_safe_in(&mut safes, self.mac_iterations);
+        let bag = build_certificate_bag(certificate, attributes, safe)?;
+        self.safes = safes;
+        self.bags.push(bag);
+        Ok(())
+    }
+
     /// Adds a certificate bag that Java reads as a trusted certificate, and
     /// returns the new listing. It joins the encrypted certificates when the
     /// store has any, and is stored as openly as the others otherwise.
@@ -115,66 +141,29 @@ impl Writable {
         alias: &str,
         certificate: &[u8],
     ) -> Result<Vec<KeystoreEntry>, WriteError> {
-        let attributes = vec![
-            friendly_name_attribute(alias),
-            attribute(
-                TRUSTED_KEY_USAGE,
-                &der::oid(&object_id(ANY_EXTENDED_KEY_USAGE)),
-            ),
-        ];
-        let mut changed = self.clone();
-        changed.push_certificate(certificate, attributes)?;
-        let listed = changed.relist();
-        *self = changed;
-        Ok(listed)
+        self.add_trusted_certificate(alias, certificate)?;
+        Ok(self.relist())
     }
 
-    /// Adds a certificate bag with these attributes to the safe that
-    /// certificates go in.
-    fn push_certificate(
-        &mut self,
-        certificate: &[u8],
-        attributes: Vec<Vec<u8>>,
-    ) -> Result<(), WriteError> {
-        let certificate_bag = der::sequence(
-            &[
-                der::oid(&object_id(oid::OID_X509_CERTIFICATE)),
-                der::explicit(0, &der::octet_string(certificate)),
-            ]
-            .concat(),
-        );
-        let safe = match self.safes.iter().position(Option::is_some) {
+    fn certificate_safe_in(safes: &mut Vec<Option<u32>>, mac_iterations: Option<u32>) -> usize {
+        match safes.iter().position(Option::is_some) {
             Some(safe) => safe,
-            None if !self.safes.is_empty() => 0,
+            None if !safes.is_empty() => 0,
             None => {
-                self.safes.push(self.mac_iterations);
+                safes.push(mac_iterations);
                 0
             }
-        };
-        self.push_bag(oid::OID_PKCS12_CERT_BAG, &certificate_bag, attributes, safe)
+        }
     }
 
-    /// Adds a bag of type `kind` with `value` and `attributes` to `safe`.
-    fn push_bag(
-        &mut self,
-        kind: &[u64],
-        value: &[u8],
-        mut attributes: Vec<Vec<u8>>,
-        safe: usize,
-    ) -> Result<(), WriteError> {
-        // DER orders the elements of a SET OF by their encoding.
-        attributes.sort();
-        let mut content = [der::oid(&object_id(kind)), der::explicit(0, value)].concat();
-        if !attributes.is_empty() {
-            content.extend(der::set(&attributes.concat()));
+    fn key_safe_in(safes: &mut Vec<Option<u32>>) -> usize {
+        match safes.iter().position(Option::is_none) {
+            Some(safe) => safe,
+            None => {
+                safes.push(None);
+                safes.len() - 1
+            }
         }
-        let mut bag = parse_metadata_bag(&der::sequence(&content))
-            .ok()
-            .flatten()
-            .ok_or("the entry could not be stored")?;
-        bag.safe = safe;
-        self.bags.push(bag);
-        Ok(())
     }
 
     fn key_iterations(&self) -> u32 {
@@ -197,6 +186,50 @@ impl Writable {
         encrypt_key_with_iterations(key, &self.password, self.key_iterations(), rng)
     }
 
+    /// Adds a private key bag and its certificate chain without rebuilding the
+    /// entry listing; for bulk construction before [`encode`](Self::encode).
+    pub(crate) fn add_private_key(
+        &mut self,
+        alias: &str,
+        key: &[u8],
+        chain: &[Vec<u8>],
+        rng: &mut impl Rng,
+    ) -> Result<(), WriteError> {
+        let encrypted = self.encrypt_new_key(key, rng)?;
+        let mut safes = self.safes.clone();
+        let mut new_bags = Vec::new();
+        let mut attributes = vec![friendly_name_attribute(alias)];
+        if let Some((leaf, issuers)) = chain.split_first() {
+            let id: [u8; 20] = Sha1::digest(leaf).into();
+            let key_id = attribute(oid::OID_PKCS9_LOCAL_KEY_ID, &der::octet_string(&id));
+            attributes.push(key_id.clone());
+            let cert_safe = Self::certificate_safe_in(&mut safes, self.mac_iterations);
+            new_bags.push(build_certificate_bag(
+                leaf,
+                vec![friendly_name_attribute(alias), key_id],
+                cert_safe,
+            )?);
+            for issuer in issuers {
+                let held = self.bags.iter().chain(&new_bags).any(|bag| {
+                    bag.certificate_der.as_deref() == Some(issuer) && bag.attributes.is_empty()
+                });
+                if !held {
+                    new_bags.push(build_certificate_bag(issuer, vec![], cert_safe)?);
+                }
+            }
+        }
+        let key_safe = Self::key_safe_in(&mut safes);
+        new_bags.push(build_bag(
+            oid::OID_PKCS12_SHROUDED_KEY_BAG,
+            &encrypted,
+            attributes,
+            key_safe,
+        )?);
+        self.safes = safes;
+        self.bags.extend(new_bags);
+        Ok(())
+    }
+
     /// Adds a private key, given as its PKCS #8 encoding, with its
     /// certificate chain, leaf first, and returns the new listing. The key is
     /// encrypted with the store's password, as Java expects, in a safe that
@@ -209,39 +242,8 @@ impl Writable {
         chain: &[Vec<u8>],
         rng: &mut impl Rng,
     ) -> Result<Vec<KeystoreEntry>, WriteError> {
-        let encrypted = self.encrypt_new_key(key, rng)?;
-        let mut changed = self.clone();
-        let mut attributes = vec![friendly_name_attribute(alias)];
-        if let Some((leaf, issuers)) = chain.split_first() {
-            let id: [u8; 20] = Sha1::digest(leaf).into();
-            let key_id = attribute(oid::OID_PKCS9_LOCAL_KEY_ID, &der::octet_string(&id));
-            attributes.push(key_id.clone());
-            changed.push_certificate(leaf, vec![friendly_name_attribute(alias), key_id])?;
-            for issuer in issuers {
-                let held = changed.bags.iter().any(|bag| {
-                    bag.certificate_der.as_deref() == Some(issuer) && bag.attributes.is_empty()
-                });
-                if !held {
-                    changed.push_certificate(issuer, vec![])?;
-                }
-            }
-        }
-        let safe = match changed.safes.iter().position(Option::is_none) {
-            Some(safe) => safe,
-            None => {
-                changed.safes.push(None);
-                changed.safes.len() - 1
-            }
-        };
-        changed.push_bag(
-            oid::OID_PKCS12_SHROUDED_KEY_BAG,
-            &encrypted,
-            attributes,
-            safe,
-        )?;
-        let listed = changed.relist();
-        *self = changed;
-        Ok(listed)
+        self.add_private_key(alias, key, chain, rng)?;
+        Ok(self.relist())
     }
 
     /// Replaces the certificate chain, leaf first, of the private key
@@ -271,21 +273,34 @@ impl Writable {
             .map_err(|_| NOT_REBUILT)?;
         let mut rebuilt = parse_metadata_bag(&raw).ok().flatten().ok_or(NOT_REBUILT)?;
         rebuilt.safe = key.safe;
-        let mut changed = self.clone();
-        changed.remove(index);
-        changed.push_certificate(leaf, vec![friendly_name_attribute(alias), key_id])?;
+        let mut safes = self.safes.clone();
+        let cert_safe = Self::certificate_safe_in(&mut safes, self.mac_iterations);
+        let leaf_bag = build_certificate_bag(
+            leaf,
+            vec![friendly_name_attribute(alias), key_id],
+            cert_safe,
+        )?;
+        let mut issuer_bags = Vec::with_capacity(issuers.len());
         for issuer in issuers {
-            let held = changed.bags.iter().any(|bag| {
-                bag.certificate_der.as_deref() == Some(issuer) && bag.attributes.is_empty()
+            issuer_bags.push((
+                issuer.as_slice(),
+                build_certificate_bag(issuer, vec![], cert_safe)?,
+            ));
+        }
+        self.remove_bags(index);
+        self.safes = safes;
+        self.bags.push(leaf_bag);
+        for (issuer, bag) in issuer_bags {
+            let held = self.bags.iter().any(|existing| {
+                existing.certificate_der.as_deref() == Some(issuer)
+                    && existing.attributes.is_empty()
             });
             if !held {
-                changed.push_certificate(issuer, vec![])?;
+                self.bags.push(bag);
             }
         }
-        changed.bags.push(rebuilt);
-        let listed = changed.relist();
-        *self = changed;
-        Ok(listed)
+        self.bags.push(rebuilt);
+        Ok(self.relist())
     }
 
     /// The PKCS #8 encoding of the private key listed at `index`, decrypted
@@ -309,6 +324,37 @@ impl Writable {
         decrypt_info(&secret_info(kind, value)?, &self.password)
     }
 
+    /// Adds a secret key bag without rebuilding the entry listing; for bulk
+    /// construction before [`encode`](Self::encode).
+    pub(crate) fn add_secret_key(
+        &mut self,
+        alias: &str,
+        key: &[u8],
+        created: u64,
+        rng: &mut impl Rng,
+    ) -> Result<(), WriteError> {
+        let encrypted = self.encrypt_new_key(key, rng)?;
+        let id = format!("Time {created}");
+        let attributes = vec![
+            friendly_name_attribute(alias),
+            attribute(
+                oid::OID_PKCS9_LOCAL_KEY_ID,
+                &der::octet_string(id.as_bytes()),
+            ),
+        ];
+        let mut safes = self.safes.clone();
+        let safe = Self::key_safe_in(&mut safes);
+        let bag = build_bag(
+            oid::OID_PKCS12_SECRET_BAG,
+            &secret_value(&encrypted),
+            attributes,
+            safe,
+        )?;
+        self.safes = safes;
+        self.bags.push(bag);
+        Ok(())
+    }
+
     /// Adds a secret key, given in its PKCS #8 structure, and returns the
     /// new listing. The key is encrypted with the store's password, as Java
     /// expects, in a safe that is not encrypted again. Like Java, it gets a
@@ -321,32 +367,8 @@ impl Writable {
         created: u64,
         rng: &mut impl Rng,
     ) -> Result<Vec<KeystoreEntry>, WriteError> {
-        let encrypted = self.encrypt_new_key(key, rng)?;
-        let id = format!("Time {created}");
-        let attributes = vec![
-            friendly_name_attribute(alias),
-            attribute(
-                oid::OID_PKCS9_LOCAL_KEY_ID,
-                &der::octet_string(id.as_bytes()),
-            ),
-        ];
-        let mut changed = self.clone();
-        let safe = match changed.safes.iter().position(Option::is_none) {
-            Some(safe) => safe,
-            None => {
-                changed.safes.push(None);
-                changed.safes.len() - 1
-            }
-        };
-        changed.push_bag(
-            oid::OID_PKCS12_SECRET_BAG,
-            &secret_value(&encrypted),
-            attributes,
-            safe,
-        )?;
-        let listed = changed.relist();
-        *self = changed;
-        Ok(listed)
+        self.add_secret_key(alias, key, created, rng)?;
+        Ok(self.relist())
     }
 
     /// Protects the store with `password` from now on. Java expects keys to
@@ -472,4 +494,41 @@ impl Writable {
         }
         .encode())
     }
+}
+
+/// Builds a certificate bag with these attributes for `safe`.
+fn build_certificate_bag(
+    certificate: &[u8],
+    attributes: Vec<Vec<u8>>,
+    safe: usize,
+) -> Result<MetadataBag, WriteError> {
+    let certificate_bag = der::sequence(
+        &[
+            der::oid(&object_id(oid::OID_X509_CERTIFICATE)),
+            der::explicit(0, &der::octet_string(certificate)),
+        ]
+        .concat(),
+    );
+    build_bag(oid::OID_PKCS12_CERT_BAG, &certificate_bag, attributes, safe)
+}
+
+/// Builds a bag of type `kind` with `value` and `attributes` for `safe`.
+fn build_bag(
+    kind: &[u64],
+    value: &[u8],
+    mut attributes: Vec<Vec<u8>>,
+    safe: usize,
+) -> Result<MetadataBag, WriteError> {
+    // DER orders the elements of a SET OF by their encoding.
+    attributes.sort();
+    let mut content = [der::oid(&object_id(kind)), der::explicit(0, value)].concat();
+    if !attributes.is_empty() {
+        content.extend(der::set(&attributes.concat()));
+    }
+    let mut bag = parse_metadata_bag(&der::sequence(&content))
+        .ok()
+        .flatten()
+        .ok_or("the entry could not be stored")?;
+    bag.safe = safe;
+    Ok(bag)
 }
